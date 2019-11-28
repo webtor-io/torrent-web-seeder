@@ -51,8 +51,8 @@ func run(c *cli.Context) error {
 	probe := cs.NewProbe(c)
 	defer probe.Close()
 
-	// Setting ServeService
-	serve := cs.NewServe(probe, web, stat)
+	// Setting Serve
+	serve := s.NewServe(web, stat, probe, torrent)
 
 	// And SERVE!
 	err = serve.Serve()
