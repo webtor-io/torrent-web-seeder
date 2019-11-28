@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+service TorrentStore {
+  // Pushes torrent to the store
+  rpc Push (PushRequest) returns (PushReply) {}
+
+  // Pulls torrent from the store
+  rpc Pull (PullRequest) returns (PullReply) {}
+}
+
+// The push response message containing info hash of the pushed torrent file
+message PushReply { 
+  string infoHash = 1;
+}
+
+// The push request message containing the torrent and expire duration is seconds
+message PushRequest {
+  bytes torrent = 1;
+  int32 expire  = 2;
+}
+
+// The pull request message containing the infoHash
+message PullRequest {
+  string infoHash = 1;
+}
+
+// The pull response message containing the torrent
+message PullReply {
+  bytes torrent = 1;
+}

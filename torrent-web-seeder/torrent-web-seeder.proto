@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+service TorrentWebSeeder {
+  // Get file stat
+  rpc Stat (StatRequest) returns (StatReply) {}
+  // Get file stat stream
+  rpc StatStream (StatRequest) returns (stream StatReply) {}
+  // Get file list
+  rpc Files (FilesRequest) returns (FilesReply) {}
+}
+
+// Stat request message
+message StatRequest {
+  string path = 1;
+}
+
+// Stat response message
+message StatReply {
+  int64 total     = 1;
+  int64 completed = 2;
+  int32 peers     = 3;
+  enum Status {
+    INITIALIZATION    = 0;
+    SEEDING           = 1;
+    IDLE              = 2;
+    TERMINATED        = 3;
+    WAITING_FOR_PEERS = 4;
+  }
+  Status status         = 4;
+  repeated Piece pieces = 5;
+}
+
+message Piece {
+  int64 position = 1;
+  bool  complete = 2;
+}
+
+// Files requst message
+message FilesRequest {
+}
+
+message File {
+  string path = 1;
+}
+
+// Files reply message
+message FilesReply {
+    repeated File files = 1;
+}
