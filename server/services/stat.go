@@ -269,7 +269,10 @@ func (s *grpcServer) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_S
 		}
 		return err
 	case err := <-errCh:
-		return err
+		if err != nil {
+			return status.Errorf(codes.Internal, "Got error=%v", err)
+		}
+		return nil
 	}
 }
 
