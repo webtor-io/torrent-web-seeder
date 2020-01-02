@@ -1,11 +1,11 @@
 package main
 
 import (
-	cs "bitbucket.org/vintikzzzz/common-services"
-	s "bitbucket.org/vintikzzzz/torrent-web-seeder/server/services"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	cs "github.com/webtor-io/common-services"
+	s "github.com/webtor-io/torrent-web-seeder/server/services"
 )
 
 func configure(app *cli.App) {

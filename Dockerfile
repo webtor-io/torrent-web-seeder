@@ -1,9 +1,9 @@
 FROM golang:latest
 
 # copy the source files
-COPY . /go/src/bitbucket.org/vintikzzzz/torrent-web-seeder
+COPY . /go/src/github.com/webtor-io/torrent-web-seeder
 
-WORKDIR /go/src/bitbucket.org/vintikzzzz/torrent-web-seeder/server
+WORKDIR /go/src/github.com/webtor-io/torrent-web-seeder/server
 
 # enable modules
 ENV GO111MODULE=on
@@ -20,7 +20,7 @@ RUN go build -mod=vendor -ldflags '-w -s' -a -installsuffix cgo -o server
 FROM scratch
 
 # copy our static linked library
-COPY --from=0 /go/src/bitbucket.org/vintikzzzz/torrent-web-seeder/server/server .
+COPY --from=0 /go/src/github.com/webtor-io/torrent-web-seeder/server/server .
 
 # tell we are exposing our service on ports 50051 8080 8081
 EXPOSE 50051 8080 8081

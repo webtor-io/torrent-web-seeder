@@ -16,7 +16,7 @@ import (
 	"github.com/urfave/cli"
 	"google.golang.org/grpc"
 
-	pb "bitbucket.org/vintikzzzz/torrent-web-seeder/torrent-web-seeder"
+	pb "github.com/webtor-io/torrent-web-seeder/torrent-web-seeder"
 )
 
 func render(cl pb.TorrentWebSeederClient) error {

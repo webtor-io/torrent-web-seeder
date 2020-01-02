@@ -19,9 +19,9 @@ import (
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
-	pb "bitbucket.org/vintikzzzz/torrent-web-seeder/torrent-web-seeder"
 	"github.com/anacrolix/torrent"
 	log "github.com/sirupsen/logrus"
+	pb "github.com/webtor-io/torrent-web-seeder/torrent-web-seeder"
 
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_logrus "github.com/grpc-ecosystem/go-grpc-middleware/logging/logrus"

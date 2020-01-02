@@ -1,4 +1,4 @@
-// +build linux aix
+// +build linux
 // +build !appengine
 // +build !android
 

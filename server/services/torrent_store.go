@@ -6,9 +6,9 @@ import (
 
 	"github.com/urfave/cli"
 
-	ts "bitbucket.org/vintikzzzz/torrent-store/torrent-store"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	ts "github.com/webtor-io/torrent-store/torrent-store"
 	"google.golang.org/grpc"
 )
 

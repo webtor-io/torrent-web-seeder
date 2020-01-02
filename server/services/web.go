@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"bitbucket.org/vintikzzzz/gracenet"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	"github.com/webtor-io/gracenet"
 )
 
 const (

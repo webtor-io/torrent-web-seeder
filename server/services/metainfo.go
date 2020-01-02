@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	ts "bitbucket.org/vintikzzzz/torrent-store/torrent-store"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	ts "github.com/webtor-io/torrent-store/torrent-store"
 )
 
 type MetaInfo struct {

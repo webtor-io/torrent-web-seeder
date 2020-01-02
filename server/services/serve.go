@@ -9,7 +9,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	cs "bitbucket.org/vintikzzzz/common-services"
+	cs "github.com/webtor-io/common-services"
 )
 
 type Serve struct {

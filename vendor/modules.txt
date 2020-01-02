@@ -1,9 +1,3 @@
-# bitbucket.org/vintikzzzz/common-services v0.0.0-20191111202001-ca1f4dc23375
-bitbucket.org/vintikzzzz/common-services
-# bitbucket.org/vintikzzzz/gracenet v0.0.0-20190918171651-f153b4f61742
-bitbucket.org/vintikzzzz/gracenet
-# bitbucket.org/vintikzzzz/torrent-store v0.0.0-20190112143613-8dd8b58f22d3
-bitbucket.org/vintikzzzz/torrent-store/torrent-store
 # code.cloudfoundry.org/bytefmt v0.0.0-20180906201452-2aa6f33b730c
 code.cloudfoundry.org/bytefmt
 # github.com/RoaringBitmap/roaring v0.4.18
@@ -101,7 +95,7 @@ github.com/joonix/log
 github.com/juju/ratelimit
 # github.com/konsorten/go-windows-terminal-sequences v1.0.2
 github.com/konsorten/go-windows-terminal-sequences
-# github.com/mattn/go-isatty v0.0.9
+# github.com/mattn/go-isatty v0.0.7
 github.com/mattn/go-isatty
 # github.com/mattn/go-sqlite3 v1.10.0
 github.com/mattn/go-sqlite3
@@ -125,6 +119,12 @@ github.com/spaolacci/murmur3
 github.com/tinylib/msgp/msgp
 # github.com/urfave/cli v1.22.1
 github.com/urfave/cli
+# github.com/webtor-io/common-services v0.0.0-20200102124507-e840419c0302
+github.com/webtor-io/common-services
+# github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5
+github.com/webtor-io/gracenet
+# github.com/webtor-io/torrent-store v0.0.0-20200102130046-6236e42cdb97
+github.com/webtor-io/torrent-store/torrent-store
 # github.com/willf/bitset v1.1.10
 github.com/willf/bitset
 # github.com/willf/bloom v2.0.3+incompatible
@@ -139,7 +139,7 @@ golang.org/x/net/internal/socks
 golang.org/x/net/internal/timeseries
 golang.org/x/net/proxy
 golang.org/x/net/trace
-# golang.org/x/sys v0.0.0-20191105231009-c1f44814a5cd
+# golang.org/x/sys v0.0.0-20190910064555-bbd175535a8b
 golang.org/x/sys/unix
 golang.org/x/sys/windows
 # golang.org/x/text v0.3.2
@@ -152,7 +152,7 @@ golang.org/x/time/rate
 # golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7
 golang.org/x/xerrors
 golang.org/x/xerrors/internal
-# google.golang.org/genproto v0.0.0-20191108220845-16a3f7862a1a
+# google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55
 google.golang.org/genproto/googleapis/api/annotations
 google.golang.org/genproto/googleapis/logging/type
 google.golang.org/genproto/googleapis/rpc/status
