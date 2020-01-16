@@ -89,6 +89,9 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 			}
 			var reader io.ReadSeeker
+			torReader := f.NewReader()
+			torReader.SetResponsive()
+			torReader.SetReadahead(5 * 1024 * 1024)
 			if r.Header.Get("X-Download-Rate") != "" {
 				rate, err := bytefmt.ToBytes(r.Header.Get("X-Download-Rate"))
 				if err != nil {
@@ -96,10 +99,9 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 					http.Error(w, "Wrong download rate", http.StatusInternalServerError)
 					return
 				}
-				reader = NewThrottledReader(f.NewReader(), rate)
+				reader = NewThrottledReader(torReader, rate)
 			} else {
-				reader = f.NewReader()
-
+				reader = torReader
 			}
 			http.ServeContent(w, r, f.Path(), time.Unix(t.Metainfo().CreationDate, 0), reader)
 			found = true
