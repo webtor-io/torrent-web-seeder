@@ -1,18 +1,17 @@
 # code.cloudfoundry.org/bytefmt v0.0.0-20180906201452-2aa6f33b730c
 code.cloudfoundry.org/bytefmt
-# github.com/RoaringBitmap/roaring v0.4.18
+# github.com/RoaringBitmap/roaring v0.4.21
 github.com/RoaringBitmap/roaring
-# github.com/anacrolix/dht/v2 v2.0.5-0.20190913023154-c5780a290ed6
+# github.com/anacrolix/dht/v2 v2.5.0
 github.com/anacrolix/dht/v2
 github.com/anacrolix/dht/v2/krpc
 # github.com/anacrolix/go-libutp v1.0.2
 github.com/anacrolix/go-libutp
-# github.com/anacrolix/log v0.3.1-0.20191001111012-13cede988bcd
+# github.com/anacrolix/log v0.6.0
 github.com/anacrolix/log
 # github.com/anacrolix/missinggo v1.2.1
 github.com/anacrolix/missinggo
 github.com/anacrolix/missinggo/bitmap
-github.com/anacrolix/missinggo/conntrack
 github.com/anacrolix/missinggo/expect
 github.com/anacrolix/missinggo/httptoo
 github.com/anacrolix/missinggo/inproc
@@ -20,21 +19,33 @@ github.com/anacrolix/missinggo/iter
 github.com/anacrolix/missinggo/mime
 github.com/anacrolix/missinggo/orderedmap
 github.com/anacrolix/missinggo/pproffd
-github.com/anacrolix/missinggo/prioritybitmap
 github.com/anacrolix/missinggo/pubsub
-github.com/anacrolix/missinggo/resource
 github.com/anacrolix/missinggo/slices
 github.com/anacrolix/missinggo/x
 # github.com/anacrolix/missinggo/perf v1.0.0
 github.com/anacrolix/missinggo/perf
+# github.com/anacrolix/missinggo/v2 v2.3.2-0.20200110051601-fc3212fb3984
+github.com/anacrolix/missinggo/v2
+github.com/anacrolix/missinggo/v2/bitmap
+github.com/anacrolix/missinggo/v2/conntrack
+github.com/anacrolix/missinggo/v2/iter
+github.com/anacrolix/missinggo/v2/prioritybitmap
+github.com/anacrolix/missinggo/v2/resource
 # github.com/anacrolix/mmsg v1.0.0
 github.com/anacrolix/mmsg
 github.com/anacrolix/mmsg/socket
+# github.com/anacrolix/multiless v0.0.0-20191223025854-070b7994e841
+github.com/anacrolix/multiless
+# github.com/anacrolix/stm v0.2.0
+github.com/anacrolix/stm
+github.com/anacrolix/stm/rate
+github.com/anacrolix/stm/stmutil
 # github.com/anacrolix/sync v0.2.0
 github.com/anacrolix/sync
-# github.com/anacrolix/torrent v1.8.2
+# github.com/anacrolix/torrent v1.14.0
 github.com/anacrolix/torrent
 github.com/anacrolix/torrent/bencode
+github.com/anacrolix/torrent/internal/tmproot
 github.com/anacrolix/torrent/iplist
 github.com/anacrolix/torrent/logonce
 github.com/anacrolix/torrent/metainfo
@@ -47,9 +58,9 @@ github.com/anacrolix/torrent/tracker
 github.com/anacrolix/upnp
 # github.com/anacrolix/utp v0.0.0-20180219060659-9e0e1d1d0572
 github.com/anacrolix/utp
-# github.com/boltdb/bolt v1.3.1
-github.com/boltdb/bolt
-# github.com/bradfitz/iter v0.0.0-20190303215204-33e6a9893b0c
+# github.com/benbjohnson/immutable v0.2.0
+github.com/benbjohnson/immutable
+# github.com/bradfitz/iter v0.0.0-20191230175014-e8f45d346db8
 github.com/bradfitz/iter
 # github.com/cpuguy83/go-md2man/v2 v2.0.0-20190314233015-f79a8a8ca69d
 github.com/cpuguy83/go-md2man/v2/md2man
@@ -59,7 +70,9 @@ github.com/davecgh/go-spew/spew
 github.com/dustin/go-humanize
 # github.com/edsrzf/mmap-go v1.0.0
 github.com/edsrzf/mmap-go
-# github.com/glycerine/go-unsnap-stream v0.0.0-20181221182339-f9677308dec2
+# github.com/etcd-io/bbolt v1.3.3
+github.com/etcd-io/bbolt
+# github.com/glycerine/go-unsnap-stream v0.0.0-20190901134440-81cf024a9e0a
 github.com/glycerine/go-unsnap-stream
 # github.com/golang/protobuf v1.3.2
 github.com/golang/protobuf/jsonpb
@@ -87,7 +100,7 @@ github.com/grpc-ecosystem/go-grpc-middleware/logging/logrus/ctxlogrus
 github.com/grpc-ecosystem/go-grpc-middleware/recovery
 github.com/grpc-ecosystem/go-grpc-middleware/tags
 github.com/grpc-ecosystem/go-grpc-middleware/tags/logrus
-# github.com/huandu/xstrings v1.2.0
+# github.com/huandu/xstrings v1.3.0
 github.com/huandu/xstrings
 # github.com/joonix/log v0.0.0-20190524090622-13fe31bbdd7a
 github.com/joonix/log
@@ -95,15 +108,15 @@ github.com/joonix/log
 github.com/juju/ratelimit
 # github.com/konsorten/go-windows-terminal-sequences v1.0.2
 github.com/konsorten/go-windows-terminal-sequences
-# github.com/mattn/go-isatty v0.0.7
+# github.com/mattn/go-isatty v0.0.10
 github.com/mattn/go-isatty
-# github.com/mattn/go-sqlite3 v1.10.0
+# github.com/mattn/go-sqlite3 v2.0.2+incompatible
 github.com/mattn/go-sqlite3
 # github.com/mschoch/smat v0.0.0-20160514031455-90eadee771ae
 github.com/mschoch/smat
 # github.com/philhofer/fwd v1.0.0
 github.com/philhofer/fwd
-# github.com/pkg/errors v0.8.1
+# github.com/pkg/errors v0.9.1
 github.com/pkg/errors
 # github.com/russross/blackfriday/v2 v2.0.1
 github.com/russross/blackfriday/v2
@@ -115,7 +128,7 @@ github.com/shurcooL/sanitized_anchor_name
 github.com/sirupsen/logrus
 # github.com/spaolacci/murmur3 v1.1.0
 github.com/spaolacci/murmur3
-# github.com/tinylib/msgp v1.1.0
+# github.com/tinylib/msgp v1.1.1
 github.com/tinylib/msgp/msgp
 # github.com/urfave/cli v1.22.1
 github.com/urfave/cli
@@ -129,17 +142,15 @@ github.com/webtor-io/torrent-store/torrent-store
 github.com/willf/bitset
 # github.com/willf/bloom v2.0.3+incompatible
 github.com/willf/bloom
-# golang.org/x/net v0.0.0-20191109021931-daa7c04131f5
+# golang.org/x/net v0.0.0-20200114155413-6afb5195e5aa
 golang.org/x/net/context
 golang.org/x/net/http/httpguts
 golang.org/x/net/http2
 golang.org/x/net/http2/hpack
 golang.org/x/net/idna
-golang.org/x/net/internal/socks
 golang.org/x/net/internal/timeseries
-golang.org/x/net/proxy
 golang.org/x/net/trace
-# golang.org/x/sys v0.0.0-20190910064555-bbd175535a8b
+# golang.org/x/sys v0.0.0-20200122134326-e047566fdf82
 golang.org/x/sys/unix
 golang.org/x/sys/windows
 # golang.org/x/text v0.3.2
@@ -147,9 +158,9 @@ golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
-# golang.org/x/time v0.0.0-20190308202827-9d24e82272b4
+# golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 golang.org/x/time/rate
-# golang.org/x/xerrors v0.0.0-20190717185122-a985d3407aa7
+# golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543
 golang.org/x/xerrors
 golang.org/x/xerrors/internal
 # google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55

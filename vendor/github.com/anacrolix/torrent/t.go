@@ -15,8 +15,7 @@ func (t *Torrent) InfoHash() metainfo.Hash {
 	return t.infoHash
 }
 
-// Returns a channel that is closed when the info (.Info()) for the torrent
-// has become available.
+// Returns a channel that is closed when the info (.Info()) for the torrent has become available.
 func (t *Torrent) GotInfo() <-chan struct{} {
 	t.cl.lock()
 	defer t.cl.unlock()
@@ -189,9 +188,15 @@ func (t *Torrent) initFiles() {
 	var offset int64
 	t.files = new([]*File)
 	for _, fi := range t.info.UpvertedFiles() {
+		var path []string
+		if len(fi.PathUTF8) != 0 {
+			path = fi.PathUTF8
+		} else {
+			path = fi.Path
+		}
 		*t.files = append(*t.files, &File{
 			t,
-			strings.Join(append([]string{t.info.Name}, fi.Path...), "/"),
+			strings.Join(append([]string{t.info.Name}, path...), "/"),
 			offset,
 			fi.Length,
 			fi,
@@ -237,7 +242,5 @@ func (t *Torrent) AddTrackers(announceList [][]string) {
 }
 
 func (t *Torrent) Piece(i pieceIndex) *Piece {
-	t.cl.lock()
-	defer t.cl.unlock()
-	return &t.pieces[i]
+	return t.piece(i)
 }

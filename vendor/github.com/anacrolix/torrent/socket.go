@@ -3,85 +3,49 @@ package torrent
 import (
 	"context"
 	"net"
-	"net/url"
 	"strconv"
 
 	"github.com/anacrolix/missinggo"
 	"github.com/anacrolix/missinggo/perf"
 	"github.com/pkg/errors"
-	"golang.org/x/net/proxy"
 )
 
-type dialer interface {
-	dial(_ context.Context, addr string) (net.Conn, error)
+type Listener interface {
+	net.Listener
 }
 
 type socket interface {
-	net.Listener
-	dialer
+	Listener
+	Dialer
 }
 
-func getProxyDialer(proxyURL string) (proxy.Dialer, error) {
-	fixedURL, err := url.Parse(proxyURL)
-	if err != nil {
-		return nil, err
-	}
-
-	return proxy.FromURL(fixedURL, proxy.Direct)
-}
-
-func listen(n network, addr, proxyURL string, f firewallCallback) (socket, error) {
+func listen(n network, addr string, f firewallCallback) (socket, error) {
 	switch {
 	case n.Tcp:
-		return listenTcp(n.String(), addr, proxyURL)
+		return listenTcp(n.String(), addr)
 	case n.Udp:
-		return listenUtp(n.String(), addr, proxyURL, f)
+		return listenUtp(n.String(), addr, f)
 	default:
 		panic(n)
 	}
 }
 
-func listenTcp(network, address, proxyURL string) (s socket, err error) {
+func listenTcp(network, address string) (s socket, err error) {
 	l, err := net.Listen(network, address)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			l.Close()
-		}
-	}()
-
-	// If we don't need the proxy - then we should return default net.Dialer,
-	// otherwise, let's try to parse the proxyURL and return proxy.Dialer
-	if len(proxyURL) != 0 {
-		// TODO: The error should be propagated, as proxy may be in use for
-		// security or privacy reasons. Also just pass proxy.Dialer in from
-		// the Config.
-		if dialer, err := getProxyDialer(proxyURL); err == nil {
-			return tcpSocket{l, func(ctx context.Context, addr string) (conn net.Conn, err error) {
-				defer perf.ScopeTimerErr(&err)()
-				return dialer.Dial(network, addr)
-			}}, nil
-		}
-	}
-	dialer := net.Dialer{}
-	return tcpSocket{l, func(ctx context.Context, addr string) (conn net.Conn, err error) {
-		defer perf.ScopeTimerErr(&err)()
-		return dialer.DialContext(ctx, network, addr)
-	}}, nil
+	return tcpSocket{
+		Listener: l,
+		NetDialer: NetDialer{
+			Network: network,
+		},
+	}, err
 }
 
 type tcpSocket struct {
 	net.Listener
-	d func(ctx context.Context, addr string) (net.Conn, error)
+	NetDialer
 }
 
-func (me tcpSocket) dial(ctx context.Context, addr string) (net.Conn, error) {
-	return me.d(ctx, addr)
-}
-
-func listenAll(networks []network, getHost func(string) string, port int, proxyURL string, f firewallCallback) ([]socket, error) {
+func listenAll(networks []network, getHost func(string) string, port int, f firewallCallback) ([]socket, error) {
 	if len(networks) == 0 {
 		return nil, nil
 	}
@@ -90,7 +54,7 @@ func listenAll(networks []network, getHost func(string) string, port int, proxyU
 		nahs = append(nahs, networkAndHost{n, getHost(n.String())})
 	}
 	for {
-		ss, retry, err := listenAllRetry(nahs, port, proxyURL, f)
+		ss, retry, err := listenAllRetry(nahs, port, f)
 		if !retry {
 			return ss, err
 		}
@@ -102,10 +66,10 @@ type networkAndHost struct {
 	Host    string
 }
 
-func listenAllRetry(nahs []networkAndHost, port int, proxyURL string, f firewallCallback) (ss []socket, retry bool, err error) {
+func listenAllRetry(nahs []networkAndHost, port int, f firewallCallback) (ss []socket, retry bool, err error) {
 	ss = make([]socket, 1, len(nahs))
 	portStr := strconv.FormatInt(int64(port), 10)
-	ss[0], err = listen(nahs[0].Network, net.JoinHostPort(nahs[0].Host, portStr), proxyURL, f)
+	ss[0], err = listen(nahs[0].Network, net.JoinHostPort(nahs[0].Host, portStr), f)
 	if err != nil {
 		return nil, false, errors.Wrap(err, "first listen")
 	}
@@ -119,7 +83,7 @@ func listenAllRetry(nahs []networkAndHost, port int, proxyURL string, f firewall
 	}()
 	portStr = strconv.FormatInt(int64(missinggo.AddrPort(ss[0].Addr())), 10)
 	for _, nah := range nahs[1:] {
-		s, err := listen(nah.Network, net.JoinHostPort(nah.Host, portStr), proxyURL, f)
+		s, err := listen(nah.Network, net.JoinHostPort(nah.Host, portStr), f)
 		if err != nil {
 			return ss,
 				missinggo.IsAddrInUse(err) && port == 0,
@@ -132,34 +96,17 @@ func listenAllRetry(nahs []networkAndHost, port int, proxyURL string, f firewall
 
 type firewallCallback func(net.Addr) bool
 
-func listenUtp(network, addr, proxyURL string, fc firewallCallback) (s socket, err error) {
+func listenUtp(network, addr string, fc firewallCallback) (socket, error) {
 	us, err := NewUtpSocket(network, addr, fc)
-	if err != nil {
-		return
-	}
-
-	// If we don't need the proxy - then we should return default net.Dialer,
-	// otherwise, let's try to parse the proxyURL and return proxy.Dialer
-	if len(proxyURL) != 0 {
-		if dialer, err := getProxyDialer(proxyURL); err == nil {
-			return utpSocketSocket{us, network, dialer}, nil
-		}
-	}
-
-	return utpSocketSocket{us, network, nil}, nil
+	return utpSocketSocket{us, network}, err
 }
 
 type utpSocketSocket struct {
 	utpSocket
 	network string
-	d       proxy.Dialer
 }
 
-func (me utpSocketSocket) dial(ctx context.Context, addr string) (conn net.Conn, err error) {
+func (me utpSocketSocket) Dial(ctx context.Context, addr string) (conn net.Conn, err error) {
 	defer perf.ScopeTimerErr(&err)()
-	if me.d != nil {
-		return me.d.Dial(me.network, addr)
-	}
-
 	return me.utpSocket.DialContext(ctx, me.network, addr)
 }
