@@ -19,5 +19,5 @@ jobs:
     ####   /go/src/bitbucket.org/circleci/go-tool
     steps:
       - checkout
-      # specify any bash command here prefixed with `run: `
+      - run: cd server
       - run: go build -mod=vendor .
