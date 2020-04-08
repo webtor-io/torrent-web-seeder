@@ -55,10 +55,10 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.NoUpload = true
 	cfg.DefaultStorage = storage.NewFile(os.TempDir())
 	cfg.DefaultRequestStrategy = torrent.RequestStrategyFuzzing()
-	// cfg.EstablishedConnsPerTorrent = 30
-	// cfg.HalfOpenConnsPerTorrent = 15
-	// cfg.TorrentPeersHighWater = 200
-	// cfg.TorrentPeersLowWater = 100
+	cfg.EstablishedConnsPerTorrent = 100
+	cfg.HalfOpenConnsPerTorrent = 50
+	cfg.TorrentPeersHighWater = 1000
+	cfg.TorrentPeersLowWater = 500
 	if s.rLimit != -1 {
 		cfg.DownloadRateLimiter = rate.NewLimiter(rate.Limit(s.rLimit), int(s.rLimit))
 	}
