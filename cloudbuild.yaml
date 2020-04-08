@@ -1,0 +1,19 @@
+steps:
+- name: "gcr.io/cloud-builders/docker"
+  entrypoint: "bash"
+  args: ["-c", "docker login rg.fr-par.scw.cloud/webtor -u nologin -p $$PASSWORD"]
+  secretEnv: ["PASSWORD"]
+- name: 'gcr.io/cloud-builders/docker'
+  args: ["build", "-t", "rg.fr-par.scw.cloud/webtor/$REPO_NAME:$REVISION_ID", "."]
+- name: gcr.io/cloud-builders/docker
+  args: ['tag',
+    'rg.fr-par.scw.cloud/webtor/$REPO_NAME:$REVISION_ID',
+    'rg.fr-par.scw.cloud/webtor/$REPO_NAME:latest']
+- name: 'gcr.io/cloud-builders/docker'
+  args: ["push", "rg.fr-par.scw.cloud/webtor/$REPO_NAME:$REVISION_ID"]
+- name: 'gcr.io/cloud-builders/docker'
+  args: ["push", "rg.fr-par.scw.cloud/webtor/$REPO_NAME:latest"]
+secrets:
+- kmsKeyName: "projects/vibrant-arcanum-201111/locations/global/keyRings/my/cryptoKeys/my"
+  secretEnv:
+    PASSWORD: "CiQAe+Sl5DqcVdE72XtLyOGHbPjFpflsmSSo2esloNRRfebAWxoSTQCH+tXMtLyGFwQuRCxnfXUnvM8zMHJI72WmrHP1n38bzr5PX/lYsSjv+D6p0/sNA/hegfIs4IKvj9188803DtnLO8RC0dzRJTnXfmzK"
