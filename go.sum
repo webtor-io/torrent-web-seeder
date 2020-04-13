@@ -676,6 +676,7 @@ github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5 h1:bBVgGd/bVcRs
 github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5/go.mod h1:W/I3wRZPVQg5ex7/PjlYIBTOaPDyZ77PdjX7SYT59N4=
 github.com/webtor-io/torrent-store v0.0.0-20200102130046-6236e42cdb97 h1:wyQRrSewjXDhwU+CU/tGGq1PDCe61gZhRBKOqLLmX/w=
 github.com/webtor-io/torrent-store v0.0.0-20200102130046-6236e42cdb97/go.mod h1:DdETTQ55cN++fbajaV7I5d0jhgfcpjHuHerwyB6PL/Q=
+github.com/webtor-io/torrent-store v0.0.0-20200408181732-515c7f32a3b4 h1:MgAvdKMMIHuNvHWWovKIc52pIuXRi09p0FCkDQ/Hcvc=
 github.com/whyrusleeping/go-keyspace v0.0.0-20160322163242-5b898ac5add1/go.mod h1:8UvriyWtv5Q5EOgjHaSseUEdkQfvwFv1I/In/O2M9gc=
 github.com/whyrusleeping/go-logging v0.0.0-20170515211332-0457bb6b88fc/go.mod h1:bopw91TMyo8J3tvftk8xmU2kPmlrt4nScJQZU2hE5EM=
 github.com/whyrusleeping/go-notifier v0.0.0-20170827234753-097c5d47330f/go.mod h1:cZNvX9cFybI01GriPRMXDtczuvUhgbcYr9iCGaNlRv8=

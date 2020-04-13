@@ -15,15 +15,17 @@ import (
 )
 
 type TorrentClient struct {
-	cl     *torrent.Client
-	mux    sync.Mutex
-	err    error
-	inited bool
-	rLimit int64
+	cl      *torrent.Client
+	mux     sync.Mutex
+	err     error
+	inited  bool
+	rLimit  int64
+	dataDir string
 }
 
 const (
 	TORRENT_CLIENT_DOWNLOAD_RATE_FLAG = "download-rate"
+	TORRENT_CLIENT_DATA_DIR_FLAG      = "data-dir"
 )
 
 func RegisterTorrentClientFlags(c *cli.App) {
@@ -32,6 +34,12 @@ func RegisterTorrentClientFlags(c *cli.App) {
 		Usage:  "download rate",
 		Value:  "",
 		EnvVar: "DOWNLOAD_RATE",
+	})
+	c.Flags = append(c.Flags, cli.StringFlag{
+		Name:   TORRENT_CLIENT_DATA_DIR_FLAG,
+		Usage:  "data dir",
+		Value:  os.TempDir(),
+		EnvVar: "DATA_DIR",
 	})
 }
 
@@ -45,7 +53,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		}
 		dr = int64(drp)
 	}
-	return &TorrentClient{rLimit: dr, inited: false}, nil
+	return &TorrentClient{rLimit: dr, dataDir: c.String(TORRENT_CLIENT_DATA_DIR_FLAG), inited: false}, nil
 }
 
 func (s *TorrentClient) get() (*torrent.Client, error) {
@@ -53,7 +61,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.Seed = false
 	cfg.NoUpload = true
-	cfg.DefaultStorage = storage.NewFile(os.TempDir())
+	cfg.DefaultStorage = storage.NewFileByInfoHash(s.dataDir)
 	cfg.DefaultRequestStrategy = torrent.RequestStrategyFuzzing()
 	// cfg.EstablishedConnsPerTorrent = 100
 	// cfg.HalfOpenConnsPerTorrent = 50

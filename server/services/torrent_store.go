@@ -3,9 +3,11 @@ package services
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/urfave/cli"
 
+	grpcretry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	ts "github.com/webtor-io/torrent-store/torrent-store"
@@ -49,7 +51,15 @@ func NewTorrentStore(c *cli.Context) *TorrentStore {
 func (s *TorrentStore) get() (ts.TorrentStoreClient, error) {
 	log.Info("Initializing TorrentStoreClient")
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
-	conn, err := grpc.Dial(addr, grpc.WithInsecure())
+	opts := []grpcretry.CallOption{
+		grpcretry.WithPerRetryTimeout(5 * time.Second),
+		grpcretry.WithBackoff(grpcretry.BackoffLinear(1 * time.Second)),
+	}
+	conn, err := grpc.Dial(addr,
+		grpc.WithInsecure(),
+		grpc.WithStreamInterceptor(grpcretry.StreamClientInterceptor(opts...)),
+		grpc.WithUnaryInterceptor(grpcretry.UnaryClientInterceptor(opts...)),
+	)
 	s.conn = conn
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed to dial torrent store addr=%v", addr)
