@@ -16,6 +16,7 @@ func configure(app *cli.App) {
 	s.RegisterTorrentStoreFlags(app)
 	s.RegisterStatFlags(app)
 	s.RegisterMetaInfoFlags(app)
+	s.RegisterSnapshotFlags(app)
 	app.Action = run
 }
 
@@ -34,8 +35,17 @@ func run(c *cli.Context) error {
 	}
 	defer torrentClient.Close()
 
+	// Setting Snapshot
+	snapshot, err := s.NewSnapshot(c, metainfo)
+	if err != nil {
+		return errors.Wrap(err, "Failed to init Snapshot")
+	}
+	if snapshot != nil {
+		defer snapshot.Backup()
+	}
+
 	// Setting Torrent
-	torrent := s.NewTorrent(torrentClient, metainfo)
+	torrent := s.NewTorrent(torrentClient, metainfo, snapshot)
 
 	// Setting Stat
 	stat := s.NewStat(c, torrent)

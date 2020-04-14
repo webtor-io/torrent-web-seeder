@@ -52,8 +52,8 @@ func (s *TorrentStore) get() (ts.TorrentStoreClient, error) {
 	log.Info("Initializing TorrentStoreClient")
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	opts := []grpcretry.CallOption{
-		grpcretry.WithPerRetryTimeout(5 * time.Second),
-		grpcretry.WithBackoff(grpcretry.BackoffLinear(1 * time.Second)),
+		grpcretry.WithPerRetryTimeout(10 * time.Second),
+		grpcretry.WithBackoff(grpcretry.BackoffLinear(5 * time.Second)),
 	}
 	conn, err := grpc.Dial(addr,
 		grpc.WithInsecure(),

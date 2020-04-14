@@ -35,8 +35,9 @@ func RegisterMetaInfoFlags(c *cli.App) {
 		EnvVar: "TORRENT_INFO_HASH, INFO_HASH",
 	})
 	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:  META_INFO_INPUT_FLAG,
-		Usage: "torrent file path",
+		Name:   META_INFO_INPUT_FLAG,
+		Usage:  "torrent file path",
+		EnvVar: "INPUT",
 	})
 }
 

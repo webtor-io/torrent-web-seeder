@@ -25,14 +25,27 @@ message StatReply {
     IDLE              = 2;
     TERMINATED        = 3;
     WAITING_FOR_PEERS = 4;
+    RESTORING         = 5;
+    BACKINGUP         = 6;
   }
   Status status         = 4;
   repeated Piece pieces = 5;
+  int32 seeders       = 6;
+  int32 leechers      = 7;
 }
 
 message Piece {
   int64 position = 1;
   bool  complete = 2;
+  enum Priority {
+    NONE      = 0;
+    NORMAL    = 1;
+    HIGH      = 2;
+    READAHEAD = 3;
+    NEXT      = 4;
+    NOW       = 5;
+  }
+  Priority priority = 3;
 }
 
 // Files requst message

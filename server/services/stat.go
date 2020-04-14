@@ -152,13 +152,24 @@ func (s *grpcServer) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatRepl
 	}
 	pieces := []*pb.Piece{}
 	for i, p := range f.State() {
-		pieces = append(pieces, &pb.Piece{Position: int64(i), Complete: p.Complete})
+		pr := pb.Piece_NONE
+		if p.Priority != torrent.PiecePriorityNormal {
+			pr = pb.Piece_NORMAL
+		} else if p.Priority != torrent.PiecePriorityNone {
+			pr = pb.Piece_HIGH
+		}
+		pieces = append(pieces, &pb.Piece{Position: int64(i), Complete: p.Complete, Priority: pr})
 	}
+	peers := t.Stats().ActivePeers
+	seeders := t.Stats().ConnectedSeeders
+	leechers := peers - seeders
 	return &pb.StatReply{
 		Completed: completed,
 		Total:     f.FileInfo().Length,
-		Peers:     int32(peers(t)),
+		Peers:     int32(peers),
 		Status:    status,
+		Seeders:   int32(seeders),
+		Leechers:  int32(leechers),
 		Pieces:    pieces,
 	}, nil
 }
@@ -173,6 +184,15 @@ func findFile(t *torrent.Torrent, path string) *torrent.File {
 }
 
 func (s *grpcServer) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
+	if !s.ts.Restoring() {
+		return &pb.StatReply{
+			Completed: 0,
+			Total:     0,
+			Peers:     0,
+			Status:    pb.StatReply_RESTORING,
+			Pieces:    []*pb.Piece{},
+		}, nil
+	}
 	if !s.ts.Ready() {
 		return &pb.StatReply{
 			Completed: 0,
@@ -201,7 +221,7 @@ func diff(a []*pb.Piece, b []*pb.Piece) []*pb.Piece {
 	for _, aa := range a {
 		found := false
 		for _, bb := range b {
-			if aa.GetPosition() == bb.GetPosition() && aa.GetComplete() == bb.GetComplete() {
+			if aa.GetPosition() == bb.GetPosition() && aa.GetComplete() == bb.GetComplete() && aa.GetPriority() == bb.GetPriority() {
 				found = true
 				break
 			}

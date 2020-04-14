@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/gosuri/uiprogress/util/strutil"
 
 	humanize "github.com/dustin/go-humanize"
@@ -23,6 +25,7 @@ func render(cl pb.TorrentWebSeederClient) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	r, err := cl.Files(ctx, &pb.FilesRequest{})
+	logrus.Infof("%v", r)
 	if err != nil {
 		return err
 	}
@@ -56,6 +59,8 @@ func renderFile(cl pb.TorrentWebSeederClient, path string, maxLen int) error {
 		switch stat.GetStatus() {
 		case pb.StatReply_INITIALIZATION:
 			return "init"
+		case pb.StatReply_RESTORING:
+			return "restoring"
 		case pb.StatReply_SEEDING:
 			return fmt.Sprintf("seeding (%s/%s)", humanize.Bytes(uint64(stat.GetCompleted())), humanize.Bytes(uint64(stat.GetTotal())))
 		case pb.StatReply_IDLE:
@@ -76,6 +81,7 @@ func renderFile(cl pb.TorrentWebSeederClient, path string, maxLen int) error {
 			if err != nil {
 				break
 			}
+			// logrus.Infof("%v", stat)
 			bar.Set(int(stat.GetCompleted()))
 		}
 	}()
