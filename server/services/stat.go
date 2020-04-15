@@ -184,7 +184,7 @@ func findFile(t *torrent.Torrent, path string) *torrent.File {
 }
 
 func (s *grpcServer) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
-	if !s.ts.Restoring() {
+	if s.ts.Restoring() {
 		return &pb.StatReply{
 			Completed: 0,
 			Total:     0,
@@ -269,7 +269,7 @@ func (s *grpcServer) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_S
 				log.WithError(err).Error("Failed to send stat")
 				errCh <- err
 			}
-			if rep.GetTotal() == rep.GetCompleted() && rep.GetStatus() != pb.StatReply_INITIALIZATION {
+			if rep.GetTotal() == rep.GetCompleted() && rep.GetStatus() != pb.StatReply_INITIALIZATION && rep.GetStatus() != pb.StatReply_RESTORING {
 				errCh <- nil
 				break
 			}
