@@ -40,9 +40,6 @@ func run(c *cli.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to init Snapshot")
 	}
-	if snapshot != nil {
-		defer snapshot.Backup()
-	}
 
 	// Setting Torrent
 	torrent := s.NewTorrent(torrentClient, metainfo, snapshot)
@@ -66,8 +63,16 @@ func run(c *cli.Context) error {
 
 	// And SERVE!
 	err = serve.Serve()
+
 	if err != nil {
 		log.WithError(err).Error("Got server error")
+	}
+
+	if snapshot != nil {
+		err = snapshot.Backup()
+		if err != nil {
+			log.WithError(err).Error("Got backup error")
+		}
 	}
 
 	return err
