@@ -1,4 +1,7 @@
-FROM restic/restic:latest as restic
+FROM alpine:latest as certs
+
+# getting certs
+RUN apk update && apk upgrade && apk add --no-cache ca-certificates
 
 FROM golang:latest as build
 
@@ -22,14 +25,11 @@ RUN  cd ./server && go build -mod=vendor -ldflags '-w -s' -a -installsuffix cgo 
 
 FROM alpine:latest
 
-# copy certs
-COPY --from=restic /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-
-# copy restic
-COPY --from=restic /usr/bin/restic /usr/bin/restic
-
 # copy our static linked library
 COPY --from=build /app/server/server .
+
+# copy certs
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 ENV DATA_DIR /data
 

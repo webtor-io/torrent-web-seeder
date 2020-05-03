@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -90,13 +91,28 @@ func (s *WebSeeder) renderPieceIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Fprintln(w, fmt.Sprintf("<h1>%s - pieces</h1>", t.InfoHash().HexString()))
-	fmt.Fprintln(w, "<a href=\"../\">..</a><br />")
+	s.addH(fmt.Sprintf("%s - pieces", t.InfoHash().HexString()), w, r)
+	s.addA("../", w, r)
 	for i := 0; i < t.NumPieces(); i++ {
 		p := t.Piece(i)
 		h := p.Info().Hash().HexString()
-		fmt.Fprintln(w, fmt.Sprintf("<a href=\"%s\">%s</a><br />", h, h))
+		s.addA(h, w, r)
 	}
+}
+func (s *WebSeeder) addA(path string, w http.ResponseWriter, r *http.Request) {
+	uHref := url.URL{
+		Path:     path,
+		RawQuery: r.URL.RawQuery,
+	}
+	uName := url.URL{
+		Path: path,
+	}
+	href := uHref.String()
+	name := uName.String()
+	fmt.Fprintln(w, fmt.Sprintf("<a href=\"%s\">%s</a><br />", href, name))
+}
+func (s *WebSeeder) addH(h string, w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintln(w, fmt.Sprintf("<h1>%s</h1>", h))
 }
 func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
 	log.Info("Serve file index")
@@ -108,13 +124,12 @@ func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := t.InfoHash().HexString()
-
-	fmt.Fprintln(w, fmt.Sprintf("<h1>%s</h1>", h))
-	fmt.Fprintln(w, fmt.Sprintf("<a href=\"/%s/\">/%s/</a><br />", h, h))
-	fmt.Fprintln(w, "<a href=\".piece/\">.piece/</a><br />")
-	fmt.Fprintln(w, "<a href=\".source.torrent\">.source.torrent</a><br />")
+	s.addH(h, w, r)
+	s.addA("/"+h+"/", w, r)
+	s.addA(".piece/", w, r)
+	s.addA(".source.torrent", w, r)
 	for _, f := range t.Files() {
-		fmt.Fprintln(w, fmt.Sprintf("<a href=\"%s\">%s</a><br />", f.Path(), f.Path()))
+		s.addA(f.Path(), w, r)
 	}
 }
 
