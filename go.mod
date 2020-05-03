@@ -4,6 +4,7 @@ require (
 	code.cloudfoundry.org/bytefmt v0.0.0-20180906201452-2aa6f33b730c
 	github.com/anacrolix/torrent v1.14.0
 	github.com/aws/aws-sdk-go v1.30.14
+	github.com/bakins/logrus-middleware v0.0.0-20180426214643-ce4c6f8deb07
 	github.com/dustin/go-humanize v1.0.0
 	github.com/golang/protobuf v1.3.2
 	github.com/gosuri/uiprogress v0.0.1

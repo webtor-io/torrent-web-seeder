@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	logrusmiddleware "github.com/bakins/logrus-middleware"
+	joonix "github.com/joonix/log"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -79,7 +81,12 @@ func (s *Web) Serve() error {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/", s.ws)
+	logger := log.New()
+	logger.SetFormatter(joonix.NewFormatter())
+	l := logrusmiddleware.Middleware{
+		Logger: logger,
+	}
+	mux.Handle("/", l.Handler(s.ws, ""))
 	log.Infof("Serving Web at %v", fmt.Sprintf("%s:%d", s.host, s.port))
 	return http.Serve(ln, mux)
 
