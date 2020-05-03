@@ -16,6 +16,11 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 )
 
+const (
+	PIECE_PATH          = "piece/"
+	SOURCE_TORRENT_PATH = "source.torrent"
+)
+
 type WebSeeder struct {
 	t   *Torrent
 	err error
@@ -126,8 +131,8 @@ func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
 	h := t.InfoHash().HexString()
 	s.addH(h, w, r)
 	s.addA("/"+h+"/", w, r)
-	s.addA(".piece/", w, r)
-	s.addA(".source.torrent", w, r)
+	s.addA(PIECE_PATH, w, r)
+	s.addA(SOURCE_TORRENT_PATH, w, r)
 	for _, f := range t.Files() {
 		s.addA(f.Path(), w, r)
 	}
@@ -200,10 +205,10 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p = strings.TrimPrefix(p, t.InfoHash().HexString()+"/")
 	if p == "" {
 		s.renderIndex(w, r)
-	} else if p == ".source.torrent" {
+	} else if p == SOURCE_TORRENT_PATH {
 		s.renderTorrent(w, r)
-	} else if strings.HasPrefix(p, ".piece/") {
-		h := strings.TrimPrefix(p, ".piece/")
+	} else if strings.HasPrefix(p, PIECE_PATH) {
+		h := strings.TrimPrefix(p, PIECE_PATH)
 		s.renderPiece(w, r, h)
 	} else {
 		s.serveFile(w, r, p)
