@@ -33,16 +33,20 @@ func run(c *cli.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to init TorrentClient")
 	}
-	defer torrentClient.Close()
-
-	// Setting Snapshot
-	snapshot, err := s.NewSnapshot(c, metainfo)
-	if err != nil {
-		return errors.Wrap(err, "Failed to init Snapshot")
-	}
 
 	// Setting Torrent
-	torrent := s.NewTorrent(torrentClient, metainfo, snapshot)
+	torrent := s.NewTorrent(torrentClient, metainfo)
+
+	// Setting Snapshot
+	snapshot, err := s.NewSnapshot(c, torrent)
+	if err != nil {
+		return errors.Wrap(err, "Failed to init Snapshot")
+	} else if snapshot != nil {
+		defer snapshot.Close()
+	}
+
+	// Snapshot should close first of them all
+	defer torrentClient.Close()
 
 	// Setting Stat
 	stat := s.NewStat(c, torrent)
@@ -59,20 +63,13 @@ func run(c *cli.Context) error {
 	defer probe.Close()
 
 	// Setting Serve
-	serve := s.NewServe(web, stat, probe, torrent)
+	serve := s.NewServe(web, stat, probe, torrent, snapshot)
 
 	// And SERVE!
 	err = serve.Serve()
 
 	if err != nil {
 		log.WithError(err).Error("Got server error")
-	}
-
-	if snapshot != nil {
-		err = snapshot.Backup()
-		if err != nil {
-			log.WithError(err).Error("Got backup error")
-		}
 	}
 
 	return err

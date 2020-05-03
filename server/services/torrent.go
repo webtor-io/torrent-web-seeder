@@ -12,36 +12,22 @@ import (
 type Torrent struct {
 	t      *torrent.Torrent
 	tcS    *TorrentClient
-	sn     *Snapshot
 	miS    *MetaInfo
 	mux    sync.Mutex
 	err    error
 	inited bool
 }
 
-func NewTorrent(tcS *TorrentClient, miS *MetaInfo, sn *Snapshot) *Torrent {
-	return &Torrent{tcS: tcS, miS: miS, sn: sn, inited: false}
+func NewTorrent(tcS *TorrentClient, miS *MetaInfo) *Torrent {
+	return &Torrent{tcS: tcS, miS: miS, inited: false}
 }
 
 func (s *Torrent) Ready() bool {
 	return s.t != nil
 }
 
-func (s *Torrent) Restoring() bool {
-	if s.sn == nil {
-		return false
-	}
-	return s.sn.State() == SNAPSHOT_RESTORE
-}
-
 func (s *Torrent) get() (*torrent.Torrent, error) {
 	log.Info("Initializing Torrent")
-	if s.sn != nil {
-		err := s.sn.Restore()
-		if err != nil {
-			return nil, errors.Wrap(err, "Failed to restore torrent")
-		}
-	}
 	mi, err := s.miS.Get()
 	if err != nil {
 		return nil, err

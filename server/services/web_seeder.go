@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"io"
@@ -40,10 +41,47 @@ func (s *WebSeeder) renderTorrent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode torrent", http.StatusInternalServerError)
 		return
 	}
-
 }
-func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
-	log.Info("Serve index")
+
+func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, hash string) {
+	log.Infof("Serve piece data for hash=%v", hash)
+
+	t, err := s.t.Get()
+
+	if err != nil {
+		http.Error(w, "Failed to get torrent", http.StatusInternalServerError)
+		w.WriteHeader(500)
+		return
+	}
+	for i := 0; i < t.NumPieces(); i++ {
+		p := t.Piece(i)
+		if p.Info().Hash().HexString() == hash {
+			tr := t.NewReader()
+			defer tr.Close()
+			tr.Seek(p.Info().Offset(), io.SeekStart)
+			lr := io.LimitReader(tr, p.Info().Length())
+			_, err := io.Copy(w, lr)
+			if err != nil && err != io.EOF {
+				log.WithError(err).Error("Failed to read piece data")
+				w.WriteHeader(500)
+				return
+			}
+			return
+		}
+	}
+}
+
+func (s *WebSeeder) renderPiece(w http.ResponseWriter, r *http.Request, hash string) {
+	log.Infof("Serve piece hash=%v", hash)
+	if hash == "" {
+		s.renderPieceIndex(w, r)
+	} else {
+		s.renderPieceData(w, r, hash)
+	}
+}
+
+func (s *WebSeeder) renderPieceIndex(w http.ResponseWriter, r *http.Request) {
+	log.Info("Serve piece index")
 
 	t, err := s.t.Get()
 
@@ -52,8 +90,29 @@ func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Fprintln(w, fmt.Sprintf("<h1>%s</h1>", t.InfoHash().HexString()))
-	fmt.Fprintln(w, "<a href=\"source.torrent\">source.torrent</a><br />")
+	fmt.Fprintln(w, fmt.Sprintf("<h1>%s - pieces</h1>", t.InfoHash().HexString()))
+	fmt.Fprintln(w, "<a href=\"../\">..</a><br />")
+	for i := 0; i < t.NumPieces(); i++ {
+		p := t.Piece(i)
+		h := p.Info().Hash().HexString()
+		fmt.Fprintln(w, fmt.Sprintf("<a href=\"%s\">%s</a><br />", h, h))
+	}
+}
+func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
+	log.Info("Serve file index")
+
+	t, err := s.t.Get()
+
+	if err != nil {
+		http.Error(w, "Failed to get torrent", http.StatusInternalServerError)
+		return
+	}
+	h := t.InfoHash().HexString()
+
+	fmt.Fprintln(w, fmt.Sprintf("<h1>%s</h1>", h))
+	fmt.Fprintln(w, fmt.Sprintf("<a href=\"/%s/\">/%s/</a><br />", h, h))
+	fmt.Fprintln(w, "<a href=\".piece/\">.piece/</a><br />")
+	fmt.Fprintln(w, "<a href=\".source.torrent\">.source.torrent</a><br />")
 	for _, f := range t.Files() {
 		fmt.Fprintln(w, fmt.Sprintf("<a href=\"%s\">%s</a><br />", f.Path(), f.Path()))
 	}
@@ -115,12 +174,22 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 }
 
 func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	t, err := s.t.Get()
+	if err != nil {
+		log.WithError(err).Error("Failed to get torrent")
+		w.WriteHeader(500)
+		return
+	}
 
 	p := r.URL.Path[1:]
+	p = strings.TrimPrefix(p, t.InfoHash().HexString()+"/")
 	if p == "" {
 		s.renderIndex(w, r)
-	} else if p == "source.torrent" {
+	} else if p == ".source.torrent" {
 		s.renderTorrent(w, r)
+	} else if strings.HasPrefix(p, ".piece/") {
+		h := strings.TrimPrefix(p, ".piece/")
+		s.renderPiece(w, r, h)
 	} else {
 		s.serveFile(w, r, p)
 	}

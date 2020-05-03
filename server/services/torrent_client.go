@@ -61,7 +61,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.Seed = false
 	cfg.NoUpload = true
-	cfg.DefaultStorage = storage.NewFileByInfoHash(s.dataDir)
+	cfg.DefaultStorage = storage.NewMMap(s.dataDir)
 	cfg.DefaultRequestStrategy = torrent.RequestStrategyFuzzing()
 	// cfg.EstablishedConnsPerTorrent = 100
 	// cfg.HalfOpenConnsPerTorrent = 50

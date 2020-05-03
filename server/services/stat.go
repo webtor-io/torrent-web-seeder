@@ -184,15 +184,6 @@ func findFile(t *torrent.Torrent, path string) *torrent.File {
 }
 
 func (s *grpcServer) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
-	if s.ts.Restoring() {
-		return &pb.StatReply{
-			Completed: 0,
-			Total:     0,
-			Peers:     0,
-			Status:    pb.StatReply_RESTORING,
-			Pieces:    []*pb.Piece{},
-		}, nil
-	}
 	if !s.ts.Ready() {
 		return &pb.StatReply{
 			Completed: 0,

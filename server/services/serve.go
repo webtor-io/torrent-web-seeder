@@ -17,10 +17,11 @@ type Serve struct {
 	st *Stat
 	pr *cs.Probe
 	t  *Torrent
+	ss *Snapshot
 }
 
-func NewServe(w *Web, st *Stat, pr *cs.Probe, t *Torrent) *Serve {
-	return &Serve{w: w, st: st, pr: pr, t: t}
+func NewServe(w *Web, st *Stat, pr *cs.Probe, t *Torrent, ss *Snapshot) *Serve {
+	return &Serve{w: w, st: st, pr: pr, t: t, ss: ss}
 }
 
 func (s *Serve) Serve() error {
@@ -29,6 +30,7 @@ func (s *Serve) Serve() error {
 	probeError := make(chan error, 1)
 	statError := make(chan error, 1)
 	torrentError := make(chan error, 1)
+	snapshotError := make(chan error, 1)
 
 	go func() {
 		err := s.w.Serve()
@@ -50,6 +52,14 @@ func (s *Serve) Serve() error {
 			torrentError <- err
 		}
 	}()
+	if s.ss != nil {
+		go func() {
+			err := s.ss.Start()
+			if err != nil {
+				snapshotError <- err
+			}
+		}()
+	}
 	expire, err := s.w.Expire()
 	if err != nil {
 		return err
@@ -69,6 +79,8 @@ func (s *Serve) Serve() error {
 		return errors.Wrap(err, "Got Stat error")
 	case err := <-torrentError:
 		return errors.Wrap(err, "Failed to fetch torrent")
+	case err := <-snapshotError:
+		return errors.Wrap(err, "Got snapshot error")
 	}
 	return nil
 }

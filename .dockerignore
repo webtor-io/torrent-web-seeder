@@ -1,5 +1,7 @@
 .git
 .github
+.vscode
+.dockerignore
 *Dockerfile*
 up.sh
 README.md
@@ -7,3 +9,6 @@ Makefile
 LICENSE
 client
 server/data
+server/cerver
+__debug_bin
+.DS_Store

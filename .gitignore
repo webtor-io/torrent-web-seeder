@@ -19,3 +19,5 @@ telepresence.log
 
 server/server
 client/client
+
+.DS_Store

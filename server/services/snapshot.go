@@ -1,63 +1,91 @@
 package services
 
 import (
-	"os"
-	"os/exec"
+	"bytes"
+	"io"
+	"io/ioutil"
 	"sync"
+	"time"
 
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/pkg/errors"
 	"github.com/urfave/cli"
+
+	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/bencode"
 )
 
 type Snapshot struct {
-	resticPassword     string
-	resticRepository   string
 	awsAccessKeyID     string
 	awsSecretAccessKey string
-	dataDir            string
-	resticBin          string
-	infoHash           string
-	inited             bool
-	state              SnapshotState
+	awsBucket          string
+	awsEndpoint        string
+	awsRegion          string
+	awsSession         *session.Session
+	awsClient          *s3.S3
+	awsConcurrency     int
+	stop               bool
+	start              bool
+	stopCh             chan (bool)
 	err                error
-	mi                 *MetaInfo
+	t                  *Torrent
 	mux                sync.Mutex
 }
 
-type SnapshotState int
+type CompletedPieces map[[20]byte]bool
+
+func (cp CompletedPieces) Has(p *torrent.Piece) bool {
+	h := p.Info().Hash()
+	_, ok := map[[20]byte]bool(cp)[h]
+	return ok
+}
+
+func (cp CompletedPieces) Add(p *torrent.Piece) {
+	map[[20]byte]bool(cp)[p.Info().Hash()] = true
+}
+
+func (cp CompletedPieces) FromBytes(data []byte) {
+	for _, p := range split(data, 20) {
+		var k [20]byte
+		copy(k[:], p)
+		cp[k] = true
+	}
+}
+
+func (cp CompletedPieces) ToBytes() []byte {
+	res := []byte{}
+	for k := range cp {
+		res = append(res, k[:]...)
+	}
+	return res
+}
 
 const (
-	SNAPSHOT_IDLE    SnapshotState = 0
-	SNAPSHOT_RESTORE SnapshotState = 1
-	SNAPSHOT_BACKUP  SnapshotState = 2
-)
-
-const (
-	USE_SNAPSHOT          = "use-snapshot"
-	RESTIC_PASSWORD       = "restic-pasword"
-	RESTIC_REPOSITORY     = "restic-repository"
 	AWS_ACCESS_KEY_ID     = "aws-access-key-id"
 	AWS_SECRET_ACCESS_KEY = "aws-secret-access-key"
+	AWS_BUCKET            = "aws-bucket"
+	AWS_ENDPOINT          = "aws-endpoint"
+	AWS_REGION            = "aws-region"
+	AWS_CONCURRENCY       = "aws-concurrency"
+	USE_SNAPSHOT          = "use-snapshot"
 )
 
 func RegisterSnapshotFlags(c *cli.App) {
 	c.Flags = append(c.Flags, cli.BoolFlag{
 		Name:   USE_SNAPSHOT,
-		Usage:  "use snapshot",
 		EnvVar: "USE_SNAPSHOT",
 	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   RESTIC_PASSWORD,
-		Usage:  "restic password",
-		Value:  "",
-		EnvVar: "RESTIC_PASSWORD",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   RESTIC_REPOSITORY,
-		Usage:  "restic repository",
-		Value:  "",
-		EnvVar: "RESTIC_REPOSITORY",
+	c.Flags = append(c.Flags, cli.IntFlag{
+		Name:   AWS_CONCURRENCY,
+		Usage:  "AWS Concurrency",
+		Value:  5,
+		EnvVar: "AWS_CONCURRENCY",
 	})
 	c.Flags = append(c.Flags, cli.StringFlag{
 		Name:   AWS_ACCESS_KEY_ID,
@@ -71,17 +99,42 @@ func RegisterSnapshotFlags(c *cli.App) {
 		Value:  "",
 		EnvVar: "AWS_SECRET_ACCESS_KEY",
 	})
+	c.Flags = append(c.Flags, cli.StringFlag{
+		Name:   AWS_BUCKET,
+		Usage:  "AWS Bucket",
+		Value:  "",
+		EnvVar: "AWS_BUCKET",
+	})
+	c.Flags = append(c.Flags, cli.StringFlag{
+		Name:   AWS_ENDPOINT,
+		Usage:  "AWS Endpoint",
+		Value:  "",
+		EnvVar: "AWS_ENDPOINT",
+	})
+	c.Flags = append(c.Flags, cli.StringFlag{
+		Name:   AWS_REGION,
+		Usage:  "AWS Region",
+		Value:  "",
+		EnvVar: "AWS_REGION",
+	})
 }
 
-func NewSnapshot(c *cli.Context, mi *MetaInfo) (*Snapshot, error) {
-	if !c.Bool(USE_SNAPSHOT) {
+func split(buf []byte, lim int) [][]byte {
+	var chunk []byte
+	chunks := make([][]byte, 0, len(buf)/lim+1)
+	for len(buf) >= lim {
+		chunk, buf = buf[:lim], buf[lim:]
+		chunks = append(chunks, chunk)
+	}
+	if len(buf) > 0 {
+		chunks = append(chunks, buf[:len(buf)])
+	}
+	return chunks
+}
+
+func NewSnapshot(c *cli.Context, t *Torrent) (*Snapshot, error) {
+	if c.Bool(USE_SNAPSHOT) == false {
 		return nil, nil
-	}
-	if c.String(RESTIC_PASSWORD) == "" {
-		return nil, errors.Errorf("Restic password can't be empty")
-	}
-	if c.String(RESTIC_REPOSITORY) == "" {
-		return nil, errors.Errorf("Restic repository can't be empty")
 	}
 	if c.String(AWS_ACCESS_KEY_ID) == "" {
 		return nil, errors.Errorf("AWS Access Key ID can't be empty")
@@ -89,95 +142,200 @@ func NewSnapshot(c *cli.Context, mi *MetaInfo) (*Snapshot, error) {
 	if c.String(AWS_SECRET_ACCESS_KEY) == "" {
 		return nil, errors.Errorf("AWS Secret Access Key can't be empty")
 	}
-	if mi == nil {
-		return nil, errors.Errorf("MetaInfo must be provided")
+	if c.String(AWS_BUCKET) == "" {
+		return nil, errors.Errorf("AWS Bucket can't be empty")
 	}
-	return &Snapshot{resticPassword: c.String(RESTIC_PASSWORD), resticRepository: c.String(RESTIC_REPOSITORY),
-		awsAccessKeyID: c.String(AWS_ACCESS_KEY_ID), awsSecretAccessKey: c.String(AWS_SECRET_ACCESS_KEY),
-		dataDir: c.String(TORRENT_CLIENT_DATA_DIR_FLAG), inited: false, state: SNAPSHOT_IDLE, mi: mi}, nil
+	if c.String(AWS_REGION) == "" {
+		return nil, errors.Errorf("AWS Region can't be empty")
+	}
+	return &Snapshot{awsAccessKeyID: c.String(AWS_ACCESS_KEY_ID), awsSecretAccessKey: c.String(AWS_SECRET_ACCESS_KEY),
+		awsBucket: c.String(AWS_BUCKET), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
+		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), start: false}, nil
 }
 
-func (s *Snapshot) State() SnapshotState {
-	return s.state
+func (s *Snapshot) client() *s3.S3 {
+	if s.awsClient != nil {
+		return s.awsClient
+	}
+	s.awsClient = s3.New(s.session())
+	return s.awsClient
 }
 
-func (s *Snapshot) init() error {
-	if s.inited {
-		return s.err
+func (s *Snapshot) session() *session.Session {
+	if s.awsSession != nil {
+		return s.awsSession
 	}
-	defer func() { s.inited = true }()
-	path, err := exec.LookPath("restic")
-	if err != nil {
-		s.err = errors.Wrap(err, "Failed to find restic")
-		return s.err
+	c := &aws.Config{
+		Credentials: credentials.NewStaticCredentials(s.awsAccessKeyID, s.awsSecretAccessKey, ""),
+		Endpoint:    aws.String(s.awsEndpoint),
+		Region:      aws.String(s.awsRegion),
+		// DisableSSL:       aws.Bool(true),
+		S3ForcePathStyle: aws.Bool(true),
 	}
-	s.resticBin = path
-	mi, err := s.mi.Get()
-	if err != nil {
-		s.err = errors.Wrap(err, "Failed to get MetaInfo")
-		return s.err
-	}
-	s.infoHash = mi.HashInfoBytes().HexString()
-	cmd := exec.Command("mkdir", "-p", s.dataDir)
-	cmd.Run()
-	if err != nil {
-		s.err = errors.Wrap(err, "Failed to create data dir")
-		return s.err
-	}
-	s.err = nil
-	return s.err
+	s.awsSession = session.New(c)
+	return s.awsSession
 }
 
-func (s *Snapshot) Restore() error {
-	s.mux.Lock()
-	s.state = SNAPSHOT_RESTORE
-	defer func() {
-		s.state = SNAPSHOT_IDLE
-		s.mux.Unlock()
-	}()
-	log.Info("Restoring")
-	err := s.init()
+func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*CompletedPieces, error) {
+	st := CompletedPieces{}
+	r, err := cl.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.awsBucket),
+		Key:    aws.String(t.InfoHash().HexString() + "/completed_pieces"),
+	})
 	if err != nil {
-		return errors.Wrap(err, "Failed to init snapshot")
+		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+			return &st, nil
+		}
+		return nil, errors.Wrap(err, "Failed to fetch completed pieces")
 	}
-	cmd := exec.Command(s.resticBin, "restore", "latest", "--verbose", "--path", s.infoHash, "--target", ".")
-	cmd.Dir = s.dataDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err = cmd.Run()
-	// out, err := cmd.CombinedOutput()
+	defer r.Body.Close()
+	data, err := ioutil.ReadAll(r.Body)
+	st.FromBytes(data)
+	return &st, nil
+}
+
+func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *CompletedPieces) error {
+	_, err := cl.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.awsBucket),
+		Key:    aws.String(t.InfoHash().HexString() + "/completed_pieces"),
+		Body:   bytes.NewReader(st.ToBytes()),
+	})
 	if err != nil {
-		log.WithError(err).Error("Failed to restore snapshot")
-		// if !strings.Contains(err.Error(), "not found") {
-		// 	return errors.Wrap(err, "Failed to restore snapshot")
-		// }
+		return errors.Wrap(err, "Failed to store completed pieces")
 	}
-	log.Info("Restoring finished")
-	// log.Infof("Restoring finished: %s", string(out))
 	return nil
 }
-func (s *Snapshot) Backup() error {
-	s.mux.Lock()
-	s.state = SNAPSHOT_BACKUP
-	defer func() {
-		s.state = SNAPSHOT_IDLE
-		s.mux.Unlock()
-	}()
-	err := s.init()
+
+func (s *Snapshot) storeTorrent(cl *s3.S3, t *torrent.Torrent) error {
+	path := t.InfoHash().HexString() + ".torrent"
+	log.Infof("Store torrent path=%v", path)
+	data, err := bencode.Marshal(t.Metainfo())
 	if err != nil {
-		return errors.Wrap(err, "Failed to init snapshot")
+		return errors.Wrap(err, "Failed to becnode torrent")
 	}
-	log.Info("Backing up")
-	cmd := exec.Command(s.resticBin, "backup", "--tag", s.infoHash, s.infoHash)
-	cmd.Dir = s.dataDir
-	// out, err := cmd.CombinedOutput()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err = cmd.Run()
+	_, err = cl.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.awsBucket),
+		Key:    aws.String(path),
+		Body:   bytes.NewReader(data),
+	})
 	if err != nil {
-		return errors.Wrap(err, "Failed to backup snapshot")
+		return errors.Wrap(err, "Failed to store torrent")
 	}
-	log.Info("Backing up finished")
-	// log.Infof("Backing up finished: %s", string(out))
 	return nil
+}
+
+func (s *Snapshot) Start() error {
+	log.Info("Starting snapshot")
+	s.stopCh = make(chan (bool))
+	cl := s.client()
+	t, err := s.t.Get()
+	if err != nil {
+		return errors.Wrap(err, "Failed to fetch torrent")
+	}
+	cp, err := s.fetchCompletedPieces(cl, t)
+	if err != nil {
+		return errors.Wrap(err, "Failed to fetch completed pieces")
+	}
+	err = s.storeTorrent(cl, t)
+	if err != nil {
+		return errors.Wrap(err, "Failed to store torrent")
+	}
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	ch := make(chan *torrent.Piece)
+	// errCh := make(chan error)
+	go func() {
+		for range ticker.C {
+			if s.stop {
+				close(ch)
+				break
+			}
+			np := []*torrent.Piece{}
+			s.mux.Lock()
+			for i := 0; i < t.NumPieces(); i++ {
+				ps := t.PieceState(i)
+				p := t.Piece(i)
+				if p != nil && !cp.Has(p) && ps.Complete {
+					np = append(np, p)
+				}
+			}
+			s.mux.Unlock()
+			for _, p := range np {
+				ch <- p
+			}
+		}
+	}()
+	ticker2 := time.NewTicker(30 * time.Second)
+	defer ticker2.Stop()
+	go func() {
+		for range ticker2.C {
+			if s.stop {
+				break
+			}
+			err := s.storeCompletedPieces(cl, t, cp)
+			if err != nil {
+				log.WithError(err).Error("Failed to store completed pieces")
+			}
+		}
+	}()
+	s.start = true
+	s.storePieces(cl, t, cp, ch)
+	err = s.storeCompletedPieces(cl, t, cp)
+	if err != nil {
+		log.WithError(err).Error("Failed to store completed pieces")
+	}
+	close(s.stopCh)
+	return nil
+}
+
+func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPieces, ch chan *torrent.Piece) {
+	var wg sync.WaitGroup
+	for i := 0; i < s.awsConcurrency; i++ {
+		wg.Add(1)
+		logger := log.WithField("thread", i)
+		go func() {
+			for p := range ch {
+				b := make([]byte, p.Info().Length())
+				size, err := p.Storage().ReadAt(b, 0)
+
+				if size != int(p.Info().Length()) && err != nil && err != io.EOF {
+					logger.WithError(err).Errorf("Failed to read piece index=%v", p.Info().Index())
+					continue
+				}
+
+				_, err = cl.PutObject(&s3.PutObjectInput{
+					Bucket: aws.String(s.awsBucket),
+					Key:    aws.String(t.InfoHash().HexString() + "/" + p.Info().Hash().HexString()),
+					Body:   bytes.NewReader(b),
+				})
+
+				if err != nil {
+					logger.WithError(err).Errorf("Failed to write piece index=%v", p.Info().Index())
+					continue
+				}
+
+				s.mux.Lock()
+				cp.Add(p)
+				s.mux.Unlock()
+
+				logger.Infof("Stored piece index=%v", p.Info().Index())
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+}
+
+func (s *Snapshot) Close() {
+	log.Info("Snapshot closing")
+	if s.start {
+		s.stop = true
+
+		select {
+		case <-s.stopCh:
+		case <-time.After(1 * time.Minute):
+		}
+
+	}
+	log.Info("Snapshot closed")
 }

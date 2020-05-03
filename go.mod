@@ -3,6 +3,7 @@ module github.com/webtor-io/torrent-web-seeder
 require (
 	code.cloudfoundry.org/bytefmt v0.0.0-20180906201452-2aa6f33b730c
 	github.com/anacrolix/torrent v1.14.0
+	github.com/aws/aws-sdk-go v1.30.14
 	github.com/dustin/go-humanize v1.0.0
 	github.com/golang/protobuf v1.3.2
 	github.com/gosuri/uiprogress v0.0.1
@@ -15,9 +16,9 @@ require (
 	github.com/webtor-io/common-services v0.0.0-20200102124507-e840419c0302
 	github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5
 	github.com/webtor-io/torrent-store v0.0.0-20200102130046-6236e42cdb97
-	golang.org/x/net v0.0.0-20200114155413-6afb5195e5aa
+	golang.org/x/net v0.0.0-20200202094626-16171245cfb2 // indirect
 	golang.org/x/time v0.0.0-20191024005414-555d28b269f0
 	google.golang.org/grpc v1.25.1
 )
 
-go 1.13
+go 1.14
