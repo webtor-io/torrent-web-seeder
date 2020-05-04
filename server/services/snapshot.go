@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"sync"
@@ -194,6 +195,19 @@ func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*Complet
 	return &st, nil
 }
 
+func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
+	key := "touch/" + t.InfoHash().HexString()
+	_, err := cl.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.awsBucket),
+		Key:    aws.String(key),
+		Body:   bytes.NewReader([]byte(fmt.Sprintf("%v", time.Now().Unix()))),
+	})
+	if err != nil {
+		return errors.Wrapf(err, "Failed to touch torrent key=%v", key)
+	}
+	return nil
+}
+
 func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *CompletedPieces) error {
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(s.awsBucket),
@@ -239,6 +253,10 @@ func (s *Snapshot) Start() error {
 	err = s.storeTorrent(cl, t)
 	if err != nil {
 		return errors.Wrap(err, "Failed to store torrent")
+	}
+	err = s.touch(cl, t)
+	if err != nil {
+		return errors.Wrap(err, "Failed to touch torrent")
 	}
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
