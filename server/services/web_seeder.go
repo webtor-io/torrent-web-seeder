@@ -62,17 +62,9 @@ func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, hash
 	for i := 0; i < t.NumPieces(); i++ {
 		p := t.Piece(i)
 		if p.Info().Hash().HexString() == hash {
-			tr := t.NewReader()
-			defer tr.Close()
-			tr.Seek(p.Info().Offset(), io.SeekStart)
-			lr := io.LimitReader(tr, p.Info().Length())
-			_, err := io.Copy(w, lr)
-			if err != nil && err != io.EOF {
-				log.WithError(err).Error("Failed to read piece data")
-				w.WriteHeader(500)
-				return
-			}
-			return
+			pr := NewPieceReader(t.NewReader(), p)
+			defer pr.Close()
+			http.ServeContent(w, r, "", time.Unix(0, 0), pr)
 		}
 	}
 }
