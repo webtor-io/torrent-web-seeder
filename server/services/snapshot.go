@@ -211,7 +211,7 @@ func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
 func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *CompletedPieces) error {
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(s.awsBucket),
-		Key:    aws.String(t.InfoHash().HexString() + "/completed_pieces"),
+		Key:    aws.String("completed_pieces/" + t.InfoHash().HexString()),
 		Body:   bytes.NewReader(st.ToBytes()),
 	})
 	if err != nil {
@@ -221,7 +221,7 @@ func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *Compl
 }
 
 func (s *Snapshot) storeTorrent(cl *s3.S3, t *torrent.Torrent) error {
-	path := t.InfoHash().HexString() + ".torrent"
+	path := "torrents/" + t.InfoHash().HexString()
 	log.Infof("Store torrent path=%v", path)
 	data, err := bencode.Marshal(t.Metainfo())
 	if err != nil {
@@ -246,6 +246,42 @@ func (s *Snapshot) Start() error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to fetch torrent")
 	}
+	_, err = cl.CreateBucket(&s3.CreateBucketInput{
+		Bucket: aws.String(s.awsBucket),
+	})
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case s3.ErrCodeBucketAlreadyExists:
+				log.WithError(err).Warn("Master bucket already exists")
+			case s3.ErrCodeBucketAlreadyOwnedByYou:
+				log.WithError(err).Warn("Master bucket already owned")
+			default:
+				return errors.Wrapf(err, "Failed to create master bucket")
+			}
+		} else {
+			return errors.Wrapf(err, "Failed to create master bucket")
+		}
+	}
+	pieceBucket := s.awsBucket + "-" + t.InfoHash().HexString()[0:2]
+
+	_, err = cl.CreateBucket(&s3.CreateBucketInput{
+		Bucket: aws.String(pieceBucket),
+	})
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case s3.ErrCodeBucketAlreadyExists:
+				log.WithError(err).Warn("Piece bucket already exists")
+			case s3.ErrCodeBucketAlreadyOwnedByYou:
+				log.WithError(err).Warn("Piece bucket already owned")
+			default:
+				return errors.Wrapf(err, "Failed to create piece bucket")
+			}
+		} else {
+			return errors.Wrapf(err, "Failed to create piece bucket")
+		}
+	}
 	cp, err := s.fetchCompletedPieces(cl, t)
 	if err != nil {
 		return errors.Wrap(err, "Failed to fetch completed pieces")
@@ -258,6 +294,7 @@ func (s *Snapshot) Start() error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to touch torrent")
 	}
+
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	ch := make(chan *torrent.Piece)
@@ -297,7 +334,7 @@ func (s *Snapshot) Start() error {
 		}
 	}()
 	s.start = true
-	s.storePieces(cl, t, cp, ch)
+	s.storePieces(cl, t, cp, ch, pieceBucket)
 	err = s.storeCompletedPieces(cl, t, cp)
 	if err != nil {
 		log.WithError(err).Error("Failed to store completed pieces")
@@ -306,7 +343,7 @@ func (s *Snapshot) Start() error {
 	return nil
 }
 
-func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPieces, ch chan *torrent.Piece) {
+func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPieces, ch chan *torrent.Piece, pb string) {
 	var wg sync.WaitGroup
 	for i := 0; i < s.awsConcurrency; i++ {
 		wg.Add(1)
@@ -322,7 +359,7 @@ func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPiece
 				}
 
 				_, err = cl.PutObject(&s3.PutObjectInput{
-					Bucket: aws.String(s.awsBucket),
+					Bucket: aws.String(pb),
 					Key:    aws.String(t.InfoHash().HexString() + "/" + p.Info().Hash().HexString()),
 					Body:   bytes.NewReader(b),
 				})
@@ -336,7 +373,7 @@ func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPiece
 				cp.Add(p)
 				s.mux.Unlock()
 
-				logger.Infof("Stored piece index=%v", p.Info().Index())
+				logger.Infof("Stored piece to S3 index=%v", p.Info().Index())
 			}
 			wg.Done()
 		}()
