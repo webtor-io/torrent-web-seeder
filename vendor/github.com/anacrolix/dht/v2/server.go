@@ -136,7 +136,7 @@ func NewDefaultServerConfig() *ServerConfig {
 	return &ServerConfig{
 		Conn:               mustListen(":0"),
 		NoSecurity:         true,
-		StartingNodes:      GlobalBootstrapAddrs,
+		StartingNodes:      func() ([]Addr, error) { return GlobalBootstrapAddrs("udp") },
 		ConnectionTracking: conntrack.NewInstance(),
 	}
 }
@@ -158,18 +158,10 @@ func NewServer(c *ServerConfig) (s *Server, err error) {
 	// If Logger is empty, emulate the old behaviour: Everything is logged to the default location,
 	// and there are no debug messages.
 	if c.Logger.LoggerImpl == nil {
-		c.Logger = log.Default.WithFilter(func(m log.Msg) bool {
-			return !m.HasValue(log.Debug)
-		})
+		c.Logger = log.Default.FilterLevel(log.Info)
 	}
 	// Add log.Debug by default.
-	c.Logger = c.Logger.WithMap(func(m log.Msg) log.Msg {
-		var l log.Level
-		if m.GetValueByType(&l) {
-			return m
-		}
-		return m.WithValues(log.Debug)
-	})
+	c.Logger = c.Logger.WithDefaultLevel(log.Debug)
 
 	s = &Server{
 		config:      *c,
@@ -289,7 +281,7 @@ func (s *Server) processPacket(b []byte, addr Addr) {
 		s.logger().Printf("received response for untracked transaction %q from %v", d.T, addr)
 		return
 	}
-	s.logger().Printf("received response for transaction %q from %v", d.T, addr)
+	//s.logger().Printf("received response for transaction %q from %v", d.T, addr)
 	go t.handleResponse(d)
 	if n != nil {
 		n.lastGotResponse = time.Now()
@@ -701,7 +693,7 @@ func (s *Server) makeQueryBytes(q string, a *krpc.MsgArgs, t string) []byte {
 
 func (s *Server) queryContext(ctx context.Context, addr Addr, q string, a *krpc.MsgArgs) (reply krpc.Msg, writes numWrites, err error) {
 	defer func(started time.Time) {
-		s.logger().WithValues(log.Debug, q).Printf(
+		s.logger().WithDefaultLevel(log.Debug).WithValues(q).Printf(
 			"queryContext(%v) returned after %v (err=%v, reply.Y=%v, reply.E=%v, writes=%v)",
 			q, time.Since(started), err, reply.Y, reply.E, writes)
 	}(time.Now())
@@ -720,11 +712,15 @@ func (s *Server) queryContext(ctx context.Context, addr Addr, q string, a *krpc.
 	tk.T = tid
 	s.addTransaction(tk, t)
 	s.mu.Unlock()
+	// Receives a non-nil error from the sender, and closes when the sender completes.
 	sendErr := make(chan error, 1)
 	sendCtx, cancelSend := context.WithCancel(ctx)
-	defer cancelSend()
 	go pprof.Do(sendCtx, pprof.Labels("q", q), func(ctx context.Context) {
-		s.transactionQuerySender(ctx, sendErr, s.makeQueryBytes(q, a, tid), &writes, addr)
+		err := s.transactionQuerySender(ctx, s.makeQueryBytes(q, a, tid), &writes, addr)
+		if err != nil {
+			sendErr <- err
+		}
+		close(sendErr)
 	})
 	expvars.Add(fmt.Sprintf("outbound %s queries", q), 1)
 	select {
@@ -733,6 +729,11 @@ func (s *Server) queryContext(ctx context.Context, addr Addr, q string, a *krpc.
 		err = ctx.Err()
 	case err = <-sendErr:
 	}
+	// Make sure the query sender stops.
+	cancelSend()
+	// Make sure the query sender has returned, it will either send an error that we didn't catch
+	// above, or the channel will be closed by the sender completing.
+	<-sendErr
 	s.mu.Lock()
 	s.deleteTransaction(tk)
 	if err != nil {
@@ -744,12 +745,11 @@ func (s *Server) queryContext(ctx context.Context, addr Addr, q string, a *krpc.
 	return
 }
 
-func (s *Server) transactionQuerySender(sendCtx context.Context, sendErr chan<- error, b []byte, writes *numWrites, addr Addr) {
-	defer close(sendErr)
+func (s *Server) transactionQuerySender(sendCtx context.Context, b []byte, writes *numWrites, addr Addr) error {
 	err := transactionSender(
 		sendCtx,
 		func() error {
-			wrote, err := s.writeToNode(sendCtx, b, addr, *writes == 0, *writes != 0)
+			wrote, err := s.writeToNode(sendCtx, b, addr, *writes == 0, true)
 			if wrote {
 				*writes++
 			}
@@ -759,14 +759,13 @@ func (s *Server) transactionQuerySender(sendCtx context.Context, sendErr chan<- 
 		maxTransactionSends,
 	)
 	if err != nil {
-		sendErr <- err
-		return
+		return err
 	}
 	select {
 	case <-sendCtx.Done():
-		sendErr <- sendCtx.Err()
+		return sendCtx.Err()
 	case <-time.After(s.resendDelay()):
-		sendErr <- errors.New("timed out")
+		return errors.New("timed out")
 	}
 
 }
@@ -860,12 +859,16 @@ func (s *Server) Close() {
 	s.socket.Close()
 }
 
-func (s *Server) getPeers(ctx context.Context, addr Addr, infoHash int160) (krpc.Msg, numWrites, error) {
-	m, writes, err := s.queryContext(ctx, addr, "get_peers", &krpc.MsgArgs{
+func (s *Server) getPeers(ctx context.Context, addr Addr, infoHash int160, scrape bool) (krpc.Msg, numWrites, error) {
+	args := krpc.MsgArgs{
 		InfoHash: infoHash.AsByteArray(),
 		// TODO: Maybe IPv4-only Servers won't want IPv6 nodes?
 		Want: []krpc.Want{krpc.WantNodes, krpc.WantNodes6},
-	})
+	}
+	if scrape {
+		args.Scrape = 1
+	}
+	m, writes, err := s.queryContext(ctx, addr, "get_peers", &args)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.addResponseNodes(m)
@@ -916,6 +919,11 @@ func (s *Server) traversalStartingNodes() (nodes []addrMaybeId, err error) {
 		return
 	}
 	if s.config.StartingNodes != nil {
+		// There seems to be floods on this call on occasion, which may cause a barrage of DNS
+		// resolution attempts. This would require that we're unable to get replies because we can't
+		// resolve, transmit or receive on the network. Nodes currently don't get expired from the
+		// table, so once we have some entries, we should never have to fallback.
+		s.logger().WithValues(log.Warning).Printf("falling back on starting nodes")
 		addrs, err := s.config.StartingNodes()
 		if err != nil {
 			return nil, errors.Wrap(err, "getting starting nodes")

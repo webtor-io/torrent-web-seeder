@@ -36,7 +36,7 @@ type ClientConfig struct {
 
 	// Don't create a DHT.
 	NoDHT            bool `long:"disable-dht"`
-	DhtStartingNodes dht.StartingNodesGetter
+	DhtStartingNodes func(network string) dht.StartingNodesGetter
 	// Never send chunks to peers.
 	NoUpload bool `long:"no-upload"`
 	// Disable uploading even when it isn't fair.
@@ -65,7 +65,7 @@ type ClientConfig struct {
 	DisableTCP bool `long:"disable-tcp"`
 	// Called to instantiate storage for each added torrent. Builtin backends
 	// are in the storage package. If not set, the "file" implementation is
-	// used.
+	// used (and Closed when the Client is Closed).
 	DefaultStorage storage.ClientImpl
 
 	HeaderObfuscationPolicy HeaderObfuscationPolicy
@@ -151,12 +151,14 @@ func NewDefaultClientConfig() *ClientConfig {
 		TorrentPeersHighWater:          500,
 		TorrentPeersLowWater:           50,
 		HandshakesTimeout:              4 * time.Second,
-		DhtStartingNodes:               dht.GlobalBootstrapAddrs,
-		ListenHost:                     func(string) string { return "" },
-		UploadRateLimiter:              unlimited,
-		DownloadRateLimiter:            unlimited,
-		ConnTracker:                    conntrack.NewInstance(),
-		DisableAcceptRateLimiting:      true,
+		DhtStartingNodes: func(network string) dht.StartingNodesGetter {
+			return func() ([]dht.Addr, error) { return dht.GlobalBootstrapAddrs(network) }
+		},
+		ListenHost:                func(string) string { return "" },
+		UploadRateLimiter:         unlimited,
+		DownloadRateLimiter:       unlimited,
+		ConnTracker:               conntrack.NewInstance(),
+		DisableAcceptRateLimiting: true,
 		HeaderObfuscationPolicy: HeaderObfuscationPolicy{
 			Preferred:        true,
 			RequirePreferred: false,

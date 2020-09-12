@@ -11,6 +11,10 @@ type Msg struct {
 	MsgImpl
 }
 
+func (me Msg) String() string {
+	return me.Text()
+}
+
 func newMsg(text string) Msg {
 	return Msg{rootMsgImpl{text}}
 }
@@ -78,6 +82,29 @@ func (m Msg) With(key, value interface{}) Msg {
 
 func (m Msg) Add(key, value interface{}) Msg {
 	return m.With(key, value)
+}
+
+func (m Msg) SetLevel(level Level) Msg {
+	return m.With(levelKey, level)
+}
+
+func (m Msg) GetByKey(key interface{}) (value interface{}, ok bool) {
+	m.Values(func(i interface{}) bool {
+		if keyValue, isKeyValue := i.(item); isKeyValue && keyValue.key == key {
+			value = keyValue.value
+			ok = true
+		}
+		return !ok
+	})
+	return
+}
+
+func (m Msg) GetLevel() (l Level, ok bool) {
+	v, ok := m.GetByKey(levelKey)
+	if ok {
+		l = v.(Level)
+	}
+	return
 }
 
 func (m Msg) HasValue(v interface{}) (has bool) {

@@ -61,7 +61,7 @@ type Piece struct {
 
 	// Connections that have written data to this piece since its last check.
 	// This can include connections that have closed.
-	dirtiers map[*connection]struct{}
+	dirtiers map[*PeerConn]struct{}
 }
 
 func (p *Piece) String() string {
@@ -255,4 +255,8 @@ func (p *Piece) requestStrategyPiece() requestStrategyPiece {
 
 func (p *Piece) dirtyChunks() bitmap.Bitmap {
 	return p._dirtyChunks
+}
+
+func (p *Piece) State() PieceState {
+	return p.t.PieceState(p.index)
 }
