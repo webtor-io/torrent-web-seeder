@@ -26,6 +26,7 @@ type Snapshot struct {
 	awsAccessKeyID     string
 	awsSecretAccessKey string
 	awsBucket          string
+	awsBucketSpread    bool
 	awsEndpoint        string
 	awsRegion          string
 	awsSession         *session.Session
@@ -71,6 +72,7 @@ const (
 	AWS_ACCESS_KEY_ID     = "aws-access-key-id"
 	AWS_SECRET_ACCESS_KEY = "aws-secret-access-key"
 	AWS_BUCKET            = "aws-bucket"
+	AWS_BUCKET_SPREAD     = "aws-bucket-spread"
 	AWS_ENDPOINT          = "aws-endpoint"
 	AWS_REGION            = "aws-region"
 	AWS_CONCURRENCY       = "aws-concurrency"
@@ -81,6 +83,10 @@ func RegisterSnapshotFlags(c *cli.App) {
 	c.Flags = append(c.Flags, cli.BoolFlag{
 		Name:   USE_SNAPSHOT,
 		EnvVar: "USE_SNAPSHOT",
+	})
+	c.Flags = append(c.Flags, cli.BoolFlag{
+		Name:   AWS_BUCKET_SPREAD,
+		EnvVar: "AWS_BUCKET_SPREAD",
 	})
 	c.Flags = append(c.Flags, cli.IntFlag{
 		Name:   AWS_CONCURRENCY,
@@ -150,7 +156,7 @@ func NewSnapshot(c *cli.Context, t *Torrent) (*Snapshot, error) {
 		return nil, errors.Errorf("AWS Region can't be empty")
 	}
 	return &Snapshot{awsAccessKeyID: c.String(AWS_ACCESS_KEY_ID), awsSecretAccessKey: c.String(AWS_SECRET_ACCESS_KEY),
-		awsBucket: c.String(AWS_BUCKET), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
+		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
 		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), start: false}, nil
 }
 
@@ -264,6 +270,9 @@ func (s *Snapshot) Start() error {
 		}
 	}
 	pieceBucket := s.awsBucket + "-" + t.InfoHash().HexString()[0:2]
+	if s.awsBucketSpread {
+		pieceBucket += "-" + t.InfoHash().HexString()[0:2]
+	}
 
 	_, err = cl.CreateBucket(&s3.CreateBucketInput{
 		Bucket: aws.String(pieceBucket),

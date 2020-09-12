@@ -22,14 +22,15 @@ import (
 	"github.com/anacrolix/missinggo/pproffd"
 	"github.com/anacrolix/missinggo/pubsub"
 	"github.com/anacrolix/missinggo/slices"
-	"github.com/anacrolix/missinggo/v2"
-	"github.com/anacrolix/missinggo/v2/conntrack"
 	"github.com/anacrolix/sync"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/dustin/go-humanize"
 	"github.com/google/btree"
 	"golang.org/x/time/rate"
 	"golang.org/x/xerrors"
+
+	"github.com/anacrolix/missinggo/v2"
+	"github.com/anacrolix/missinggo/v2/conntrack"
 
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/iplist"
@@ -58,7 +59,7 @@ type Client struct {
 	onClose        []func()
 	dialers        []Dialer
 	listeners      []Listener
-	dhtServers     []*dht.Server
+	dhtServers     []DhtServer
 	ipBlockList    iplist.Ranger
 	// Our BitTorrent protocol extension bytes, sent in our BT handshakes.
 	extensionBytes pp.PeerExtensionBits
@@ -101,12 +102,10 @@ func (cl *Client) LocalPort() (port int) {
 	return
 }
 
-func writeDhtServerStatus(w io.Writer, s *dht.Server) {
+func writeDhtServerStatus(w io.Writer, s DhtServer) {
 	dhtStats := s.Stats()
-	fmt.Fprintf(w, "\t# Nodes: %d (%d good, %d banned)\n", dhtStats.Nodes, dhtStats.GoodNodes, dhtStats.BadNodes)
-	fmt.Fprintf(w, "\tServer ID: %x\n", s.ID())
-	fmt.Fprintf(w, "\tAnnounces: %d\n", dhtStats.SuccessfulOutboundAnnouncePeerQueries)
-	fmt.Fprintf(w, "\tOutstanding transactions: %d\n", dhtStats.OutstandingTransactions)
+	fmt.Fprintf(w, " ID: %x\n", s.ID())
+	spew.Fdump(w, dhtStats)
 }
 
 // Writes out a human readable status of the client, such as for writing to a
@@ -120,7 +119,7 @@ func (cl *Client) WriteStatus(_w io.Writer) {
 	fmt.Fprintf(w, "Peer ID: %+q\n", cl.PeerID())
 	fmt.Fprintf(w, "Announce key: %x\n", cl.announceKey())
 	fmt.Fprintf(w, "Banned IPs: %d\n", len(cl.badPeerIPsLocked()))
-	cl.eachDhtServer(func(s *dht.Server) {
+	cl.eachDhtServer(func(s DhtServer) {
 		fmt.Fprintf(w, "%s DHT server at %s:\n", s.Addr().Network(), s.Addr().String())
 		writeDhtServerStatus(w, s)
 	})
@@ -147,7 +146,7 @@ func (cl *Client) WriteStatus(_w io.Writer) {
 	}
 }
 
-const debugLogValue = log.Debug
+var debugLogValue = log.Debug
 
 func (cl *Client) debugLogFilter(m log.Msg) bool {
 	if cl.config.Debug {
@@ -192,13 +191,14 @@ func NewClient(cfg *ClientConfig) (cl *Client, err error) {
 	cl.event.L = cl.locker()
 	storageImpl := cfg.DefaultStorage
 	if storageImpl == nil {
-		// We'd use mmap but HFS+ doesn't support sparse files.
-		storageImpl = storage.NewFile(cfg.DataDir)
+		// We'd use mmap by default but HFS+ doesn't support sparse files.
+		storageImplCloser := storage.NewFile(cfg.DataDir)
 		cl.onClose = append(cl.onClose, func() {
-			if err := storageImpl.Close(); err != nil {
+			if err := storageImplCloser.Close(); err != nil {
 				cl.logger.Printf("error closing default storage: %s", err)
 			}
 		})
+		storageImpl = storageImplCloser
 	}
 	cl.defaultStorage = storage.NewClient(storageImpl)
 	if cfg.IPBlocklist != nil {
@@ -237,17 +237,21 @@ func NewClient(cfg *ClientConfig) (cl *Client, err error) {
 	if !cfg.NoDHT {
 		for _, s := range sockets {
 			if pc, ok := s.(net.PacketConn); ok {
-				ds, err := cl.newDhtServer(pc)
+				ds, err := cl.newAnacrolixDhtServer(pc)
 				if err != nil {
 					panic(err)
 				}
-				cl.dhtServers = append(cl.dhtServers, ds)
+				cl.dhtServers = append(cl.dhtServers, anacrolixDhtServerWrapper{ds})
 				cl.onClose = append(cl.onClose, func() { ds.Close() })
 			}
 		}
 	}
 
 	return
+}
+
+func (cl *Client) AddDhtServer(d DhtServer) {
+	cl.dhtServers = append(cl.dhtServers, d)
 }
 
 // Adds a Dialer for outgoing connections. All Dialers are used when attempting to connect to a
@@ -300,7 +304,7 @@ func (cl *Client) listenNetworks() (ns []network) {
 	return
 }
 
-func (cl *Client) newDhtServer(conn net.PacketConn) (s *dht.Server, err error) {
+func (cl *Client) newAnacrolixDhtServer(conn net.PacketConn) (s *dht.Server, err error) {
 	cfg := dht.ServerConfig{
 		IPBlocklist:    cl.ipBlockList,
 		Conn:           conn,
@@ -311,10 +315,12 @@ func (cl *Client) newDhtServer(conn net.PacketConn) (s *dht.Server, err error) {
 			}
 			return cl.config.PublicIp4
 		}(),
-		StartingNodes:      cl.config.DhtStartingNodes,
+		StartingNodes:      cl.config.DhtStartingNodes(conn.LocalAddr().Network()),
 		ConnectionTracking: cl.config.ConnTracker,
 		OnQuery:            cl.config.DHTOnQuery,
-		Logger:             cl.logger.WithValues("dht", conn.LocalAddr().String()),
+		Logger: cl.logger.WithText(func(m log.Msg) string {
+			return fmt.Sprintf("dht server on %v: %s", conn.LocalAddr().String(), m.Text())
+		}),
 	}
 	s, err = dht.NewServer(&cfg)
 	if err == nil {
@@ -335,7 +341,7 @@ func (cl *Client) Closed() <-chan struct{} {
 	return cl.closed.C()
 }
 
-func (cl *Client) eachDhtServer(f func(*dht.Server)) {
+func (cl *Client) eachDhtServer(f func(DhtServer)) {
 	for _, ds := range cl.dhtServers {
 		f(ds)
 	}
@@ -461,7 +467,7 @@ func (cl *Client) incomingConnection(nc net.Conn) {
 		tc.SetLinger(0)
 	}
 	c := cl.newConnection(nc, false, nc.RemoteAddr(), nc.RemoteAddr().Network())
-	c.Discovery = peerSourceIncoming
+	c.Discovery = PeerSourceIncoming
 	cl.runReceivedConn(c)
 }
 
@@ -617,7 +623,7 @@ func (cl *Client) noLongerHalfOpen(t *Torrent, addr string) {
 
 // Performs initiator handshakes and returns a connection. Returns nil
 // *connection if no connection for valid reasons.
-func (cl *Client) handshakesConnection(ctx context.Context, nc net.Conn, t *Torrent, encryptHeader bool, remoteAddr net.Addr, network string) (c *connection, err error) {
+func (cl *Client) handshakesConnection(ctx context.Context, nc net.Conn, t *Torrent, encryptHeader bool, remoteAddr net.Addr, network string) (c *PeerConn, err error) {
 	c = cl.newConnection(nc, true, remoteAddr, network)
 	c.headerEncrypted = encryptHeader
 	ctx, cancel := context.WithTimeout(ctx, cl.config.HandshakesTimeout)
@@ -636,7 +642,7 @@ func (cl *Client) handshakesConnection(ctx context.Context, nc net.Conn, t *Torr
 
 // Returns nil connection and nil error if no connection could be established
 // for valid reasons.
-func (cl *Client) establishOutgoingConnEx(t *Torrent, addr net.Addr, obfuscatedHeader bool) (*connection, error) {
+func (cl *Client) establishOutgoingConnEx(t *Torrent, addr net.Addr, obfuscatedHeader bool) (*PeerConn, error) {
 	dialCtx, cancel := context.WithTimeout(context.Background(), func() time.Duration {
 		cl.rLock()
 		defer cl.rUnlock()
@@ -660,7 +666,7 @@ func (cl *Client) establishOutgoingConnEx(t *Torrent, addr net.Addr, obfuscatedH
 
 // Returns nil connection and nil error if no connection could be established
 // for valid reasons.
-func (cl *Client) establishOutgoingConn(t *Torrent, addr net.Addr) (c *connection, err error) {
+func (cl *Client) establishOutgoingConn(t *Torrent, addr net.Addr) (c *PeerConn, err error) {
 	torrent.Add("establish outgoing connection", 1)
 	obfuscatedHeaderFirst := cl.config.HeaderObfuscationPolicy.Preferred
 	c, err = cl.establishOutgoingConnEx(t, addr, obfuscatedHeaderFirst)
@@ -685,7 +691,7 @@ func (cl *Client) establishOutgoingConn(t *Torrent, addr net.Addr) (c *connectio
 
 // Called to dial out and run a connection. The addr we're given is already
 // considered half-open.
-func (cl *Client) outgoingConnection(t *Torrent, addr net.Addr, ps peerSource, trusted bool) {
+func (cl *Client) outgoingConnection(t *Torrent, addr net.Addr, ps PeerSource, trusted bool) {
 	cl.dialRateLimiter.Wait(context.Background())
 	c, err := cl.establishOutgoingConn(t, addr)
 	cl.lock()
@@ -699,7 +705,7 @@ func (cl *Client) outgoingConnection(t *Torrent, addr net.Addr, ps peerSource, t
 		}
 		return
 	}
-	defer c.Close()
+	defer c.close()
 	c.Discovery = ps
 	c.trusted = trusted
 	cl.runHandshookConn(c, t)
@@ -710,7 +716,7 @@ func (cl *Client) incomingPeerPort() int {
 	return cl.LocalPort()
 }
 
-func (cl *Client) initiateHandshakes(c *connection, t *Torrent) error {
+func (cl *Client) initiateHandshakes(c *PeerConn, t *Torrent) error {
 	if c.headerEncrypted {
 		var rw io.ReadWriter
 		var err error
@@ -763,7 +769,7 @@ func (cl *Client) forSkeys(f func([]byte) bool) {
 }
 
 // Do encryption and bittorrent handshakes as receiver.
-func (cl *Client) receiveHandshakes(c *connection) (t *Torrent, err error) {
+func (cl *Client) receiveHandshakes(c *PeerConn) (t *Torrent, err error) {
 	defer perf.ScopeTimerErr(&err)()
 	var rw io.ReadWriter
 	rw, c.headerEncrypted, c.cryptoMethod, err = handleEncryption(c.rw(), cl.forSkeys, cl.config.HeaderObfuscationPolicy, cl.config.CryptoSelector)
@@ -798,7 +804,7 @@ func (cl *Client) receiveHandshakes(c *connection) (t *Torrent, err error) {
 	return
 }
 
-func (cl *Client) connBtHandshake(c *connection, ih *metainfo.Hash) (ret metainfo.Hash, err error) {
+func (cl *Client) connBtHandshake(c *PeerConn, ih *metainfo.Hash) (ret metainfo.Hash, err error) {
 	res, err := pp.Handshake(c.rw(), ih, cl.peerID, cl.extensionBytes)
 	if err != nil {
 		return
@@ -810,7 +816,7 @@ func (cl *Client) connBtHandshake(c *connection, ih *metainfo.Hash) (ret metainf
 	return
 }
 
-func (cl *Client) runReceivedConn(c *connection) {
+func (cl *Client) runReceivedConn(c *PeerConn) {
 	err := c.conn.SetDeadline(time.Now().Add(cl.config.HandshakesTimeout))
 	if err != nil {
 		panic(err)
@@ -818,7 +824,7 @@ func (cl *Client) runReceivedConn(c *connection) {
 	t, err := cl.receiveHandshakes(c)
 	if err != nil {
 		log.Fmsg(
-			"error receiving handshakes: %s", err,
+			"error receiving handshakes on %v: %s", c, err,
 		).AddValue(
 			debugLogValue,
 		).Add(
@@ -844,7 +850,7 @@ func (cl *Client) runReceivedConn(c *connection) {
 	cl.runHandshookConn(c, t)
 }
 
-func (cl *Client) runHandshookConn(c *connection, t *Torrent) {
+func (cl *Client) runHandshookConn(c *PeerConn, t *Torrent) {
 	c.setTorrent(t)
 	if c.PeerID == cl.peerID {
 		if c.outgoing {
@@ -878,9 +884,9 @@ func (cl *Client) runHandshookConn(c *connection, t *Torrent) {
 }
 
 // See the order given in Transmission's tr_peerMsgsNew.
-func (cl *Client) sendInitialMessages(conn *connection, torrent *Torrent) {
+func (cl *Client) sendInitialMessages(conn *PeerConn, torrent *Torrent) {
 	if conn.PeerExtensionBytes.SupportsExtended() && cl.extensionBytes.SupportsExtended() {
-		conn.Post(pp.Message{
+		conn.post(pp.Message{
 			Type:       pp.Extended,
 			ExtendedID: pp.HandshakeExtendedID,
 			ExtendedPayload: func() []byte {
@@ -909,19 +915,19 @@ func (cl *Client) sendInitialMessages(conn *connection, torrent *Torrent) {
 	func() {
 		if conn.fastEnabled() {
 			if torrent.haveAllPieces() {
-				conn.Post(pp.Message{Type: pp.HaveAll})
+				conn.post(pp.Message{Type: pp.HaveAll})
 				conn.sentHaves.AddRange(0, bitmap.BitIndex(conn.t.NumPieces()))
 				return
 			} else if !torrent.haveAnyPieces() {
-				conn.Post(pp.Message{Type: pp.HaveNone})
+				conn.post(pp.Message{Type: pp.HaveNone})
 				conn.sentHaves.Clear()
 				return
 			}
 		}
-		conn.PostBitfield()
+		conn.postBitfield()
 	}()
 	if conn.PeerExtensionBytes.SupportsDHT() && cl.extensionBytes.SupportsDHT() && cl.haveDhtServer() {
-		conn.Post(pp.Message{
+		conn.post(pp.Message{
 			Type: pp.Port,
 			Port: cl.dhtPort(),
 		})
@@ -929,21 +935,21 @@ func (cl *Client) sendInitialMessages(conn *connection, torrent *Torrent) {
 }
 
 func (cl *Client) dhtPort() (ret uint16) {
-	cl.eachDhtServer(func(s *dht.Server) {
+	cl.eachDhtServer(func(s DhtServer) {
 		ret = uint16(missinggo.AddrPort(s.Addr()))
 	})
 	return
 }
 
 func (cl *Client) haveDhtServer() (ret bool) {
-	cl.eachDhtServer(func(_ *dht.Server) {
+	cl.eachDhtServer(func(_ DhtServer) {
 		ret = true
 	})
 	return
 }
 
 // Process incoming ut_metadata message.
-func (cl *Client) gotMetadataExtensionMsg(payload []byte, t *Torrent, c *connection) error {
+func (cl *Client) gotMetadataExtensionMsg(payload []byte, t *Torrent, c *PeerConn) error {
 	var d map[string]int
 	err := bencode.Unmarshal(payload, &d)
 	if _, ok := err.(bencode.ErrUnusedTrailingBytes); ok {
@@ -971,12 +977,12 @@ func (cl *Client) gotMetadataExtensionMsg(payload []byte, t *Torrent, c *connect
 		return t.maybeCompleteMetadata()
 	case pp.RequestMetadataExtensionMsgType:
 		if !t.haveMetadataPiece(piece) {
-			c.Post(t.newMetadataExtensionMessage(c, pp.RejectMetadataExtensionMsgType, d["piece"], nil))
+			c.post(t.newMetadataExtensionMessage(c, pp.RejectMetadataExtensionMsgType, d["piece"], nil))
 			return nil
 		}
 		start := (1 << 14) * piece
 		c.logger.Printf("sending metadata piece %d", piece)
-		c.Post(t.newMetadataExtensionMessage(c, pp.DataMetadataExtensionMsgType, piece, t.metadataBytes[start:start+t.metadataPieceSize(piece)]))
+		c.post(t.newMetadataExtensionMessage(c, pp.DataMetadataExtensionMsgType, piece, t.metadataBytes[start:start+t.metadataPieceSize(piece)]))
 		return nil
 	case pp.RejectMetadataExtensionMsgType:
 		return nil
@@ -1025,7 +1031,7 @@ func (cl *Client) newTorrent(ih metainfo.Hash, specStorage storage.ClientImpl) (
 				return bep40PriorityIgnoreError(cl.publicAddr(addrIpOrNil(p.Addr)), p.addr())
 			},
 		},
-		conns: make(map[*connection]struct{}, 2*cl.config.EstablishedConnsPerTorrent),
+		conns: make(map[*PeerConn]struct{}, 2*cl.config.EstablishedConnsPerTorrent),
 
 		halfOpen:          make(map[string]Peer),
 		pieceStateChanges: pubsub.NewPubSub(),
@@ -1038,6 +1044,7 @@ func (cl *Client) newTorrent(ih metainfo.Hash, specStorage storage.ClientImpl) (
 			L: cl.locker(),
 		},
 	}
+	t._pendingPieces.NewSet = priorityBitmapStableNewSet
 	t.requestStrategy = cl.config.DefaultRequestStrategy(t.requestStrategyCallbacks(), &cl._mu)
 	t.logger = cl.logger.WithValues(t).WithText(func(m log.Msg) string {
 		return fmt.Sprintf("%v: %s", t, m.Text())
@@ -1071,7 +1078,7 @@ func (cl *Client) AddTorrentInfoHashWithStorage(infoHash metainfo.Hash, specStor
 	new = true
 
 	t = cl.newTorrent(infoHash, specStorage)
-	cl.eachDhtServer(func(s *dht.Server) {
+	cl.eachDhtServer(func(s DhtServer) {
 		go t.dhtAnnouncer(s)
 	})
 	cl.torrents[infoHash] = t
@@ -1188,7 +1195,7 @@ func (cl *Client) AddTorrentFromFile(filename string) (T *Torrent, err error) {
 	return cl.AddTorrent(mi)
 }
 
-func (cl *Client) DhtServers() []*dht.Server {
+func (cl *Client) DhtServers() []DhtServer {
 	return cl.dhtServers
 }
 
@@ -1206,7 +1213,7 @@ func (cl *Client) AddDHTNodes(nodes []string) {
 				Port: hmp.Port,
 			},
 		}
-		cl.eachDhtServer(func(s *dht.Server) {
+		cl.eachDhtServer(func(s DhtServer) {
 			s.AddNode(ni)
 		})
 	}
@@ -1220,12 +1227,12 @@ func (cl *Client) banPeerIP(ip net.IP) {
 	cl.badPeerIPs[ip.String()] = struct{}{}
 }
 
-func (cl *Client) newConnection(nc net.Conn, outgoing bool, remoteAddr net.Addr, network string) (c *connection) {
-	c = &connection{
+func (cl *Client) newConnection(nc net.Conn, outgoing bool, remoteAddr net.Addr, network string) (c *PeerConn) {
+	c = &PeerConn{
 		conn:            nc,
 		outgoing:        outgoing,
-		Choked:          true,
-		PeerChoked:      true,
+		choking:         true,
+		peerChoking:     true,
 		PeerMaxRequests: 250,
 		writeBuffer:     new(bytes.Buffer),
 		remoteAddr:      remoteAddr,
@@ -1255,7 +1262,7 @@ func (cl *Client) onDHTAnnouncePeer(ih metainfo.Hash, ip net.IP, port int, portO
 	}
 	t.addPeers([]Peer{{
 		Addr:   ipPortAddr{ip, port},
-		Source: peerSourceDhtAnnouncePeer,
+		Source: PeerSourceDhtAnnouncePeer,
 	}})
 }
 
@@ -1392,22 +1399,10 @@ func (cl *Client) unlock() {
 	cl._mu.Unlock()
 }
 
-func (cl *Client) locker() sync.Locker {
-	return clientLocker{cl}
+func (cl *Client) locker() *lockWithDeferreds {
+	return &cl._mu
 }
 
 func (cl *Client) String() string {
 	return fmt.Sprintf("<%[1]T %[1]p>", cl)
-}
-
-type clientLocker struct {
-	*Client
-}
-
-func (cl clientLocker) Lock() {
-	cl.lock()
-}
-
-func (cl clientLocker) Unlock() {
-	cl.unlock()
 }

@@ -2,15 +2,16 @@ package storage
 
 import (
 	"encoding/binary"
+	"io"
 
 	"github.com/anacrolix/missinggo/x"
-	bolt "github.com/etcd-io/bbolt"
+	"go.etcd.io/bbolt"
 
 	"github.com/anacrolix/torrent/metainfo"
 )
 
 type boltDBPiece struct {
-	db  *bolt.DB
+	db  *bbolt.DB
 	p   metainfo.Piece
 	ih  metainfo.Hash
 	key [24]byte
@@ -43,18 +44,19 @@ func (me *boltDBPiece) MarkNotComplete() error {
 	return me.pc().Set(me.pk(), false)
 }
 func (me *boltDBPiece) ReadAt(b []byte, off int64) (n int, err error) {
-	err = me.db.View(func(tx *bolt.Tx) error {
+	err = me.db.View(func(tx *bbolt.Tx) error {
 		db := tx.Bucket(dataBucketKey)
 		if db == nil {
-			return nil
+			return io.EOF
 		}
 		ci := off / chunkSize
 		off %= chunkSize
 		for len(b) != 0 {
 			ck := me.chunkKey(int(ci))
 			_b := db.Get(ck[:])
+			// If the chunk is the wrong size, assume it's missing as we can't rely on the data.
 			if len(_b) != chunkSize {
-				break
+				return io.EOF
 			}
 			n1 := copy(b, _b[off:])
 			off = 0
@@ -74,7 +76,7 @@ func (me *boltDBPiece) chunkKey(index int) (ret [26]byte) {
 }
 
 func (me *boltDBPiece) WriteAt(b []byte, off int64) (n int, err error) {
-	err = me.db.Update(func(tx *bolt.Tx) error {
+	err = me.db.Update(func(tx *bbolt.Tx) error {
 		db, err := tx.CreateBucketIfNotExists(dataBucketKey)
 		if err != nil {
 			return err
