@@ -269,7 +269,7 @@ func (s *Snapshot) Start() error {
 			return errors.Wrapf(err, "Failed to create master bucket")
 		}
 	}
-	pieceBucket := s.awsBucket + "-" + t.InfoHash().HexString()[0:2]
+	pieceBucket := s.awsBucket
 	if s.awsBucketSpread {
 		pieceBucket += "-" + t.InfoHash().HexString()[0:2]
 	}
