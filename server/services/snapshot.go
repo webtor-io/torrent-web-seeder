@@ -258,21 +258,23 @@ func (s *Snapshot) Start() error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to fetch torrent")
 	}
-	_, err = cl.CreateBucket(&s3.CreateBucketInput{
-		Bucket: aws.String(s.awsBucket),
-	})
-	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			switch aerr.Code() {
-			case s3.ErrCodeBucketAlreadyExists:
-				log.WithError(err).Warn("Master bucket already exists")
-			case s3.ErrCodeBucketAlreadyOwnedByYou:
-				log.WithError(err).Warn("Master bucket already owned")
-			default:
+	if s.awsBucketSpread {
+		_, err = cl.CreateBucket(&s3.CreateBucketInput{
+			Bucket: aws.String(s.awsBucket),
+		})
+		if err != nil {
+			if aerr, ok := err.(awserr.Error); ok {
+				switch aerr.Code() {
+				case s3.ErrCodeBucketAlreadyExists:
+					log.WithError(err).Warn("Master bucket already exists")
+				case s3.ErrCodeBucketAlreadyOwnedByYou:
+					log.WithError(err).Warn("Master bucket already owned")
+				default:
+					return errors.Wrapf(err, "Failed to create master bucket")
+				}
+			} else {
 				return errors.Wrapf(err, "Failed to create master bucket")
 			}
-		} else {
-			return errors.Wrapf(err, "Failed to create master bucket")
 		}
 	}
 	pieceBucket := s.awsBucket
@@ -280,21 +282,23 @@ func (s *Snapshot) Start() error {
 		pieceBucket += "-" + t.InfoHash().HexString()[0:2]
 	}
 
-	_, err = cl.CreateBucket(&s3.CreateBucketInput{
-		Bucket: aws.String(pieceBucket),
-	})
-	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			switch aerr.Code() {
-			case s3.ErrCodeBucketAlreadyExists:
-				log.WithError(err).Warn("Piece bucket already exists")
-			case s3.ErrCodeBucketAlreadyOwnedByYou:
-				log.WithError(err).Warn("Piece bucket already owned")
-			default:
+	if s.awsBucketSpread {
+		_, err = cl.CreateBucket(&s3.CreateBucketInput{
+			Bucket: aws.String(pieceBucket),
+		})
+		if err != nil {
+			if aerr, ok := err.(awserr.Error); ok {
+				switch aerr.Code() {
+				case s3.ErrCodeBucketAlreadyExists:
+					log.WithError(err).Warn("Piece bucket already exists")
+				case s3.ErrCodeBucketAlreadyOwnedByYou:
+					log.WithError(err).Warn("Piece bucket already owned")
+				default:
+					return errors.Wrapf(err, "Failed to create piece bucket")
+				}
+			} else {
 				return errors.Wrapf(err, "Failed to create piece bucket")
 			}
-		} else {
-			return errors.Wrapf(err, "Failed to create piece bucket")
 		}
 	}
 	cp, err := s.fetchCompletedPieces(cl, t)
