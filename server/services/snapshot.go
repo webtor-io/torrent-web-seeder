@@ -27,6 +27,7 @@ type Snapshot struct {
 	awsSecretAccessKey string
 	awsBucket          string
 	awsBucketSpread    bool
+	awsNoSSL           bool
 	awsEndpoint        string
 	awsRegion          string
 	awsSession         *session.Session
@@ -73,6 +74,7 @@ const (
 	AWS_SECRET_ACCESS_KEY = "aws-secret-access-key"
 	AWS_BUCKET            = "aws-bucket"
 	AWS_BUCKET_SPREAD     = "aws-bucket-spread"
+	AWS_NO_SSL            = "aws-no-ssl"
 	AWS_ENDPOINT          = "aws-endpoint"
 	AWS_REGION            = "aws-region"
 	AWS_CONCURRENCY       = "aws-concurrency"
@@ -87,6 +89,10 @@ func RegisterSnapshotFlags(c *cli.App) {
 	c.Flags = append(c.Flags, cli.BoolFlag{
 		Name:   AWS_BUCKET_SPREAD,
 		EnvVar: "AWS_BUCKET_SPREAD",
+	})
+	c.Flags = append(c.Flags, cli.BoolFlag{
+		Name:   AWS_NO_SSL,
+		EnvVar: "AWS_NO_SSL",
 	})
 	c.Flags = append(c.Flags, cli.IntFlag{
 		Name:   AWS_CONCURRENCY,
@@ -157,7 +163,7 @@ func NewSnapshot(c *cli.Context, t *Torrent) (*Snapshot, error) {
 	}
 	return &Snapshot{awsAccessKeyID: c.String(AWS_ACCESS_KEY_ID), awsSecretAccessKey: c.String(AWS_SECRET_ACCESS_KEY),
 		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
-		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), start: false}, nil
+		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), awsNoSSL: c.Bool(AWS_NO_SSL), start: false}, nil
 }
 
 func (s *Snapshot) client() *s3.S3 {
@@ -173,10 +179,10 @@ func (s *Snapshot) session() *session.Session {
 		return s.awsSession
 	}
 	c := &aws.Config{
-		Credentials: credentials.NewStaticCredentials(s.awsAccessKeyID, s.awsSecretAccessKey, ""),
-		Endpoint:    aws.String(s.awsEndpoint),
-		Region:      aws.String(s.awsRegion),
-		// DisableSSL:       aws.Bool(true),
+		Credentials:      credentials.NewStaticCredentials(s.awsAccessKeyID, s.awsSecretAccessKey, ""),
+		Endpoint:         aws.String(s.awsEndpoint),
+		Region:           aws.String(s.awsRegion),
+		DisableSSL:       aws.Bool(s.awsNoSSL),
 		S3ForcePathStyle: aws.Bool(true),
 	}
 	s.awsSession = session.New(c)
