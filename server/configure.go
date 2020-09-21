@@ -37,6 +37,12 @@ func run(c *cli.Context) error {
 	// Setting Torrent
 	torrent := s.NewTorrent(torrentClient, metainfo)
 
+	// Setting FullDownload
+	fullDownload := s.NewFullDownload(c, torrent, torrentClient)
+	if fullDownload != nil {
+		defer fullDownload.Close()
+	}
+
 	// Setting Snapshot
 	snapshot, err := s.NewSnapshot(c, torrent)
 	if err != nil {
@@ -63,7 +69,7 @@ func run(c *cli.Context) error {
 	defer probe.Close()
 
 	// Setting Serve
-	serve := s.NewServe(web, stat, probe, torrent, snapshot)
+	serve := s.NewServe(web, stat, probe, torrent, snapshot, fullDownload)
 
 	// And SERVE!
 	err = serve.Serve()

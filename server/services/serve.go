@@ -18,10 +18,11 @@ type Serve struct {
 	pr *cs.Probe
 	t  *Torrent
 	ss *Snapshot
+	fd *FullDownload
 }
 
-func NewServe(w *Web, st *Stat, pr *cs.Probe, t *Torrent, ss *Snapshot) *Serve {
-	return &Serve{w: w, st: st, pr: pr, t: t, ss: ss}
+func NewServe(w *Web, st *Stat, pr *cs.Probe, t *Torrent, ss *Snapshot, fd *FullDownload) *Serve {
+	return &Serve{w: w, st: st, pr: pr, t: t, ss: ss, fd: fd}
 }
 
 func (s *Serve) Serve() error {
@@ -31,6 +32,7 @@ func (s *Serve) Serve() error {
 	statError := make(chan error, 1)
 	torrentError := make(chan error, 1)
 	snapshotError := make(chan error, 1)
+	fullDownloadError := make(chan error, 1)
 
 	go func() {
 		err := s.w.Serve()
@@ -54,9 +56,12 @@ func (s *Serve) Serve() error {
 	}()
 	if s.ss != nil {
 		go func() {
-			err := s.ss.Start()
+			snapshotError <- s.ss.Start()
+		}()
+		go func() {
+			err := s.fd.Start()
 			if err != nil {
-				snapshotError <- err
+				fullDownloadError <- err
 			}
 		}()
 	}
@@ -80,7 +85,12 @@ func (s *Serve) Serve() error {
 	case err := <-torrentError:
 		return errors.Wrap(err, "Failed to fetch torrent")
 	case err := <-snapshotError:
-		return errors.Wrap(err, "Got snapshot error")
+		if err != nil {
+			return errors.Wrap(err, "Got snapshot error")
+		}
+		log.Info("All pieces uploaded")
+	case err := <-fullDownloadError:
+		return errors.Wrap(err, "Got full download error")
 	}
 	return nil
 }

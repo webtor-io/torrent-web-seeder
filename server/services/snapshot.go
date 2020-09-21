@@ -53,6 +53,10 @@ func (cp CompletedPieces) Add(p *torrent.Piece) {
 	map[[20]byte]bool(cp)[p.Info().Hash()] = true
 }
 
+func (cp CompletedPieces) Len() int {
+	return len(map[[20]byte]bool(cp))
+}
+
 func (cp CompletedPieces) FromBytes(data []byte) {
 	for _, p := range split(data, 20) {
 		var k [20]byte
@@ -190,10 +194,11 @@ func (s *Snapshot) session() *session.Session {
 }
 
 func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*CompletedPieces, error) {
+	key := "completed_pieces/" + t.InfoHash().HexString()
 	st := CompletedPieces{}
 	r, err := cl.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.awsBucket),
-		Key:    aws.String(t.InfoHash().HexString() + "/completed_pieces"),
+		Key:    aws.String(key),
 	})
 	if err != nil {
 		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
@@ -204,15 +209,18 @@ func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*Complet
 	defer r.Body.Close()
 	data, err := ioutil.ReadAll(r.Body)
 	st.FromBytes(data)
+	log.Infof("Fetch completed pieces key=%v len=%v", key, st.Len())
 	return &st, nil
 }
 
 func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
+	timestamp := fmt.Sprintf("%v", time.Now().Unix())
 	key := "touch/" + t.InfoHash().HexString()
+	log.Infof("Touch torrent path=%v timestamp=%v", key, timestamp)
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(s.awsBucket),
 		Key:    aws.String(key),
-		Body:   bytes.NewReader([]byte(fmt.Sprintf("%v", time.Now().Unix()))),
+		Body:   bytes.NewReader([]byte(timestamp)),
 	})
 	if err != nil {
 		return errors.Wrapf(err, "Failed to touch torrent key=%v", key)
@@ -221,27 +229,41 @@ func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
 }
 
 func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *CompletedPieces) error {
+	key := "completed_pieces/" + t.InfoHash().HexString()
+	log.Infof("Store completed pieces bucket=%v key=%v len=%v", s.awsBucket, key, st.Len())
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(s.awsBucket),
-		Key:    aws.String("completed_pieces/" + t.InfoHash().HexString()),
+		Key:    aws.String(key),
 		Body:   bytes.NewReader(st.ToBytes()),
 	})
 	if err != nil {
 		return errors.Wrap(err, "Failed to store completed pieces")
 	}
+	if st.Len() == t.NumPieces() {
+		key := "done/" + t.InfoHash().HexString()
+		log.Infof("Store done marker bucket=%v key=%v", s.awsBucket, key)
+		_, err := cl.PutObject(&s3.PutObjectInput{
+			Bucket: aws.String(s.awsBucket),
+			Key:    aws.String(key),
+			Body:   bytes.NewReader([]byte("")),
+		})
+		if err != nil {
+			return errors.Wrap(err, "Failed to store done marker")
+		}
+	}
 	return nil
 }
 
 func (s *Snapshot) storeTorrent(cl *s3.S3, t *torrent.Torrent) error {
-	path := "torrents/" + t.InfoHash().HexString()
-	log.Infof("Store torrent path=%v", path)
+	key := "torrents/" + t.InfoHash().HexString()
+	log.Infof("Store torrent bucket=%v key=%v", s.awsBucket, key)
 	data, err := bencode.Marshal(t.Metainfo())
 	if err != nil {
-		return errors.Wrap(err, "Failed to becnode torrent")
+		return errors.Wrap(err, "Failed to bencode torrent")
 	}
 	_, err = cl.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(s.awsBucket),
-		Key:    aws.String(path),
+		Key:    aws.String(key),
 		Body:   bytes.NewReader(data),
 	})
 	if err != nil {
@@ -337,6 +359,10 @@ func (s *Snapshot) Start() error {
 			for _, p := range np {
 				ch <- p
 			}
+			if cp.Len() == t.NumPieces() {
+				close(ch)
+				break
+			}
 		}
 	}()
 	ticker2 := time.NewTicker(30 * time.Second)
@@ -376,10 +402,11 @@ func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPiece
 					logger.WithError(err).Errorf("Failed to read piece index=%v", p.Info().Index())
 					continue
 				}
+				key := t.InfoHash().HexString() + "/" + p.Info().Hash().HexString()
 
 				_, err = cl.PutObject(&s3.PutObjectInput{
 					Bucket: aws.String(pb),
-					Key:    aws.String(t.InfoHash().HexString() + "/" + p.Info().Hash().HexString()),
+					Key:    aws.String(key),
 					Body:   bytes.NewReader(b),
 				})
 
@@ -392,7 +419,7 @@ func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPiece
 				cp.Add(p)
 				s.mux.Unlock()
 
-				logger.Infof("Stored piece to S3 index=%v", p.Info().Index())
+				logger.Infof("Stored piece to S3 bucket=%v key=%v index=%v", pb, key, p.Info().Index())
 			}
 			wg.Done()
 		}()
@@ -407,7 +434,7 @@ func (s *Snapshot) Close() {
 
 		select {
 		case <-s.stopCh:
-		case <-time.After(1 * time.Minute):
+		case <-time.After(10 * time.Minute):
 		}
 
 	}
