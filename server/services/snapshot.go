@@ -35,6 +35,7 @@ type Snapshot struct {
 	awsConcurrency     int
 	stop               bool
 	start              bool
+	done               bool
 	stopCh             chan (bool)
 	err                error
 	t                  *Torrent
@@ -167,7 +168,7 @@ func NewSnapshot(c *cli.Context, t *Torrent) (*Snapshot, error) {
 	}
 	return &Snapshot{awsAccessKeyID: c.String(AWS_ACCESS_KEY_ID), awsSecretAccessKey: c.String(AWS_SECRET_ACCESS_KEY),
 		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
-		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), awsNoSSL: c.Bool(AWS_NO_SSL), start: false}, nil
+		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), awsNoSSL: c.Bool(AWS_NO_SSL), start: false, done: false}, nil
 }
 
 func (s *Snapshot) client() *s3.S3 {
@@ -342,7 +343,7 @@ func (s *Snapshot) Start() error {
 	// errCh := make(chan error)
 	go func() {
 		for range ticker.C {
-			if s.stop {
+			if s.stop && !s.done {
 				close(ch)
 				break
 			}
@@ -362,6 +363,12 @@ func (s *Snapshot) Start() error {
 			if cp.Len() == t.NumPieces() {
 				close(ch)
 				break
+			}
+			threshold := 0.5
+			if s.done == false && float64(cp.Len())/float64(t.NumPieces()) > threshold {
+				s.done = true
+				log.Infof("Starting full download at %v%%", threshold*100)
+				t.DownloadAll()
 			}
 		}
 	}()
@@ -434,7 +441,7 @@ func (s *Snapshot) Close() {
 
 		select {
 		case <-s.stopCh:
-		case <-time.After(10 * time.Minute):
+		case <-time.After(30 * time.Minute):
 		}
 
 	}
