@@ -54,7 +54,10 @@ func (s *Serve) Serve() error {
 	}()
 	if s.ss != nil {
 		go func() {
-			snapshotError <- s.ss.Start()
+			err := s.ss.Start()
+			if err != nil {
+				snapshotError <- err
+			}
 		}()
 	}
 	expire, err := s.w.Expire()
@@ -77,10 +80,7 @@ func (s *Serve) Serve() error {
 	case err := <-torrentError:
 		return errors.Wrap(err, "Failed to fetch torrent")
 	case err := <-snapshotError:
-		if err != nil {
-			return errors.Wrap(err, "Got snapshot error")
-		}
-		log.Info("All pieces uploaded")
+		return errors.Wrap(err, "Got snapshot error")
 	}
 	return nil
 }
