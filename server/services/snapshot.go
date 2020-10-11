@@ -291,7 +291,7 @@ func (s *Snapshot) storeTorrent(cl *s3.S3, t *torrent.Torrent) error {
 }
 
 func (s *Snapshot) Start() error {
-	log.Info("Starting snapshot")
+	log.Info("Snapshot inited")
 	s.stopCh = make(chan (bool))
 	cl := s.client()
 	t, err := s.t.Get()
@@ -369,7 +369,14 @@ func (s *Snapshot) Start() error {
 				close(ch)
 				break
 			}
-			downloaded = float64(cp.Len()) / float64(t.NumPieces())
+			completedNum := 0
+			for i := 0; i < t.NumPieces(); i++ {
+				ps := t.PieceState(i)
+				if ps.Complete {
+					completedNum++
+				}
+			}
+			downloaded = float64(completedNum) / float64(t.NumPieces())
 			if downloaded >= startThreshold {
 				if !started {
 					started = true
