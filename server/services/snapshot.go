@@ -372,7 +372,8 @@ func (s *Snapshot) Start() error {
 			completedNum := 0
 			for i := 0; i < t.NumPieces(); i++ {
 				ps := t.PieceState(i)
-				if ps.Complete {
+				p := t.Piece(i)
+				if cp.Has(p) || (!cp.Has(p) && ps.Complete) {
 					completedNum++
 				}
 			}
