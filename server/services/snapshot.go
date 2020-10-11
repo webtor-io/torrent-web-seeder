@@ -358,7 +358,7 @@ func (s *Snapshot) Start() error {
 	defer ticker.Stop()
 	ch := make(chan *torrent.Piece)
 	// errCh := make(chan error)
-	var downloaded float64
+	var completedRatio float64
 	fullDownloadThreshold := 0.75
 	startThreshold := 0.5
 	fullDownloadStarted := false
@@ -376,8 +376,8 @@ func (s *Snapshot) Start() error {
 					completedNum++
 				}
 			}
-			downloaded = float64(completedNum) / float64(t.NumPieces())
-			if downloaded >= startThreshold {
+			completedRatio = float64(completedNum) / float64(t.NumPieces())
+			if completedRatio >= startThreshold {
 				if !started {
 					started = true
 					log.Infof("Starting making snapshot at %v%%", startThreshold*100)
@@ -396,7 +396,7 @@ func (s *Snapshot) Start() error {
 					ch <- p
 				}
 			}
-			if fullDownloadStarted == false && downloaded >= fullDownloadThreshold {
+			if fullDownloadStarted == false && completedRatio >= fullDownloadThreshold {
 				fullDownloadStarted = true
 				log.Infof("Starting full download at %v%%", fullDownloadThreshold*100)
 				t.DownloadAll()
