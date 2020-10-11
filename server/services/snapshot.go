@@ -23,23 +23,24 @@ import (
 )
 
 type Snapshot struct {
-	awsAccessKeyID     string
-	awsSecretAccessKey string
-	awsBucket          string
-	awsBucketSpread    bool
-	awsNoSSL           bool
-	awsEndpoint        string
-	awsRegion          string
-	awsSession         *session.Session
-	awsClient          *s3.S3
-	awsConcurrency     int
-	stop               bool
-	start              bool
-	done               bool
-	stopCh             chan (bool)
-	err                error
-	t                  *Torrent
-	mux                sync.Mutex
+	awsAccessKeyID             string
+	awsSecretAccessKey         string
+	awsBucket                  string
+	awsBucketSpread            bool
+	awsNoSSL                   bool
+	awsEndpoint                string
+	awsRegion                  string
+	awsSession                 *session.Session
+	awsClient                  *s3.S3
+	awsConcurrency             int
+	stop                       bool
+	start                      bool
+	stopCh                     chan (bool)
+	err                        error
+	t                          *Torrent
+	mux                        sync.Mutex
+	startThreshold             float64
+	startFullDownloadThreshold float64
 }
 
 type CompletedPieces map[[20]byte]bool
@@ -75,21 +76,33 @@ func (cp CompletedPieces) ToBytes() []byte {
 }
 
 const (
-	AWS_ACCESS_KEY_ID     = "aws-access-key-id"
-	AWS_SECRET_ACCESS_KEY = "aws-secret-access-key"
-	AWS_BUCKET            = "aws-bucket"
-	AWS_BUCKET_SPREAD     = "aws-bucket-spread"
-	AWS_NO_SSL            = "aws-no-ssl"
-	AWS_ENDPOINT          = "aws-endpoint"
-	AWS_REGION            = "aws-region"
-	AWS_CONCURRENCY       = "aws-concurrency"
-	USE_SNAPSHOT          = "use-snapshot"
+	AWS_ACCESS_KEY_ID                      = "aws-access-key-id"
+	AWS_SECRET_ACCESS_KEY                  = "aws-secret-access-key"
+	AWS_BUCKET                             = "aws-bucket"
+	AWS_BUCKET_SPREAD                      = "aws-bucket-spread"
+	AWS_NO_SSL                             = "aws-no-ssl"
+	AWS_ENDPOINT                           = "aws-endpoint"
+	AWS_REGION                             = "aws-region"
+	AWS_CONCURRENCY                        = "aws-concurrency"
+	USE_SNAPSHOT                           = "use-snapshot"
+	SNAPSHOT_START_THRESHOLD               = "snapshot-start-threshold"
+	SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD = "snapshot-start-full-download-threshold"
 )
 
 func RegisterSnapshotFlags(c *cli.App) {
 	c.Flags = append(c.Flags, cli.BoolFlag{
 		Name:   USE_SNAPSHOT,
 		EnvVar: "USE_SNAPSHOT",
+	})
+	c.Flags = append(c.Flags, cli.Float64Flag{
+		Name:   SNAPSHOT_START_THRESHOLD,
+		Value:  0.5,
+		EnvVar: "SNAPSHOT_START_THRESHOLD",
+	})
+	c.Flags = append(c.Flags, cli.Float64Flag{
+		Name:   SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD,
+		Value:  0.75,
+		EnvVar: "SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD",
 	})
 	c.Flags = append(c.Flags, cli.BoolFlag{
 		Name:   AWS_BUCKET_SPREAD,
@@ -168,7 +181,8 @@ func NewSnapshot(c *cli.Context, t *Torrent) (*Snapshot, error) {
 	}
 	return &Snapshot{awsAccessKeyID: c.String(AWS_ACCESS_KEY_ID), awsSecretAccessKey: c.String(AWS_SECRET_ACCESS_KEY),
 		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
-		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), awsNoSSL: c.Bool(AWS_NO_SSL), start: false, done: false}, nil
+		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), awsNoSSL: c.Bool(AWS_NO_SSL), start: false,
+		startThreshold: c.Float64(SNAPSHOT_START_THRESHOLD), startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD)}, nil
 }
 
 func (s *Snapshot) client() *s3.S3 {
@@ -230,6 +244,9 @@ func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
 }
 
 func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *CompletedPieces) error {
+	if st.Len() == 0 {
+		return nil
+	}
 	key := "completed_pieces/" + t.InfoHash().HexString()
 	log.Infof("Store completed pieces bucket=%v key=%v len=%v", s.awsBucket, key, st.Len())
 	_, err := cl.PutObject(&s3.PutObjectInput{
@@ -341,34 +358,45 @@ func (s *Snapshot) Start() error {
 	defer ticker.Stop()
 	ch := make(chan *torrent.Piece)
 	// errCh := make(chan error)
+	var downloaded float64
+	fullDownloadThreshold := 0.75
+	startThreshold := 0.5
+	fullDownloadStarted := false
+	started := false
 	go func() {
 		for range ticker.C {
-			if s.stop && !s.done {
+			if s.stop && !fullDownloadStarted {
 				close(ch)
 				break
 			}
-			np := []*torrent.Piece{}
-			s.mux.Lock()
-			for i := 0; i < t.NumPieces(); i++ {
-				ps := t.PieceState(i)
-				p := t.Piece(i)
-				if p != nil && !cp.Has(p) && ps.Complete {
-					np = append(np, p)
+			downloaded = float64(cp.Len()) / float64(t.NumPieces())
+			if downloaded >= startThreshold {
+				if !started {
+					started = true
+					log.Infof("Starting making snapshot at %v%%", startThreshold*100)
+				}
+				np := []*torrent.Piece{}
+				s.mux.Lock()
+				for i := 0; i < t.NumPieces(); i++ {
+					ps := t.PieceState(i)
+					p := t.Piece(i)
+					if p != nil && !cp.Has(p) && ps.Complete {
+						np = append(np, p)
+					}
+				}
+				s.mux.Unlock()
+				for _, p := range np {
+					ch <- p
 				}
 			}
-			s.mux.Unlock()
-			for _, p := range np {
-				ch <- p
+			if fullDownloadStarted == false && downloaded >= fullDownloadThreshold {
+				fullDownloadStarted = true
+				log.Infof("Starting full download at %v%%", fullDownloadThreshold*100)
+				t.DownloadAll()
 			}
 			if cp.Len() == t.NumPieces() {
 				close(ch)
 				break
-			}
-			threshold := 0.5
-			if s.done == false && float64(cp.Len())/float64(t.NumPieces()) > threshold {
-				s.done = true
-				log.Infof("Starting full download at %v%%", threshold*100)
-				t.DownloadAll()
 			}
 		}
 	}()
