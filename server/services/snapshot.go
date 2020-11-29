@@ -219,26 +219,42 @@ func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*Complet
 		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
 			return &st, nil
 		}
-		return nil, errors.Wrap(err, "Failed to fetch completed pieces")
+		return nil, errors.Wrapf(err, "Failed to fetch completed pieces bucket=%v key=%v", s.awsBucket, key)
 	}
 	defer r.Body.Close()
 	data, err := ioutil.ReadAll(r.Body)
 	st.FromBytes(data)
-	log.Infof("Fetch completed pieces key=%v len=%v", key, st.Len())
+	log.Infof("Fetch completed pieces bucket=%v key=%v len=%v", s.awsBucket, key, st.Len())
 	return &st, nil
+}
+
+func (s *Snapshot) hasTouch(cl *s3.S3, t *torrent.Torrent) (bool, error) {
+	key := "touch/" + t.InfoHash().HexString()
+	log.Infof("Check touch bucket=%v key=%v", s.awsBucket, key)
+	_, err := cl.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.awsBucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+			return false, nil
+		}
+		return false, errors.Wrapf(err, "Failed to check touch bucket=%v key=%v", s.awsBucket, key)
+	}
+	return true, nil
 }
 
 func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
 	timestamp := fmt.Sprintf("%v", time.Now().Unix())
 	key := "touch/" + t.InfoHash().HexString()
-	log.Infof("Touch torrent path=%v timestamp=%v", key, timestamp)
+	log.Infof("Touch torrent bucket=%v key=%v timestamp=%v", s.awsBucket, key, timestamp)
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(s.awsBucket),
 		Key:    aws.String(key),
 		Body:   bytes.NewReader([]byte(timestamp)),
 	})
 	if err != nil {
-		return errors.Wrapf(err, "Failed to touch torrent key=%v", key)
+		return errors.Wrapf(err, "Failed to touch torrent bucket=%v key=%v", s.awsBucket, key)
 	}
 	return nil
 }
@@ -266,7 +282,7 @@ func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *Compl
 			Body:   bytes.NewReader([]byte("")),
 		})
 		if err != nil {
-			return errors.Wrap(err, "Failed to store done marker")
+			return errors.Wrapf(err, "Failed to store done marker bucket=%v key=%v", s.awsBucket, key)
 		}
 	}
 	return nil
@@ -285,7 +301,7 @@ func (s *Snapshot) storeTorrent(cl *s3.S3, t *torrent.Torrent) error {
 		Body:   bytes.NewReader(data),
 	})
 	if err != nil {
-		return errors.Wrap(err, "Failed to store torrent")
+		return errors.Wrapf(err, "Failed to store torrent bucket=%v key=%v", s.awsBucket, key)
 	}
 	return nil
 }
@@ -341,6 +357,18 @@ func (s *Snapshot) Start() error {
 			}
 		}
 	}
+	ht, err := s.hasTouch(cl, t)
+	if err != nil {
+		return errors.Wrap(err, "Failed to check touch")
+	}
+	err = s.touch(cl, t)
+	if err != nil {
+		return errors.Wrap(err, "Failed to touch torrent")
+	}
+	if !ht {
+		log.Infof("No touch found")
+		return nil
+	}
 	cp, err := s.fetchCompletedPieces(cl, t)
 	if err != nil {
 		return errors.Wrap(err, "Failed to fetch completed pieces")
@@ -349,18 +377,12 @@ func (s *Snapshot) Start() error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to store torrent")
 	}
-	err = s.touch(cl, t)
-	if err != nil {
-		return errors.Wrap(err, "Failed to touch torrent")
-	}
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	ch := make(chan *torrent.Piece)
 	// errCh := make(chan error)
 	var completedRatio float64
-	fullDownloadThreshold := 0.75
-	startThreshold := 0.5
 	fullDownloadStarted := false
 	started := false
 	go func() {
@@ -378,10 +400,10 @@ func (s *Snapshot) Start() error {
 				}
 			}
 			completedRatio = float64(completedNum) / float64(t.NumPieces())
-			if completedRatio >= startThreshold {
+			if completedRatio >= s.startThreshold {
 				if !started {
 					started = true
-					log.Infof("Starting making snapshot at %v%%", startThreshold*100)
+					log.Infof("Starting making snapshot at %v%%", s.startThreshold*100)
 				}
 				np := []*torrent.Piece{}
 				s.mux.Lock()
@@ -397,9 +419,9 @@ func (s *Snapshot) Start() error {
 					ch <- p
 				}
 			}
-			if fullDownloadStarted == false && completedRatio >= fullDownloadThreshold {
+			if fullDownloadStarted == false && completedRatio >= s.startFullDownloadThreshold {
 				fullDownloadStarted = true
-				log.Infof("Starting full download at %v%%", fullDownloadThreshold*100)
+				log.Infof("Starting full download at %v%%", s.startFullDownloadThreshold*100)
 				t.DownloadAll()
 			}
 			if cp.Len() == t.NumPieces() {
