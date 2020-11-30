@@ -41,6 +41,7 @@ type Snapshot struct {
 	mux                        sync.Mutex
 	startThreshold             float64
 	startFullDownloadThreshold float64
+	torrentSizeLimit           int64
 }
 
 type CompletedPieces map[[20]byte]bool
@@ -87,6 +88,7 @@ const (
 	USE_SNAPSHOT                           = "use-snapshot"
 	SNAPSHOT_START_THRESHOLD               = "snapshot-start-threshold"
 	SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD = "snapshot-start-full-download-threshold"
+	SNAPSHOT_TORRENT_SIZE_LIMIT            = "snapshot-torrent-size-limit"
 )
 
 func RegisterSnapshotFlags(c *cli.App) {
@@ -104,8 +106,14 @@ func RegisterSnapshotFlags(c *cli.App) {
 		Value:  0.75,
 		EnvVar: "SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD",
 	})
-	c.Flags = append(c.Flags, cli.BoolFlag{
+	c.Flags = append(c.Flags, cli.Float64Flag{
+		Name:   SNAPSHOT_TORRENT_SIZE_LIMIT,
+		Value:  0.75,
+		EnvVar: "SNAPSHOT_TORRENT_SIZE_LIMIT",
+	})
+	c.Flags = append(c.Flags, cli.Int64Flag{
 		Name:   AWS_BUCKET_SPREAD,
+		Value:  10,
 		EnvVar: "AWS_BUCKET_SPREAD",
 	})
 	c.Flags = append(c.Flags, cli.BoolFlag{
@@ -182,7 +190,9 @@ func NewSnapshot(c *cli.Context, t *Torrent) (*Snapshot, error) {
 	return &Snapshot{awsAccessKeyID: c.String(AWS_ACCESS_KEY_ID), awsSecretAccessKey: c.String(AWS_SECRET_ACCESS_KEY),
 		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
 		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), awsNoSSL: c.Bool(AWS_NO_SSL), start: false,
-		startThreshold: c.Float64(SNAPSHOT_START_THRESHOLD), startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD)}, nil
+		startThreshold: c.Float64(SNAPSHOT_START_THRESHOLD), startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD),
+		torrentSizeLimit: c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT),
+	}, nil
 }
 
 func (s *Snapshot) client() *s3.S3 {
@@ -357,6 +367,10 @@ func (s *Snapshot) Start() error {
 			}
 		}
 	}
+	if t.Length()/1024/1024/1024 > s.torrentSizeLimit {
+		log.Infof("Do not cache large torrent")
+		return nil
+	}
 	ht, err := s.hasTouch(cl, t)
 	if err != nil {
 		return errors.Wrap(err, "Failed to check touch")
@@ -366,7 +380,7 @@ func (s *Snapshot) Start() error {
 		return errors.Wrap(err, "Failed to touch torrent")
 	}
 	if !ht {
-		log.Infof("No touch found")
+		log.Infof("Do not cache torrent as first time")
 		return nil
 	}
 	cp, err := s.fetchCompletedPieces(cl, t)
