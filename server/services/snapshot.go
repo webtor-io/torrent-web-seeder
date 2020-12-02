@@ -89,7 +89,7 @@ const (
 	AWS_CONCURRENCY                        = "aws-concurrency"
 	USE_SNAPSHOT                           = "use-snapshot"
 	SNAPSHOT_START_THRESHOLD               = "snapshot-start-threshold"
-	SNAPSHOT_DOWNLOAD_RATIO                = "snapshot-donwload-ratio"
+	SNAPSHOT_DOWNLOAD_RATIO                = "snapshot-download-ratio"
 	SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD = "snapshot-start-full-download-threshold"
 	SNAPSHOT_TORRENT_SIZE_LIMIT            = "snapshot-torrent-size-limit"
 	DOWNLOADED_SIZE                        = "downloaded_size"
