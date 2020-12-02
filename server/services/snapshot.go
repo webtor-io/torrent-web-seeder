@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"strconv"
 	"sync"
 	"time"
 
@@ -42,6 +43,7 @@ type Snapshot struct {
 	startThreshold             float64
 	startFullDownloadThreshold float64
 	torrentSizeLimit           int64
+	downloadRatio              float64
 }
 
 type CompletedPieces map[[20]byte]bool
@@ -87,8 +89,12 @@ const (
 	AWS_CONCURRENCY                        = "aws-concurrency"
 	USE_SNAPSHOT                           = "use-snapshot"
 	SNAPSHOT_START_THRESHOLD               = "snapshot-start-threshold"
+	SNAPSHOT_DOWNLOAD_RATIO                = "snapshot-donwload-ratio"
 	SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD = "snapshot-start-full-download-threshold"
 	SNAPSHOT_TORRENT_SIZE_LIMIT            = "snapshot-torrent-size-limit"
+	DOWNLOADED_SIZE                        = "downloaded_size"
+	TOUCH                                  = "touch"
+	COMPLETED_PIECES                       = "completed_pieces"
 )
 
 func RegisterSnapshotFlags(c *cli.App) {
@@ -102,18 +108,22 @@ func RegisterSnapshotFlags(c *cli.App) {
 		EnvVar: "SNAPSHOT_START_THRESHOLD",
 	})
 	c.Flags = append(c.Flags, cli.Float64Flag{
+		Name:   SNAPSHOT_DOWNLOAD_RATIO,
+		Value:  2.0,
+		EnvVar: "SNAPSHOT_DOWNLOAD_RATIO",
+	})
+	c.Flags = append(c.Flags, cli.Float64Flag{
 		Name:   SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD,
 		Value:  0.75,
 		EnvVar: "SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD",
 	})
-	c.Flags = append(c.Flags, cli.Float64Flag{
+	c.Flags = append(c.Flags, cli.Int64Flag{
 		Name:   SNAPSHOT_TORRENT_SIZE_LIMIT,
-		Value:  0.75,
+		Value:  10,
 		EnvVar: "SNAPSHOT_TORRENT_SIZE_LIMIT",
 	})
-	c.Flags = append(c.Flags, cli.Int64Flag{
+	c.Flags = append(c.Flags, cli.BoolFlag{
 		Name:   AWS_BUCKET_SPREAD,
-		Value:  10,
 		EnvVar: "AWS_BUCKET_SPREAD",
 	})
 	c.Flags = append(c.Flags, cli.BoolFlag{
@@ -191,7 +201,7 @@ func NewSnapshot(c *cli.Context, t *Torrent) (*Snapshot, error) {
 		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
 		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), awsNoSSL: c.Bool(AWS_NO_SSL), start: false,
 		startThreshold: c.Float64(SNAPSHOT_START_THRESHOLD), startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD),
-		torrentSizeLimit: c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT),
+		torrentSizeLimit: c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT), downloadRatio: c.Float64(SNAPSHOT_DOWNLOAD_RATIO),
 	}, nil
 }
 
@@ -219,7 +229,7 @@ func (s *Snapshot) session() *session.Session {
 }
 
 func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*CompletedPieces, error) {
-	key := "completed_pieces/" + t.InfoHash().HexString()
+	key := COMPLETED_PIECES + "/" + t.InfoHash().HexString()
 	st := CompletedPieces{}
 	r, err := cl.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.awsBucket),
@@ -238,8 +248,41 @@ func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*Complet
 	return &st, nil
 }
 
+func (s *Snapshot) fetchDownloadedSize(cl *s3.S3, t *torrent.Torrent) (int64, error) {
+	key := DOWNLOADED_SIZE + "/" + t.InfoHash().HexString()
+	r, err := cl.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.awsBucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+			return 0, nil
+		}
+		return 0, errors.Wrapf(err, "Failed to fetch downloaded size bucket=%v key=%v", s.awsBucket, key)
+	}
+	defer r.Body.Close()
+	data, err := ioutil.ReadAll(r.Body)
+	i, err := strconv.Atoi(string(data))
+	log.Infof("Size fetch completed bucket=%v key=%v size=%v", s.awsBucket, key, i)
+	return int64(i), nil
+}
+
+func (s *Snapshot) storeDownloadedSize(cl *s3.S3, t *torrent.Torrent, i int64) error {
+	key := DOWNLOADED_SIZE + "/" + t.InfoHash().HexString()
+	log.Infof("Store downloaded size bucket=%v key=%v size=%v", s.awsBucket, key, i)
+	_, err := cl.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.awsBucket),
+		Key:    aws.String(key),
+		Body:   bytes.NewReader([]byte(strconv.Itoa(int(i)))),
+	})
+	if err != nil {
+		return errors.Wrapf(err, "Failed to store downloaded size bucket=%v key=%v", s.awsBucket, key)
+	}
+	return nil
+}
+
 func (s *Snapshot) hasTouch(cl *s3.S3, t *torrent.Torrent) (bool, error) {
-	key := "touch/" + t.InfoHash().HexString()
+	key := TOUCH + "/" + t.InfoHash().HexString()
 	log.Infof("Check touch bucket=%v key=%v", s.awsBucket, key)
 	_, err := cl.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.awsBucket),
@@ -256,7 +299,7 @@ func (s *Snapshot) hasTouch(cl *s3.S3, t *torrent.Torrent) (bool, error) {
 
 func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
 	timestamp := fmt.Sprintf("%v", time.Now().Unix())
-	key := "touch/" + t.InfoHash().HexString()
+	key := TOUCH + "/" + t.InfoHash().HexString()
 	log.Infof("Touch torrent bucket=%v key=%v timestamp=%v", s.awsBucket, key, timestamp)
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(s.awsBucket),
@@ -273,7 +316,7 @@ func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *Compl
 	if st.Len() == 0 {
 		return nil
 	}
-	key := "completed_pieces/" + t.InfoHash().HexString()
+	key := COMPLETED_PIECES + "/" + t.InfoHash().HexString()
 	log.Infof("Store completed pieces bucket=%v key=%v len=%v", s.awsBucket, key, st.Len())
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(s.awsBucket),
@@ -371,17 +414,13 @@ func (s *Snapshot) Start() error {
 		log.Infof("Do not cache large torrent")
 		return nil
 	}
-	ht, err := s.hasTouch(cl, t)
-	if err != nil {
-		return errors.Wrap(err, "Failed to check touch")
-	}
 	err = s.touch(cl, t)
 	if err != nil {
 		return errors.Wrap(err, "Failed to touch torrent")
 	}
-	if !ht {
-		log.Infof("Do not cache torrent as first time")
-		return nil
+	prevDownloadedSize, err := s.fetchDownloadedSize(cl, t)
+	if err != nil {
+		return errors.Wrap(err, "Failed to fetch download size")
 	}
 	cp, err := s.fetchCompletedPieces(cl, t)
 	if err != nil {
@@ -397,6 +436,8 @@ func (s *Snapshot) Start() error {
 	ch := make(chan *torrent.Piece)
 	// errCh := make(chan error)
 	var completedRatio float64
+	var totalDownloadRatio float64
+	var currDownloadedSize int64
 	fullDownloadStarted := false
 	started := false
 	go func() {
@@ -406,15 +447,27 @@ func (s *Snapshot) Start() error {
 				break
 			}
 			completedNum := 0
+			var downloadedSize int64
 			for i := 0; i < t.NumPieces(); i++ {
 				ps := t.PieceState(i)
 				p := t.Piece(i)
 				if cp.Has(p) || (!cp.Has(p) && ps.Complete) {
 					completedNum++
 				}
+				if p != nil && ps.Complete {
+					downloadedSize += p.Info().Length()
+				}
+			}
+			if downloadedSize > currDownloadedSize+1024*1024*10 {
+				currDownloadedSize = downloadedSize
+				err := s.storeDownloadedSize(cl, t, prevDownloadedSize+currDownloadedSize)
+				if err != nil {
+					log.WithError(err).Error("Failed to store downloaded size")
+				}
 			}
 			completedRatio = float64(completedNum) / float64(t.NumPieces())
-			if completedRatio >= s.startThreshold {
+			totalDownloadRatio = float64(prevDownloadedSize+downloadedSize) / float64(t.Length())
+			if totalDownloadRatio >= s.downloadRatio && completedRatio >= s.startThreshold {
 				if !started {
 					started = true
 					log.Infof("Starting making snapshot at %v%%", s.startThreshold*100)
@@ -433,7 +486,7 @@ func (s *Snapshot) Start() error {
 					ch <- p
 				}
 			}
-			if fullDownloadStarted == false && completedRatio >= s.startFullDownloadThreshold {
+			if fullDownloadStarted == false && totalDownloadRatio >= s.downloadRatio && completedRatio >= s.startFullDownloadThreshold {
 				fullDownloadStarted = true
 				log.Infof("Starting full download at %v%%", s.startFullDownloadThreshold*100)
 				t.DownloadAll()

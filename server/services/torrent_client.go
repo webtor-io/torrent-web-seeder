@@ -58,7 +58,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 }
 
 func (s *TorrentClient) get() (*torrent.Client, error) {
-	log.Info("Initializing TorrentClient")
+	log.Infof("Initializing TorrentClient dataDir=%v", s.dataDir)
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.Seed = false
 	cfg.NoUpload = true
