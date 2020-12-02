@@ -486,7 +486,7 @@ func (s *Snapshot) Start() error {
 					ch <- p
 				}
 			}
-			if fullDownloadStarted == false && totalDownloadRatio >= s.downloadRatio && completedRatio >= s.startFullDownloadThreshold {
+			if fullDownloadStarted == false && (totalDownloadRatio >= s.downloadRatio || completedRatio >= s.startFullDownloadThreshold) {
 				fullDownloadStarted = true
 				log.Infof("Starting full download at %v%%", s.startFullDownloadThreshold*100)
 				t.DownloadAll()
