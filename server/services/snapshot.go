@@ -442,7 +442,11 @@ func (s *Snapshot) Start() error {
 	started := false
 	go func() {
 		for range ticker.C {
-			if s.stop && !fullDownloadStarted {
+			if fullDownloadStarted == false && s.stop && totalDownloadRatio >= s.downloadRatio {
+				fullDownloadStarted = true
+				log.Info("Starting full snapshot")
+				t.DownloadAll()
+			} else if s.stop && !fullDownloadStarted {
 				close(ch)
 				break
 			}
@@ -486,7 +490,7 @@ func (s *Snapshot) Start() error {
 					ch <- p
 				}
 			}
-			if fullDownloadStarted == false && (totalDownloadRatio >= s.downloadRatio || completedRatio >= s.startFullDownloadThreshold) {
+			if fullDownloadStarted == false && completedRatio >= s.startFullDownloadThreshold {
 				fullDownloadStarted = true
 				log.Infof("Starting full download at %v%%", s.startFullDownloadThreshold*100)
 				t.DownloadAll()
