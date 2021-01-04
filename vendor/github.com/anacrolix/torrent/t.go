@@ -16,6 +16,7 @@ func (t *Torrent) InfoHash() metainfo.Hash {
 
 // Returns a channel that is closed when the info (.Info()) for the torrent has become available.
 func (t *Torrent) GotInfo() <-chan struct{} {
+	// TODO: We shouldn't need to lock to take a channel here, if the event is only ever set.
 	t.cl.lock()
 	defer t.cl.unlock()
 	return t.gotMetainfo.C()
@@ -221,11 +222,11 @@ func (t *Torrent) Files() []*File {
 	return *t.files
 }
 
-func (t *Torrent) AddPeers(pp []Peer) {
+func (t *Torrent) AddPeers(pp []PeerInfo) int {
 	cl := t.cl
 	cl.lock()
 	defer cl.unlock()
-	t.addPeers(pp)
+	return t.addPeers(pp)
 }
 
 // Marks the entire torrent for download. Requires the info first, see
@@ -254,6 +255,8 @@ func (t *Torrent) Piece(i pieceIndex) *Piece {
 }
 
 func (t *Torrent) PeerConns() []*PeerConn {
+	t.cl.rLock()
+	defer t.cl.rUnlock()
 	ret := make([]*PeerConn, 0, len(t.conns))
 	for c := range t.conns {
 		ret = append(ret, c)

@@ -102,6 +102,7 @@ type ClientConfig struct {
 	MinDialTimeout             time.Duration
 	EstablishedConnsPerTorrent int
 	HalfOpenConnsPerTorrent    int
+	TotalHalfOpenConns         int
 	// Maximum number of peer addresses in reserve.
 	TorrentPeersHighWater int
 	// Minumum number of peers before effort is made to obtain more peers.
@@ -120,14 +121,21 @@ type ClientConfig struct {
 	DisableAcceptRateLimiting bool
 	// Don't add connections that have the same peer ID as an existing
 	// connection for a given Torrent.
-	dropDuplicatePeerIds bool
+	DropDuplicatePeerIds bool
 
 	ConnTracker *conntrack.Instance
 
 	// OnQuery hook func
 	DHTOnQuery func(query *krpc.Msg, source net.Addr) (propagate bool)
 
-	DefaultRequestStrategy RequestStrategyMaker
+	DefaultRequestStrategy requestStrategyMaker
+
+	Extensions PeerExtensionBits
+
+	DisableWebtorrent bool
+	DisableWebseeds   bool
+
+	Callbacks Callbacks
 }
 
 func (cfg *ClientConfig) SetListenAddr(addr string) *ClientConfig {
@@ -148,6 +156,7 @@ func NewDefaultClientConfig() *ClientConfig {
 		MinDialTimeout:                 3 * time.Second,
 		EstablishedConnsPerTorrent:     50,
 		HalfOpenConnsPerTorrent:        25,
+		TotalHalfOpenConns:             100,
 		TorrentPeersHighWater:          500,
 		TorrentPeersLowWater:           50,
 		HandshakesTimeout:              4 * time.Second,
@@ -169,6 +178,8 @@ func NewDefaultClientConfig() *ClientConfig {
 		Logger:         log.Default,
 
 		DefaultRequestStrategy: RequestStrategyDuplicateRequestTimeout(5 * time.Second),
+
+		Extensions: defaultPeerExtensionBytes(),
 	}
 	//cc.ConnTracker.SetNoMaxEntries()
 	//cc.ConnTracker.Timeout = func(conntrack.Entry) time.Duration { return 0 }

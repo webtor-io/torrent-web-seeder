@@ -37,8 +37,11 @@ func run(c *cli.Context) error {
 	// Setting Torrent
 	torrent := s.NewTorrent(torrentClient, metainfo)
 
+	// Setting conter
+	counter := s.NewCounter()
+
 	// Setting Snapshot
-	snapshot, err := s.NewSnapshot(c, torrent)
+	snapshot, err := s.NewSnapshot(c, torrent, counter)
 	if err != nil {
 		return errors.Wrap(err, "Failed to init Snapshot")
 	} else if snapshot != nil {
@@ -52,7 +55,7 @@ func run(c *cli.Context) error {
 	stat := s.NewStat(c, torrent)
 
 	// Setting WebSeeder
-	webSeeder := s.NewWebSeeder(torrent)
+	webSeeder := s.NewWebSeeder(torrent, counter)
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)

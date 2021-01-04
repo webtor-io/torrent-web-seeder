@@ -19,7 +19,10 @@ func NewClient(cl ClientImpl) *Client {
 
 func (cl Client) OpenTorrent(info *metainfo.Info, infoHash metainfo.Hash) (*Torrent, error) {
 	t, err := cl.ci.OpenTorrent(info, infoHash)
-	return &Torrent{t}, err
+	if err != nil {
+		return nil, err
+	}
+	return &Torrent{t}, nil
 }
 
 type Torrent struct {
@@ -33,6 +36,19 @@ func (t Torrent) Piece(p metainfo.Piece) Piece {
 type Piece struct {
 	PieceImpl
 	mip metainfo.Piece
+}
+
+var _ io.WriterTo = Piece{}
+
+// Why do we have this wrapper? Well PieceImpl doesn't implement io.Reader, so we can't let io.Copy
+// and friends check for io.WriterTo and fallback for us since they expect an io.Reader.
+func (p Piece) WriteTo(w io.Writer) (int64, error) {
+	if i, ok := p.PieceImpl.(io.WriterTo); ok {
+		return i.WriteTo(w)
+	}
+	n := p.mip.Length()
+	r := io.NewSectionReader(p, 0, n)
+	return io.CopyN(w, r, n)
 }
 
 func (p Piece) WriteAt(b []byte, off int64) (n int, err error) {
@@ -73,8 +89,15 @@ func (p Piece) ReadAt(b []byte, off int64) (n int, err error) {
 		panic("io.Copy will get stuck")
 	}
 	off += int64(n)
-	if off < p.mip.Length() && err != nil {
-		p.MarkNotComplete()
+
+	// Doing this here may be inaccurate. There's legitimate reasons we may fail to read while the
+	// data is still there, such as too many open files. There should probably be a specific error
+	// to return if the data has been lost.
+	if off < p.mip.Length() {
+		if err == io.EOF {
+			p.MarkNotComplete()
+		}
 	}
+
 	return
 }

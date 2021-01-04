@@ -61,7 +61,11 @@ func (ts *mmapTorrentStorage) Piece(p metainfo.Piece) PieceImpl {
 }
 
 func (ts *mmapTorrentStorage) Close() error {
-	return ts.span.Close()
+	errs := ts.span.Close()
+	if len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
 }
 
 type mmapStoragePiece struct {
@@ -102,7 +106,12 @@ func mMapTorrent(md *metainfo.Info, location string) (mms *mmap_span.MMapSpan, e
 		}
 	}()
 	for _, miFile := range md.UpvertedFiles() {
-		fileName := filepath.Join(append([]string{location, md.Name}, miFile.Path...)...)
+		var safeName string
+		safeName, err = ToSafeFilePath(append([]string{md.Name}, miFile.Path...)...)
+		if err != nil {
+			return
+		}
+		fileName := filepath.Join(location, safeName)
 		var mm mmap.MMap
 		mm, err = mmapFile(fileName, miFile.Length)
 		if err != nil {
@@ -113,6 +122,7 @@ func mMapTorrent(md *metainfo.Info, location string) (mms *mmap_span.MMapSpan, e
 			mms.Append(mm)
 		}
 	}
+	mms.InitIndex()
 	return
 }
 

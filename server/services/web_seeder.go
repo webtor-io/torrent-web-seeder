@@ -23,11 +23,12 @@ const (
 
 type WebSeeder struct {
 	t   *Torrent
+	c   *Counter
 	err error
 }
 
-func NewWebSeeder(t *Torrent) *WebSeeder {
-	return &WebSeeder{t: t}
+func NewWebSeeder(t *Torrent, c *Counter) *WebSeeder {
+	return &WebSeeder{t: t, c: c}
 }
 
 func (s *WebSeeder) renderTorrent(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +175,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 			} else {
 				reader = torReader
 			}
-			http.ServeContent(w, r, f.Path(), time.Unix(t.Metainfo().CreationDate, 0), reader)
+			http.ServeContent(s.c.NewResponseWriter(w), r, f.Path(), time.Unix(t.Metainfo().CreationDate, 0), reader)
 			found = true
 		}
 	}

@@ -44,6 +44,7 @@ type Snapshot struct {
 	startFullDownloadThreshold float64
 	torrentSizeLimit           int64
 	downloadRatio              float64
+	counter                    *Counter
 }
 
 type CompletedPieces map[[20]byte]bool
@@ -181,7 +182,7 @@ func split(buf []byte, lim int) [][]byte {
 	return chunks
 }
 
-func NewSnapshot(c *cli.Context, t *Torrent) (*Snapshot, error) {
+func NewSnapshot(c *cli.Context, t *Torrent, co *Counter) (*Snapshot, error) {
 	if c.Bool(USE_SNAPSHOT) == false {
 		return nil, nil
 	}
@@ -202,6 +203,7 @@ func NewSnapshot(c *cli.Context, t *Torrent) (*Snapshot, error) {
 		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), awsNoSSL: c.Bool(AWS_NO_SSL), start: false,
 		startThreshold: c.Float64(SNAPSHOT_START_THRESHOLD), startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD),
 		torrentSizeLimit: c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT), downloadRatio: c.Float64(SNAPSHOT_DOWNLOAD_RATIO),
+		counter: co,
 	}, nil
 }
 
@@ -451,15 +453,12 @@ func (s *Snapshot) Start() error {
 				break
 			}
 			completedNum := 0
-			var downloadedSize int64
+			downloadedSize := int64(s.counter.Count())
 			for i := 0; i < t.NumPieces(); i++ {
 				ps := t.PieceState(i)
 				p := t.Piece(i)
 				if cp.Has(p) || (!cp.Has(p) && ps.Complete) {
 					completedNum++
-				}
-				if p != nil && ps.Complete {
-					downloadedSize += p.Info().Length()
 				}
 			}
 			if downloadedSize > currDownloadedSize+1024*1024*10 {

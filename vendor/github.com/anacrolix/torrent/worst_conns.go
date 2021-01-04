@@ -8,13 +8,26 @@ import (
 	"github.com/anacrolix/multiless"
 )
 
-func worseConn(l, r *PeerConn) bool {
+func worseConn(l, r *peer) bool {
 	less, ok := multiless.New().Bool(
 		l.useful(), r.useful()).CmpInt64(
 		l.lastHelpful().Sub(r.lastHelpful()).Nanoseconds()).CmpInt64(
-		l.completedHandshake.Sub(r.completedHandshake).Nanoseconds()).Uint32(
-		l.peerPriority(), r.peerPriority()).Uintptr(
-		uintptr(unsafe.Pointer(l)), uintptr(unsafe.Pointer(r))).LessOk()
+		l.completedHandshake.Sub(r.completedHandshake).Nanoseconds()).LazySameLess(
+		func() (same, less bool) {
+			lpp, err := l.peerPriority()
+			if err != nil {
+				same = true
+				return
+			}
+			rpp, err := r.peerPriority()
+			if err != nil {
+				same = true
+				return
+			}
+			return lpp == rpp, lpp < rpp
+		}).Uintptr(
+		uintptr(unsafe.Pointer(l)), uintptr(unsafe.Pointer(r)),
+	).LessOk()
 	if !ok {
 		panic(fmt.Sprintf("cannot differentiate %#v and %#v", l, r))
 	}
@@ -32,7 +45,7 @@ func (me worseConnSlice) Len() int {
 }
 
 func (me worseConnSlice) Less(i, j int) bool {
-	return worseConn(me.conns[i], me.conns[j])
+	return worseConn(&me.conns[i].peer, &me.conns[j].peer)
 }
 
 func (me *worseConnSlice) Pop() interface{} {
