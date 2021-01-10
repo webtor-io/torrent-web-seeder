@@ -125,15 +125,6 @@ func peers(t *torrent.Torrent) int {
 	return len(t.KnownSwarm())
 }
 
-func (s *grpcServer) commonStat(t *torrent.Torrent) (*pb.StatReply, error) {
-	return &pb.StatReply{
-		Completed: t.BytesCompleted(),
-		Total:     t.Info().TotalLength(),
-		Peers:     int32(peers(t)),
-		Status:    pb.StatReply_SEEDING,
-	}, nil
-}
-
 func fileBytesCompleted(t *torrent.Torrent, f *torrent.File) int64 {
 	var res int64
 	for _, p := range f.State() {
@@ -142,6 +133,39 @@ func fileBytesCompleted(t *torrent.Torrent, f *torrent.File) int64 {
 		}
 	}
 	return res
+}
+
+func (s *grpcServer) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
+	completed := t.BytesCompleted()
+	status := pb.StatReply_SEEDING
+	if completed == 0 {
+		status = pb.StatReply_WAITING_FOR_PEERS
+	}
+	pieces := []*pb.Piece{}
+	for i := 0; i < t.NumPieces(); i++ {
+		p := t.Piece(i)
+		ps := p.State()
+		pr := pb.Piece_NONE
+		if ps.Priority != torrent.PiecePriorityNormal {
+			pr = pb.Piece_NORMAL
+		} else if ps.Priority != torrent.PiecePriorityNone {
+			pr = pb.Piece_HIGH
+		}
+		pieces = append(pieces, &pb.Piece{Position: int64(i), Complete: ps.Complete, Priority: pr})
+
+	}
+	peers := t.Stats().ActivePeers
+	seeders := t.Stats().ConnectedSeeders
+	leechers := peers - seeders
+	return &pb.StatReply{
+		Completed: completed,
+		Total:     t.Info().TotalLength(),
+		Peers:     int32(peers),
+		Status:    status,
+		Seeders:   int32(seeders),
+		Leechers:  int32(leechers),
+		Pieces:    pieces,
+	}, nil
 }
 
 func (s *grpcServer) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, error) {
@@ -198,7 +222,7 @@ func (s *grpcServer) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatRepl
 		return nil, err
 	}
 	if in.GetPath() == "" {
-		return s.commonStat(t)
+		return s.torrentStat(t)
 	}
 	f := findFile(t, in.GetPath())
 	if f == nil {
