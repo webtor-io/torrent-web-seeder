@@ -163,7 +163,11 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 			var reader io.ReadSeeker
 			torReader := f.NewReader()
 			torReader.SetResponsive()
-			torReader.SetReadahead(15 * 1024 * 1024)
+			readahead := int64(10 * 1024 * 1024)
+			if readahead < f.Length()/10 {
+				readahead = f.Length() / 10
+			}
+			torReader.SetReadahead(readahead)
 			if r.Header.Get("X-Download-Rate") != "" {
 				rate, err := bytefmt.ToBytes(r.Header.Get("X-Download-Rate"))
 				if err != nil {
