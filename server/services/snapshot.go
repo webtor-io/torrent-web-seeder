@@ -74,13 +74,8 @@ func (cp CompletedPieces) ToBytes() []byte {
 }
 
 const (
-	AWS_ACCESS_KEY_ID                      = "aws-access-key-id"
-	AWS_SECRET_ACCESS_KEY                  = "aws-secret-access-key"
 	AWS_BUCKET                             = "aws-bucket"
 	AWS_BUCKET_SPREAD                      = "aws-bucket-spread"
-	AWS_NO_SSL                             = "aws-no-ssl"
-	AWS_ENDPOINT                           = "aws-endpoint"
-	AWS_REGION                             = "aws-region"
 	AWS_CONCURRENCY                        = "aws-concurrency"
 	USE_SNAPSHOT                           = "use-snapshot"
 	SNAPSHOT_START_THRESHOLD               = "snapshot-start-threshold"
@@ -120,10 +115,6 @@ func RegisterSnapshotFlags(c *cli.App) {
 	c.Flags = append(c.Flags, cli.BoolFlag{
 		Name:   AWS_BUCKET_SPREAD,
 		EnvVar: "AWS_BUCKET_SPREAD",
-	})
-	c.Flags = append(c.Flags, cli.BoolFlag{
-		Name:   AWS_NO_SSL,
-		EnvVar: "AWS_NO_SSL",
 	})
 	c.Flags = append(c.Flags, cli.IntFlag{
 		Name:   AWS_CONCURRENCY,
