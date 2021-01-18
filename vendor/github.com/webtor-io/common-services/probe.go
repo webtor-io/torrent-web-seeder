@@ -10,6 +10,7 @@ import (
 	"github.com/urfave/cli"
 )
 
+// Probe provides simple HTTP-service for Kubernetes liveness and readiness checking
 type Probe struct {
 	host string
 	port int
@@ -17,27 +18,30 @@ type Probe struct {
 }
 
 const (
-	PROBE_HOST_FLAG = "probe-host"
-	PROBE_PORT_FLAG = "probe-port"
+	probeHostFlag = "probe-host"
+	probePortFlag = "probe-port"
 )
 
+// RegisterProbeFlags registers cli flags for Probe
 func RegisterProbeFlags(c *cli.App) {
 	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:  PROBE_HOST_FLAG,
+		Name:  probeHostFlag,
 		Usage: "probe listening host",
 		Value: "",
 	})
 	c.Flags = append(c.Flags, cli.IntFlag{
-		Name:  PROBE_PORT_FLAG,
+		Name:  probePortFlag,
 		Usage: "probe listening port",
 		Value: 8081,
 	})
 }
 
+// NewProbe initializes new Probe instance
 func NewProbe(c *cli.Context) *Probe {
-	return &Probe{host: c.String(PROBE_HOST_FLAG), port: c.Int(PROBE_PORT_FLAG)}
+	return &Probe{host: c.String(probeHostFlag), port: c.Int(probePortFlag)}
 }
 
+// Serve serves Probe web service
 func (s *Probe) Serve() error {
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	ln, err := net.Listen("tcp", addr)
@@ -56,6 +60,7 @@ func (s *Probe) Serve() error {
 	return http.Serve(ln, mux)
 }
 
+// Close closes Probe web service
 func (s *Probe) Close() {
 	if s.ln != nil {
 		s.ln.Close()

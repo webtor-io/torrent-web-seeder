@@ -9,18 +9,22 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Serve serves multible Servables at ones, handles errors and system signals
 type Serve struct {
 	servables []Servable
 }
 
+// Servable serves something
 type Servable interface {
 	Serve() error
 }
 
+// NewServe initializes Serve
 func NewServe(s ...Servable) *Serve {
 	return &Serve{servables: s}
 }
 
+// Serve serves multible Servables
 func (s *Serve) Serve() error {
 
 	serveError := make(chan error, 1)

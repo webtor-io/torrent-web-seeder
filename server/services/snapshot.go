@@ -13,26 +13,19 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
+
+	cs "github.com/webtor-io/common-services"
 )
 
 type Snapshot struct {
-	awsAccessKeyID             string
-	awsSecretAccessKey         string
 	awsBucket                  string
 	awsBucketSpread            bool
-	awsNoSSL                   bool
-	awsEndpoint                string
-	awsRegion                  string
-	awsSession                 *session.Session
-	awsClient                  *s3.S3
 	awsConcurrency             int
 	stop                       bool
 	start                      bool
@@ -45,6 +38,7 @@ type Snapshot struct {
 	torrentSizeLimit           int64
 	downloadRatio              float64
 	counter                    *Counter
+	s3                         *cs.S3Client
 }
 
 type CompletedPieces map[[20]byte]bool
@@ -138,34 +132,10 @@ func RegisterSnapshotFlags(c *cli.App) {
 		EnvVar: "AWS_CONCURRENCY",
 	})
 	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   AWS_ACCESS_KEY_ID,
-		Usage:  "AWS Access Key ID",
-		Value:  "",
-		EnvVar: "AWS_ACCESS_KEY_ID",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   AWS_SECRET_ACCESS_KEY,
-		Usage:  "AWS Secret Access Key",
-		Value:  "",
-		EnvVar: "AWS_SECRET_ACCESS_KEY",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
 		Name:   AWS_BUCKET,
 		Usage:  "AWS Bucket",
 		Value:  "",
 		EnvVar: "AWS_BUCKET",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   AWS_ENDPOINT,
-		Usage:  "AWS Endpoint",
-		Value:  "",
-		EnvVar: "AWS_ENDPOINT",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   AWS_REGION,
-		Usage:  "AWS Region",
-		Value:  "",
-		EnvVar: "AWS_REGION",
 	})
 }
 
@@ -182,52 +152,19 @@ func split(buf []byte, lim int) [][]byte {
 	return chunks
 }
 
-func NewSnapshot(c *cli.Context, t *Torrent, co *Counter) (*Snapshot, error) {
+func NewSnapshot(c *cli.Context, t *Torrent, co *Counter, s3 *cs.S3Client) (*Snapshot, error) {
 	if c.Bool(USE_SNAPSHOT) == false {
 		return nil, nil
-	}
-	if c.String(AWS_ACCESS_KEY_ID) == "" {
-		return nil, errors.Errorf("AWS Access Key ID can't be empty")
-	}
-	if c.String(AWS_SECRET_ACCESS_KEY) == "" {
-		return nil, errors.Errorf("AWS Secret Access Key can't be empty")
 	}
 	if c.String(AWS_BUCKET) == "" {
 		return nil, errors.Errorf("AWS Bucket can't be empty")
 	}
-	if c.String(AWS_REGION) == "" {
-		return nil, errors.Errorf("AWS Region can't be empty")
-	}
-	return &Snapshot{awsAccessKeyID: c.String(AWS_ACCESS_KEY_ID), awsSecretAccessKey: c.String(AWS_SECRET_ACCESS_KEY),
+	return &Snapshot{
 		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
-		awsEndpoint: c.String(AWS_ENDPOINT), awsRegion: c.String(AWS_REGION), awsNoSSL: c.Bool(AWS_NO_SSL), start: false,
 		startThreshold: c.Float64(SNAPSHOT_START_THRESHOLD), startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD),
 		torrentSizeLimit: c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT), downloadRatio: c.Float64(SNAPSHOT_DOWNLOAD_RATIO),
-		counter: co,
+		counter: co, s3: s3,
 	}, nil
-}
-
-func (s *Snapshot) client() *s3.S3 {
-	if s.awsClient != nil {
-		return s.awsClient
-	}
-	s.awsClient = s3.New(s.session())
-	return s.awsClient
-}
-
-func (s *Snapshot) session() *session.Session {
-	if s.awsSession != nil {
-		return s.awsSession
-	}
-	c := &aws.Config{
-		Credentials:      credentials.NewStaticCredentials(s.awsAccessKeyID, s.awsSecretAccessKey, ""),
-		Endpoint:         aws.String(s.awsEndpoint),
-		Region:           aws.String(s.awsRegion),
-		DisableSSL:       aws.Bool(s.awsNoSSL),
-		S3ForcePathStyle: aws.Bool(true),
-	}
-	s.awsSession = session.New(c)
-	return s.awsSession
 }
 
 func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*CompletedPieces, error) {
@@ -364,7 +301,7 @@ func (s *Snapshot) storeTorrent(cl *s3.S3, t *torrent.Torrent) error {
 func (s *Snapshot) Start() error {
 	log.Info("Snapshot inited")
 	s.stopCh = make(chan (bool))
-	cl := s.client()
+	cl := s.s3.Get()
 	t, err := s.t.Get()
 	if err != nil {
 		return errors.Wrap(err, "Failed to fetch torrent")
@@ -440,6 +377,7 @@ func (s *Snapshot) Start() error {
 	var completedRatio float64
 	var totalDownloadRatio float64
 	var currDownloadedSize int64
+	var currCompletedNum int
 	fullDownloadStarted := false
 	started := false
 	go func() {
@@ -462,10 +400,19 @@ func (s *Snapshot) Start() error {
 				}
 			}
 			if downloadedSize > currDownloadedSize+1024*1024*10 {
-				currDownloadedSize = downloadedSize
 				err := s.storeDownloadedSize(cl, t, prevDownloadedSize+currDownloadedSize)
 				if err != nil {
-					log.WithError(err).Error("Failed to store downloaded size")
+					log.WithError(err).Warn("Failed to store downloaded size")
+				} else {
+					currDownloadedSize = downloadedSize
+				}
+			}
+			if completedNum > currCompletedNum+10 {
+				err := s.storeCompletedPieces(cl, t, cp)
+				if err != nil {
+					log.WithError(err).Warn("Failed to store completed pieces")
+				} else {
+					currCompletedNum = completedNum
 				}
 			}
 			completedRatio = float64(completedNum) / float64(t.NumPieces())
@@ -500,24 +447,11 @@ func (s *Snapshot) Start() error {
 			}
 		}
 	}()
-	ticker2 := time.NewTicker(30 * time.Second)
-	defer ticker2.Stop()
-	go func() {
-		for range ticker2.C {
-			if s.stop {
-				break
-			}
-			err := s.storeCompletedPieces(cl, t, cp)
-			if err != nil {
-				log.WithError(err).Error("Failed to store completed pieces")
-			}
-		}
-	}()
 	s.start = true
 	s.storePieces(cl, t, cp, ch, pieceBucket)
 	err = s.storeCompletedPieces(cl, t, cp)
 	if err != nil {
-		log.WithError(err).Error("Failed to store completed pieces")
+		log.WithError(err).Warn("Failed to store completed pieces")
 	}
 	close(s.stopCh)
 	return nil

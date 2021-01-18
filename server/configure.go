@@ -1,6 +1,9 @@
 package main
 
 import (
+	"net/http"
+	"time"
+
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -17,6 +20,7 @@ func configure(app *cli.App) {
 	s.RegisterStatFlags(app)
 	s.RegisterMetaInfoFlags(app)
 	s.RegisterSnapshotFlags(app)
+	cs.RegisterS3ClientFlags(app)
 	app.Action = run
 }
 
@@ -40,8 +44,13 @@ func run(c *cli.Context) error {
 	// Setting conter
 	counter := s.NewCounter()
 
+	// Setting S3 Client
+	s3 := cs.NewS3Client(c, &http.Client{
+		Timeout: time.Second * 60,
+	})
+
 	// Setting Snapshot
-	snapshot, err := s.NewSnapshot(c, torrent, counter)
+	snapshot, err := s.NewSnapshot(c, torrent, counter, s3)
 	if err != nil {
 		return errors.Wrap(err, "Failed to init Snapshot")
 	} else if snapshot != nil {
