@@ -298,7 +298,7 @@ github.com/tinylib/msgp/msgp
 # github.com/urfave/cli v1.22.5
 ## explicit
 github.com/urfave/cli
-# github.com/webtor-io/common-services v0.0.0-20210118175658-d7f255cee0b0
+# github.com/webtor-io/common-services v0.0.0-20210118183811-6963f3b0958e
 ## explicit
 github.com/webtor-io/common-services
 # github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5

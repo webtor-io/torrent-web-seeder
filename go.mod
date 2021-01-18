@@ -24,7 +24,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.7.0
 	github.com/urfave/cli v1.22.5
-	github.com/webtor-io/common-services v0.0.0-20210118175658-d7f255cee0b0
+	github.com/webtor-io/common-services v0.0.0-20210118183811-6963f3b0958e
 	github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5
 	github.com/webtor-io/torrent-store v0.0.0-20200102130046-6236e42cdb97
 	github.com/willf/bitset v1.1.11 // indirect
