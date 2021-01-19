@@ -151,7 +151,7 @@ func NewSnapshot(c *cli.Context, t *Torrent, co *Counter, s3 *cs.S3Client) (*Sna
 		return nil, errors.Errorf("AWS Bucket can't be empty")
 	}
 	return &Snapshot{
-		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), stop: false, t: t,
+		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), t: t,
 		startThreshold: c.Float64(SNAPSHOT_START_THRESHOLD), startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD),
 		torrentSizeLimit: c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT), downloadRatio: c.Float64(SNAPSHOT_DOWNLOAD_RATIO),
 		counter: co, s3: s3,
@@ -377,7 +377,7 @@ func (s *Snapshot) Start() error {
 				fullDownloadStarted = true
 				log.Info("Starting full snapshot")
 				t.DownloadAll()
-			} else if s.stop && !fullDownloadStarted {
+			} else if s.stop {
 				close(ch)
 				break
 			}
