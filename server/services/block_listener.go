@@ -1,7 +1,6 @@
 package services
 
 import (
-	"errors"
 	"net"
 )
 
@@ -26,7 +25,8 @@ func (ln *BlockListener) Accept() (net.Conn, error) {
 	if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
 		for _, ip := range ln.blockedIP {
 			if addr.IP.String() == ip.String() {
-				return nil, errors.New("Blocked addr")
+				c.Close()
+				return c, nil
 			}
 		}
 	}
