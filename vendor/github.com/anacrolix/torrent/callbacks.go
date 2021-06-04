@@ -18,4 +18,23 @@ type Callbacks struct {
 
 	// Provides secret keys to be tried against incoming encrypted connections.
 	ReceiveEncryptedHandshakeSkeys mse.SecretKeyIter
+
+	ReceivedUsefulData []func(ReceivedUsefulDataEvent)
+	ReceivedRequested  []func(PeerMessageEvent)
+	DeletedRequest     []func(PeerRequestEvent)
+	SentRequest        []func(PeerRequestEvent)
+	PeerClosed         []func(*Peer)
+	NewPeer            []func(*Peer)
+}
+
+type ReceivedUsefulDataEvent = PeerMessageEvent
+
+type PeerMessageEvent struct {
+	Peer    *Peer
+	Message *pp.Message
+}
+
+type PeerRequestEvent struct {
+	Peer *Peer
+	Request
 }

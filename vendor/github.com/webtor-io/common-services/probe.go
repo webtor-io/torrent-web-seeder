@@ -23,17 +23,19 @@ const (
 )
 
 // RegisterProbeFlags registers cli flags for Probe
-func RegisterProbeFlags(c *cli.App) {
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:  probeHostFlag,
-		Usage: "probe listening host",
-		Value: "",
-	})
-	c.Flags = append(c.Flags, cli.IntFlag{
-		Name:  probePortFlag,
-		Usage: "probe listening port",
-		Value: 8081,
-	})
+func RegisterProbeFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:  probeHostFlag,
+			Usage: "probe listening host",
+			Value: "",
+		},
+		cli.IntFlag{
+			Name:  probePortFlag,
+			Usage: "probe listening port",
+			Value: 8081,
+		},
+	)
 }
 
 // NewProbe initializes new Probe instance

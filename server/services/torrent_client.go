@@ -29,19 +29,21 @@ const (
 	TORRENT_CLIENT_DATA_DIR_FLAG      = "data-dir"
 )
 
-func RegisterTorrentClientFlags(c *cli.App) {
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   TORRENT_CLIENT_DOWNLOAD_RATE_FLAG,
-		Usage:  "download rate",
-		Value:  "",
-		EnvVar: "DOWNLOAD_RATE",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   TORRENT_CLIENT_DATA_DIR_FLAG,
-		Usage:  "data dir",
-		Value:  os.TempDir(),
-		EnvVar: "DATA_DIR",
-	})
+func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:   TORRENT_CLIENT_DOWNLOAD_RATE_FLAG,
+			Usage:  "download rate",
+			Value:  "",
+			EnvVar: "DOWNLOAD_RATE",
+		},
+		cli.StringFlag{
+			Name:   TORRENT_CLIENT_DATA_DIR_FLAG,
+			Usage:  "data dir",
+			Value:  os.TempDir(),
+			EnvVar: "DATA_DIR",
+		},
+	)
 }
 
 func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {

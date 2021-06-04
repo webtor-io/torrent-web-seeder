@@ -87,47 +87,49 @@ const (
 	COMPLETED_PIECES                       = "completed_pieces"
 )
 
-func RegisterSnapshotFlags(c *cli.App) {
-	c.Flags = append(c.Flags, cli.BoolFlag{
-		Name:   USE_SNAPSHOT,
-		EnvVar: "USE_SNAPSHOT",
-	})
-	c.Flags = append(c.Flags, cli.Float64Flag{
-		Name:   SNAPSHOT_START_THRESHOLD,
-		Value:  0.5,
-		EnvVar: "SNAPSHOT_START_THRESHOLD",
-	})
-	c.Flags = append(c.Flags, cli.Float64Flag{
-		Name:   SNAPSHOT_DOWNLOAD_RATIO,
-		Value:  2.0,
-		EnvVar: "SNAPSHOT_DOWNLOAD_RATIO",
-	})
-	c.Flags = append(c.Flags, cli.Float64Flag{
-		Name:   SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD,
-		Value:  0.75,
-		EnvVar: "SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD",
-	})
-	c.Flags = append(c.Flags, cli.Int64Flag{
-		Name:   SNAPSHOT_TORRENT_SIZE_LIMIT,
-		Value:  10,
-		EnvVar: "SNAPSHOT_TORRENT_SIZE_LIMIT",
-	})
-	c.Flags = append(c.Flags, cli.BoolFlag{
-		Name:   AWS_BUCKET_SPREAD,
-		EnvVar: "AWS_BUCKET_SPREAD",
-	})
-	c.Flags = append(c.Flags, cli.IntFlag{
-		Name:   AWS_CONCURRENCY,
-		Usage:  "AWS Concurrency",
-		Value:  5,
-		EnvVar: "AWS_CONCURRENCY",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   AWS_BUCKET,
-		Usage:  "AWS Bucket",
-		Value:  "",
-		EnvVar: "AWS_BUCKET",
-	})
+func RegisterSnapshotFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.BoolFlag{
+			Name:   USE_SNAPSHOT,
+			EnvVar: "USE_SNAPSHOT",
+		},
+		cli.Float64Flag{
+			Name:   SNAPSHOT_START_THRESHOLD,
+			Value:  0.5,
+			EnvVar: "SNAPSHOT_START_THRESHOLD",
+		},
+		cli.Float64Flag{
+			Name:   SNAPSHOT_DOWNLOAD_RATIO,
+			Value:  2.0,
+			EnvVar: "SNAPSHOT_DOWNLOAD_RATIO",
+		},
+		cli.Float64Flag{
+			Name:   SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD,
+			Value:  0.75,
+			EnvVar: "SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD",
+		},
+		cli.Int64Flag{
+			Name:   SNAPSHOT_TORRENT_SIZE_LIMIT,
+			Value:  10,
+			EnvVar: "SNAPSHOT_TORRENT_SIZE_LIMIT",
+		},
+		cli.BoolFlag{
+			Name:   AWS_BUCKET_SPREAD,
+			EnvVar: "AWS_BUCKET_SPREAD",
+		},
+		cli.IntFlag{
+			Name:   AWS_CONCURRENCY,
+			Usage:  "AWS Concurrency",
+			Value:  5,
+			EnvVar: "AWS_CONCURRENCY",
+		},
+		cli.StringFlag{
+			Name:   AWS_BUCKET,
+			Usage:  "AWS Bucket",
+			Value:  "",
+			EnvVar: "AWS_BUCKET",
+		},
+	)
 }
 
 func split(buf []byte, lim int) [][]byte {

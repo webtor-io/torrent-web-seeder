@@ -13,14 +13,15 @@ import (
 
 func configure(app *cli.App) {
 	app.Flags = []cli.Flag{}
-	cs.RegisterProbeFlags(app)
-	s.RegisterWebFlags(app)
-	s.RegisterTorrentClientFlags(app)
-	s.RegisterTorrentStoreFlags(app)
-	s.RegisterStatFlags(app)
-	s.RegisterMetaInfoFlags(app)
-	s.RegisterSnapshotFlags(app)
-	cs.RegisterS3ClientFlags(app)
+	app.Flags = cs.RegisterProbeFlags([]cli.Flag{})
+	app.Flags = s.RegisterWebFlags(app.Flags)
+	app.Flags = s.RegisterTorrentClientFlags(app.Flags)
+	app.Flags = s.RegisterTorrentStoreFlags(app.Flags)
+	app.Flags = s.RegisterStatFlags(app.Flags)
+	app.Flags = s.RegisterMetaInfoFlags(app.Flags)
+	app.Flags = s.RegisterSnapshotFlags(app.Flags)
+	app.Flags = s.RegisterTorrentFlags(app.Flags)
+	app.Flags = cs.RegisterS3ClientFlags(app.Flags)
 	app.Action = run
 }
 
@@ -39,7 +40,7 @@ func run(c *cli.Context) error {
 	}
 
 	// Setting Torrent
-	torrent := s.NewTorrent(torrentClient, metainfo)
+	torrent := s.NewTorrent(c, torrentClient, metainfo)
 
 	// Setting conter
 	counter := s.NewCounter()

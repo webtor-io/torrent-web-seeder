@@ -67,7 +67,9 @@ func (f *Formatter) Format(entry *logrus.Entry) ([]byte, error) {
 		}
 	}
 
-	data["message"] = entry.Message
+	if entry.Message != "" {
+		data["message"] = entry.Message
+	}
 
 	if s, ok := f.SeverityMap[entry.Level.String()]; ok {
 		data["severity"] = s

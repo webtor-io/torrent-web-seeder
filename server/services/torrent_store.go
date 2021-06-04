@@ -29,23 +29,28 @@ const (
 	TORRENT_STORE_PORT_FLAG = "torrent-store-port"
 )
 
-func RegisterTorrentStoreFlags(c *cli.App) {
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   TORRENT_STORE_HOST_FLAG,
-		Usage:  "torrent store host",
-		Value:  "",
-		EnvVar: "TORRENT_STORE_SERVICE_HOST, TORRENT_STORE_HOST",
-	})
-	c.Flags = append(c.Flags, cli.IntFlag{
-		Name:   TORRENT_STORE_PORT_FLAG,
-		Usage:  "torrent store port",
-		Value:  50051,
-		EnvVar: "TORRENT_STORE_SERVICE_PORT, TORRENT_STORE_PORT",
-	})
+func RegisterTorrentStoreFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:   TORRENT_STORE_HOST_FLAG,
+			Usage:  "torrent store host",
+			Value:  "",
+			EnvVar: "TORRENT_STORE_SERVICE_HOST, TORRENT_STORE_HOST",
+		},
+		cli.IntFlag{
+			Name:   TORRENT_STORE_PORT_FLAG,
+			Usage:  "torrent store port",
+			Value:  50051,
+			EnvVar: "TORRENT_STORE_SERVICE_PORT, TORRENT_STORE_PORT",
+		},
+	)
 }
 
 func NewTorrentStore(c *cli.Context) *TorrentStore {
-	return &TorrentStore{host: c.String(TORRENT_STORE_HOST_FLAG), port: c.Int(TORRENT_STORE_PORT_FLAG), inited: false}
+	return &TorrentStore{
+		host: c.String(TORRENT_STORE_HOST_FLAG),
+		port: c.Int(TORRENT_STORE_PORT_FLAG),
+	}
 }
 
 func (s *TorrentStore) get() (ts.TorrentStoreClient, error) {

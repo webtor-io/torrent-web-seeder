@@ -35,35 +35,37 @@ const (
 )
 
 // RegisterS3ClientFlags registers cli flags for S3 client
-func RegisterS3ClientFlags(c *cli.App) {
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   awsAccessKeyID,
-		Usage:  "AWS Access Key ID",
-		Value:  "",
-		EnvVar: "AWS_ACCESS_KEY_ID",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   awsSecretAccessKey,
-		Usage:  "AWS Secret Access Key",
-		Value:  "",
-		EnvVar: "AWS_SECRET_ACCESS_KEY",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   awsEndpoint,
-		Usage:  "AWS Endpoint",
-		Value:  "",
-		EnvVar: "AWS_ENDPOINT",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   awsRegion,
-		Usage:  "AWS Region",
-		Value:  "",
-		EnvVar: "AWS_REGION",
-	})
-	c.Flags = append(c.Flags, cli.BoolFlag{
-		Name:   awsNoSSL,
-		EnvVar: "AWS_NO_SSL",
-	})
+func RegisterS3ClientFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:   awsAccessKeyID,
+			Usage:  "AWS Access Key ID",
+			Value:  "",
+			EnvVar: "AWS_ACCESS_KEY_ID",
+		},
+		cli.StringFlag{
+			Name:   awsSecretAccessKey,
+			Usage:  "AWS Secret Access Key",
+			Value:  "",
+			EnvVar: "AWS_SECRET_ACCESS_KEY",
+		},
+		cli.StringFlag{
+			Name:   awsEndpoint,
+			Usage:  "AWS Endpoint",
+			Value:  "",
+			EnvVar: "AWS_ENDPOINT",
+		},
+		cli.StringFlag{
+			Name:   awsRegion,
+			Usage:  "AWS Region",
+			Value:  "",
+			EnvVar: "AWS_REGION",
+		},
+		cli.BoolFlag{
+			Name:   awsNoSSL,
+			EnvVar: "AWS_NO_SSL",
+		},
+	)
 }
 
 // NewS3Client initializes S3Client

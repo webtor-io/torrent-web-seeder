@@ -5,21 +5,41 @@ import (
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/urfave/cli"
 
 	"github.com/anacrolix/torrent"
 )
+
+const (
+	MAGNET = "magnet"
+)
+
+func RegisterTorrentFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:   MAGNET,
+			Usage:  "magnet",
+			EnvVar: "MAGNET",
+		},
+	)
+}
 
 type Torrent struct {
 	t      *torrent.Torrent
 	tcS    *TorrentClient
 	miS    *MetaInfo
+	magnet string
 	mux    sync.Mutex
 	err    error
 	inited bool
 }
 
-func NewTorrent(tcS *TorrentClient, miS *MetaInfo) *Torrent {
-	return &Torrent{tcS: tcS, miS: miS, inited: false}
+func NewTorrent(c *cli.Context, tcS *TorrentClient, miS *MetaInfo) *Torrent {
+	return &Torrent{
+		tcS:    tcS,
+		miS:    miS,
+		magnet: c.String(MAGNET),
+	}
 }
 
 func (s *Torrent) Ready() bool {
@@ -28,17 +48,25 @@ func (s *Torrent) Ready() bool {
 
 func (s *Torrent) get() (*torrent.Torrent, error) {
 	log.Info("Initializing Torrent")
-	mi, err := s.miS.Get()
-	if err != nil {
-		return nil, err
-	}
 	cl, err := s.tcS.Get()
 	if err != nil {
 		return nil, err
 	}
-	t, err := cl.AddTorrent(mi)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to add torrent")
+	var t *torrent.Torrent
+	if s.magnet != "" {
+		t, err = cl.AddMagnet(s.magnet)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to add magnet")
+		}
+	} else {
+		mi, err := s.miS.Get()
+		if err != nil {
+			return nil, err
+		}
+		t, err = cl.AddTorrent(mi)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to add torrent")
+		}
 	}
 	return t, nil
 }

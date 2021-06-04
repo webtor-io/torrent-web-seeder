@@ -45,17 +45,19 @@ const (
 	STAT_PORT_FLAG = "stat-port"
 )
 
-func RegisterStatFlags(c *cli.App) {
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:  STAT_HOST_FLAG,
-		Usage: "stat listening host",
-		Value: "",
-	})
-	c.Flags = append(c.Flags, cli.IntFlag{
-		Name:  STAT_PORT_FLAG,
-		Usage: "stat listening port",
-		Value: 50051,
-	})
+func RegisterStatFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:  STAT_HOST_FLAG,
+			Usage: "stat listening host",
+			Value: "",
+		},
+		cli.IntFlag{
+			Name:  STAT_PORT_FLAG,
+			Usage: "stat listening port",
+			Value: 50051,
+		},
+	)
 }
 
 func NewStat(c *cli.Context, ts *Torrent) *Stat {

@@ -3,6 +3,7 @@ package torrent
 import (
 	"net"
 	"sync"
+	"time"
 
 	"github.com/anacrolix/dht/v2/krpc"
 	pp "github.com/anacrolix/torrent/peer_protocol"
@@ -25,7 +26,7 @@ const (
 // represents a single connection (t=pexAdd) or disconnection (t=pexDrop) event
 type pexEvent struct {
 	t    pexEventType
-	addr net.Addr
+	addr PeerRemoteAddr
 	f    pp.PexPeerFlags
 }
 
@@ -45,7 +46,7 @@ func (me *pexMsgFactory) DeltaLen() int {
 type addrKey string
 
 // Returns the key to use to identify a given addr in the factory.
-func (me *pexMsgFactory) addrKey(addr net.Addr) addrKey {
+func (me *pexMsgFactory) addrKey(addr PeerRemoteAddr) addrKey {
 	return addrKey(addr.String())
 }
 
@@ -161,12 +162,10 @@ func (me *pexMsgFactory) PexMsg() pp.PexMsg {
 
 // Convert an arbitrary torrent peer Addr into one that can be represented by the compact addr
 // format.
-func nodeAddr(addr net.Addr) (_ krpc.NodeAddr, ok bool) {
-	ipport, ok := tryIpPortFromNetAddr(addr)
-	if !ok {
-		return
-	}
-	return krpc.NodeAddr{IP: shortestIP(ipport.IP), Port: ipport.Port}, true
+func nodeAddr(addr PeerRemoteAddr) (krpc.NodeAddr, bool) {
+	ipport, _ := tryIpPortFromNetAddr(addr)
+	ok := ipport.IP != nil
+	return krpc.NodeAddr{IP: shortestIP(ipport.IP), Port: ipport.Port}, ok
 }
 
 // mainly for the krpc marshallers
@@ -181,6 +180,7 @@ func shortestIP(ip net.IP) net.IP {
 type pexState struct {
 	ev        []pexEvent    // event feed, append-only
 	hold      []pexEvent    // delayed drops
+	rest      time.Time     // cooldown deadline on inbound
 	nc        int           // net number of alive conns
 	initCache pexMsgFactory // last generated initial message
 	initSeq   int           // number of events which went into initCache
@@ -192,6 +192,7 @@ func (s *pexState) Reset() {
 	s.ev = nil
 	s.hold = nil
 	s.nc = 0
+	s.rest = time.Time{}
 	s.initLock.Lock()
 	s.initCache = pexMsgFactory{}
 	s.initSeq = 0

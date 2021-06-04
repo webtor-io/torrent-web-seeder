@@ -3,12 +3,13 @@ package dht
 import (
 	"time"
 
+	"github.com/anacrolix/dht/v2/int160"
 	"github.com/anacrolix/dht/v2/krpc"
 )
 
 type nodeKey struct {
-	addr Addr
-	id   int160
+	Addr Addr
+	Id   int160.T
 }
 
 type node struct {
@@ -16,26 +17,31 @@ type node struct {
 	announceToken *string
 	readOnly      bool
 
-	lastGotQuery    time.Time
-	lastGotResponse time.Time
+	lastGotQuery    time.Time // From the remote node
+	lastGotResponse time.Time // From the remote node
 
+	numReceivesFrom     int
 	consecutiveFailures int
 }
 
-func (n *node) hasAddrAndID(addr Addr, id int160) bool {
-	return id == n.id && n.addr.String() == addr.String()
+func (s *Server) IsQuestionable(n *node) bool {
+	return !s.IsGood(n) && !s.nodeIsBad(n)
+}
+
+func (n *node) hasAddrAndID(addr Addr, id int160.T) bool {
+	return id == n.Id && n.Addr.String() == addr.String()
 }
 
 func (n *node) IsSecure() bool {
-	return NodeIdSecure(n.id.AsByteArray(), n.addr.IP())
+	return NodeIdSecure(n.Id.AsByteArray(), n.Addr.IP())
 }
 
 func (n *node) idString() string {
-	return n.id.ByteString()
+	return n.Id.ByteString()
 }
 
 func (n *node) NodeInfo() (ret krpc.NodeInfo) {
-	ret.Addr = n.addr.KRPC()
+	ret.Addr = n.Addr.KRPC()
 	if n := copy(ret.ID[:], n.idString()); n != 20 {
 		panic(n)
 	}
@@ -43,15 +49,10 @@ func (n *node) NodeInfo() (ret krpc.NodeInfo) {
 }
 
 // Per the spec in BEP 5.
-func (n *node) IsGood() bool {
-	if n.id.IsZero() {
+func (s *Server) IsGood(n *node) bool {
+	if s.nodeIsBad(n) {
 		return false
 	}
-	if time.Since(n.lastGotResponse) < 15*time.Minute {
-		return true
-	}
-	if !n.lastGotResponse.IsZero() && time.Since(n.lastGotQuery) < 15*time.Minute {
-		return true
-	}
-	return false
+	return time.Since(n.lastGotResponse) < 15*time.Minute ||
+		!n.lastGotResponse.IsZero() && time.Since(n.lastGotQuery) < 15*time.Minute
 }

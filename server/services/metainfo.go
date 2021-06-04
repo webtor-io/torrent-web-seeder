@@ -28,21 +28,26 @@ const (
 	META_INFO_INPUT_FLAG     = "input"
 )
 
-func RegisterMetaInfoFlags(c *cli.App) {
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   META_INFO_INFO_HASH_FLAG,
-		Usage:  "torrent infohash",
-		EnvVar: "TORRENT_INFO_HASH, INFO_HASH",
-	})
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:   META_INFO_INPUT_FLAG,
-		Usage:  "torrent file path",
-		EnvVar: "INPUT",
-	})
+func RegisterMetaInfoFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:   META_INFO_INFO_HASH_FLAG,
+			Usage:  "torrent infohash",
+			EnvVar: "TORRENT_INFO_HASH, INFO_HASH",
+		},
+		cli.StringFlag{
+			Name:   META_INFO_INPUT_FLAG,
+			Usage:  "torrent file path",
+			EnvVar: "INPUT",
+		},
+	)
 }
 
 func NewMetaInfo(c *cli.Context, cl *TorrentStore) *MetaInfo {
-	return &MetaInfo{cl: cl, infoHash: c.String(META_INFO_INFO_HASH_FLAG), input: c.String(META_INFO_INPUT_FLAG), inited: false}
+	return &MetaInfo{
+		cl: cl, infoHash: c.String(META_INFO_INFO_HASH_FLAG),
+		input: c.String(META_INFO_INPUT_FLAG),
+	}
 }
 
 func (s *MetaInfo) Get() (*metainfo.MetaInfo, error) {

@@ -21,23 +21,24 @@ const (
 	WEB_GRACE_FLAG = "grace"
 )
 
-func RegisterWebFlags(c *cli.App) {
-	c.Flags = append(c.Flags, cli.StringFlag{
-		Name:  WEB_HOST_FLAG,
-		Usage: "listening host",
-		Value: "",
-	})
-	c.Flags = append(c.Flags, cli.IntFlag{
-		Name:  WEB_PORT_FLAG,
-		Usage: "http listening port",
-		Value: 8080,
-	})
-	c.Flags = append(c.Flags, cli.IntFlag{
-		Name:   WEB_GRACE_FLAG,
-		Usage:  "grace in seconds",
-		Value:  600,
-		EnvVar: "GRACE",
-	})
+func RegisterWebFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:  WEB_HOST_FLAG,
+			Usage: "listening host",
+			Value: "",
+		},
+		cli.IntFlag{
+			Name:  WEB_PORT_FLAG,
+			Usage: "http listening port",
+			Value: 8080,
+		},
+		cli.IntFlag{
+			Name:   WEB_GRACE_FLAG,
+			Usage:  "grace in seconds",
+			Value:  600,
+			EnvVar: "GRACE",
+		})
 }
 
 type Web struct {
