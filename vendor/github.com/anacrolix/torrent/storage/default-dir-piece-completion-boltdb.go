@@ -1,5 +1,5 @@
-//go:build !cgo
-// +build !cgo
+//go:build !cgo && !noboltdb && !wasm
+// +build !cgo,!noboltdb,!wasm
 
 package storage
 

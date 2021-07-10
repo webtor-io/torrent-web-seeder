@@ -1,13 +1,17 @@
-# code.cloudfoundry.org/bytefmt v0.0.0-20210524144015-27119551aaea
+# code.cloudfoundry.org/bytefmt v0.0.0-20210608160410-67692ebc98de
 ## explicit
 code.cloudfoundry.org/bytefmt
 # crawshaw.io/sqlite v0.3.3-0.20210127221821-98b1f83c5508
 crawshaw.io/sqlite
 crawshaw.io/sqlite/c
 crawshaw.io/sqlite/sqlitex
-# github.com/RoaringBitmap/roaring v0.6.0
+# github.com/RoaringBitmap/roaring v0.9.1
+## explicit
 github.com/RoaringBitmap/roaring
 github.com/RoaringBitmap/roaring/internal
+# github.com/anacrolix/chansync v0.0.0-20210623023814-793ff0e2924e
+## explicit
+github.com/anacrolix/chansync
 # github.com/anacrolix/confluence v1.7.1-0.20210311004351-d642adb8546c
 github.com/anacrolix/confluence/debug-writer
 # github.com/anacrolix/dht/v2 v2.9.1
@@ -22,7 +26,7 @@ github.com/anacrolix/go-libutp
 # github.com/anacrolix/log v0.9.0
 ## explicit
 github.com/anacrolix/log
-# github.com/anacrolix/missinggo v1.2.1
+# github.com/anacrolix/missinggo v1.3.0
 github.com/anacrolix/missinggo
 github.com/anacrolix/missinggo/bitmap
 github.com/anacrolix/missinggo/expect
@@ -36,10 +40,11 @@ github.com/anacrolix/missinggo/pubsub
 github.com/anacrolix/missinggo/slices
 # github.com/anacrolix/missinggo/perf v1.0.0
 github.com/anacrolix/missinggo/perf
-# github.com/anacrolix/missinggo/v2 v2.5.0
+# github.com/anacrolix/missinggo/v2 v2.5.2-0.20210623112532-e21e4ddc477d
 github.com/anacrolix/missinggo/v2
 github.com/anacrolix/missinggo/v2/bitmap
 github.com/anacrolix/missinggo/v2/conntrack
+github.com/anacrolix/missinggo/v2/expect
 github.com/anacrolix/missinggo/v2/iter
 github.com/anacrolix/missinggo/v2/pproffd
 github.com/anacrolix/missinggo/v2/prioritybitmap
@@ -47,15 +52,16 @@ github.com/anacrolix/missinggo/v2/resource
 # github.com/anacrolix/mmsg v1.0.0
 github.com/anacrolix/mmsg
 github.com/anacrolix/mmsg/socket
-# github.com/anacrolix/multiless v0.1.0
+# github.com/anacrolix/multiless v0.1.1-0.20210529082330-de2f6cf29619
 github.com/anacrolix/multiless
 # github.com/anacrolix/stm v0.3.0-alpha
 github.com/anacrolix/stm
 github.com/anacrolix/stm/rate
 github.com/anacrolix/stm/stmutil
-# github.com/anacrolix/sync v0.2.0
+# github.com/anacrolix/sync v0.4.0
+## explicit
 github.com/anacrolix/sync
-# github.com/anacrolix/torrent v1.28.0
+# github.com/anacrolix/torrent v1.28.1-0.20210702044313-e1cac00bd5da
 ## explicit
 github.com/anacrolix/torrent
 github.com/anacrolix/torrent/bencode
@@ -68,16 +74,22 @@ github.com/anacrolix/torrent/metainfo
 github.com/anacrolix/torrent/mmap_span
 github.com/anacrolix/torrent/mse
 github.com/anacrolix/torrent/peer_protocol
+github.com/anacrolix/torrent/request-strategy
 github.com/anacrolix/torrent/segments
 github.com/anacrolix/torrent/storage
 github.com/anacrolix/torrent/tracker
+github.com/anacrolix/torrent/tracker/http
+github.com/anacrolix/torrent/tracker/shared
+github.com/anacrolix/torrent/tracker/udp
+github.com/anacrolix/torrent/types
+github.com/anacrolix/torrent/version
 github.com/anacrolix/torrent/webseed
 github.com/anacrolix/torrent/webtorrent
 # github.com/anacrolix/upnp v0.1.2-0.20200416075019-5e9378ed1425
 github.com/anacrolix/upnp
 # github.com/anacrolix/utp v0.1.0
 github.com/anacrolix/utp
-# github.com/aws/aws-sdk-go v1.38.54
+# github.com/aws/aws-sdk-go v1.39.4
 ## explicit
 github.com/aws/aws-sdk-go/aws
 github.com/aws/aws-sdk-go/aws/arn
@@ -131,8 +143,12 @@ github.com/aws/aws-sdk-go/service/sts/stsiface
 # github.com/bakins/logrus-middleware v0.0.0-20180426214643-ce4c6f8deb07
 ## explicit
 github.com/bakins/logrus-middleware
+# github.com/bakins/test-helpers v0.0.0-20141028124846-af83df64dc31
+## explicit
 # github.com/benbjohnson/immutable v0.3.0
 github.com/benbjohnson/immutable
+# github.com/bits-and-blooms/bitset v1.2.0
+github.com/bits-and-blooms/bitset
 # github.com/bradfitz/iter v0.0.0-20191230175014-e8f45d346db8
 github.com/bradfitz/iter
 # github.com/cpuguy83/go-md2man/v2 v2.0.0
@@ -148,7 +164,8 @@ github.com/edsrzf/mmap-go
 github.com/elliotchance/orderedmap
 # github.com/go-pg/migrations/v8 v8.1.0
 github.com/go-pg/migrations/v8
-# github.com/go-pg/pg/v10 v10.9.1
+# github.com/go-pg/pg/v10 v10.10.1
+## explicit
 github.com/go-pg/pg/v10
 github.com/go-pg/pg/v10/internal
 github.com/go-pg/pg/v10/internal/parser
@@ -177,11 +194,14 @@ github.com/golang/protobuf/ptypes/duration
 github.com/golang/protobuf/ptypes/timestamp
 # github.com/google/btree v1.0.1
 github.com/google/btree
+# github.com/google/go-cmp v0.5.6
+## explicit
 # github.com/google/uuid v1.2.0
 github.com/google/uuid
 # github.com/gorilla/websocket v1.4.2
 github.com/gorilla/websocket
-# github.com/gosuri/uilive v0.0.3
+# github.com/gosuri/uilive v0.0.4
+## explicit
 github.com/gosuri/uilive
 # github.com/gosuri/uiprogress v0.0.1
 ## explicit
@@ -210,7 +230,8 @@ github.com/joonix/log
 # github.com/juju/ratelimit v1.0.1
 ## explicit
 github.com/juju/ratelimit
-# github.com/mattn/go-isatty v0.0.10
+# github.com/mattn/go-isatty v0.0.13
+## explicit
 github.com/mattn/go-isatty
 # github.com/mschoch/smat v0.2.0
 github.com/mschoch/smat
@@ -235,9 +256,9 @@ github.com/pion/dtls/v2/pkg/protocol/alert
 github.com/pion/dtls/v2/pkg/protocol/extension
 github.com/pion/dtls/v2/pkg/protocol/handshake
 github.com/pion/dtls/v2/pkg/protocol/recordlayer
-# github.com/pion/ice/v2 v2.1.7
+# github.com/pion/ice/v2 v2.1.8
 github.com/pion/ice/v2
-# github.com/pion/interceptor v0.0.12
+# github.com/pion/interceptor v0.0.13
 github.com/pion/interceptor
 github.com/pion/interceptor/pkg/nack
 github.com/pion/interceptor/pkg/report
@@ -276,7 +297,8 @@ github.com/pion/turn/v2/internal/proto
 github.com/pion/turn/v2/internal/server
 # github.com/pion/udp v0.1.1
 github.com/pion/udp
-# github.com/pion/webrtc/v3 v3.0.27
+# github.com/pion/webrtc/v3 v3.0.31
+## explicit
 github.com/pion/webrtc/v3
 github.com/pion/webrtc/v3/internal/mux
 github.com/pion/webrtc/v3/internal/util
@@ -303,7 +325,8 @@ github.com/tmthrgd/go-hex
 github.com/urfave/cli
 # github.com/vmihailenco/bufpool v0.1.11
 github.com/vmihailenco/bufpool
-# github.com/vmihailenco/msgpack/v5 v5.3.0
+# github.com/vmihailenco/msgpack/v5 v5.3.4
+## explicit
 github.com/vmihailenco/msgpack/v5
 github.com/vmihailenco/msgpack/v5/msgpcode
 # github.com/vmihailenco/tagparser v0.1.2
@@ -320,37 +343,24 @@ github.com/webtor-io/common-services
 # github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5
 ## explicit
 github.com/webtor-io/gracenet
-# github.com/webtor-io/torrent-store v0.0.0-20201015160243-d038b539870e
+# github.com/webtor-io/torrent-store v0.0.0-20210710130004-9afe9e0d1ff5
 ## explicit
 github.com/webtor-io/torrent-store/torrent-store
 # github.com/willf/bitset v1.1.11
 github.com/willf/bitset
 # github.com/willf/bloom v2.0.3+incompatible
 github.com/willf/bloom
-# go.etcd.io/bbolt v1.3.5
+# go.etcd.io/bbolt v1.3.6
+## explicit
 go.etcd.io/bbolt
-# go.opentelemetry.io/otel v0.19.0
-go.opentelemetry.io/otel
-go.opentelemetry.io/otel/attribute
-go.opentelemetry.io/otel/codes
-go.opentelemetry.io/otel/internal
-go.opentelemetry.io/otel/internal/baggage
-go.opentelemetry.io/otel/internal/global
-go.opentelemetry.io/otel/internal/trace/noop
-go.opentelemetry.io/otel/propagation
-go.opentelemetry.io/otel/unit
-# go.opentelemetry.io/otel/metric v0.19.0
-go.opentelemetry.io/otel/metric
-go.opentelemetry.io/otel/metric/number
-go.opentelemetry.io/otel/metric/registry
-# go.opentelemetry.io/otel/trace v0.19.0
-go.opentelemetry.io/otel/trace
-# golang.org/x/crypto v0.0.0-20210421170649-83a5a9bb288b
+# golang.org/x/crypto v0.0.0-20210616213533-5ff15b29337e
+## explicit
 golang.org/x/crypto/cryptobyte
 golang.org/x/crypto/cryptobyte/asn1
 golang.org/x/crypto/curve25519
+golang.org/x/crypto/curve25519/internal/field
 golang.org/x/crypto/pbkdf2
-# golang.org/x/net v0.0.0-20210428140749-89ef3d95e781
+# golang.org/x/net v0.0.0-20210614182718-04defd469f4e
 golang.org/x/net/bpf
 golang.org/x/net/context
 golang.org/x/net/dns/dnsmessage
@@ -367,7 +377,8 @@ golang.org/x/net/proxy
 golang.org/x/net/trace
 # golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 golang.org/x/sync/singleflight
-# golang.org/x/sys v0.0.0-20210426230700-d19ff857e887
+# golang.org/x/sys v0.0.0-20210630005230-0f9fa26af87c
+## explicit
 golang.org/x/sys/cpu
 golang.org/x/sys/internal/unsafeheader
 golang.org/x/sys/unix
@@ -377,17 +388,18 @@ golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
-# golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
+# golang.org/x/time v0.0.0-20210611083556-38a9dc6acbc6
 ## explicit
 golang.org/x/time/rate
 # golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1
 golang.org/x/xerrors
 golang.org/x/xerrors/internal
-# google.golang.org/genproto v0.0.0-20201015140912-32ed001d685c
+# google.golang.org/genproto v0.0.0-20210708141623-e76da96a951f
+## explicit
 google.golang.org/genproto/googleapis/api/annotations
 google.golang.org/genproto/googleapis/logging/type
 google.golang.org/genproto/googleapis/rpc/status
-# google.golang.org/grpc v1.38.0
+# google.golang.org/grpc v1.39.0
 ## explicit
 google.golang.org/grpc
 google.golang.org/grpc/attributes
@@ -435,7 +447,7 @@ google.golang.org/grpc/serviceconfig
 google.golang.org/grpc/stats
 google.golang.org/grpc/status
 google.golang.org/grpc/tap
-# google.golang.org/protobuf v1.26.0
+# google.golang.org/protobuf v1.27.1
 google.golang.org/protobuf/encoding/protojson
 google.golang.org/protobuf/encoding/prototext
 google.golang.org/protobuf/encoding/protowire

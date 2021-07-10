@@ -2,6 +2,8 @@ package services
 
 import (
 	"bytes"
+	"crypto/md5"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -467,10 +469,15 @@ func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPiece
 				}
 				key := t.InfoHash().HexString() + "/" + p.Info().Hash().HexString()
 
+				h := md5.Sum(b)
+
+				md5s := base64.StdEncoding.EncodeToString(h[:])
+
 				_, err = cl.PutObject(&s3.PutObjectInput{
-					Bucket: aws.String(pb),
-					Key:    aws.String(key),
-					Body:   bytes.NewReader(b),
+					Bucket:     aws.String(pb),
+					Key:        aws.String(key),
+					Body:       bytes.NewReader(b),
+					ContentMD5: aws.String(md5s),
 				})
 
 				if err != nil {
