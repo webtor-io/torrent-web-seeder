@@ -204,10 +204,12 @@ func (s *Snapshot) fetchDownloadedSize(cl *s3.S3, t *torrent.Torrent) (int64, er
 func (s *Snapshot) storeDownloadedSize(cl *s3.S3, t *torrent.Torrent, i int64) error {
 	key := DOWNLOADED_SIZE + "/" + t.InfoHash().HexString()
 	log.Infof("Store downloaded size bucket=%v key=%v size=%v", s.awsBucket, key, i)
+	b := []byte(strconv.Itoa(int(i)))
 	_, err := cl.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(s.awsBucket),
-		Key:    aws.String(key),
-		Body:   bytes.NewReader([]byte(strconv.Itoa(int(i)))),
+		Bucket:     aws.String(s.awsBucket),
+		Key:        aws.String(key),
+		Body:       bytes.NewReader(b),
+		ContentMD5: s.makeAWSMD5(b),
 	})
 	if err != nil {
 		return errors.Wrapf(err, "Failed to store downloaded size bucket=%v key=%v", s.awsBucket, key)
@@ -235,10 +237,12 @@ func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
 	timestamp := fmt.Sprintf("%v", time.Now().Unix())
 	key := TOUCH + "/" + t.InfoHash().HexString()
 	log.Infof("Touch torrent bucket=%v key=%v timestamp=%v", s.awsBucket, key, timestamp)
+	b := []byte(timestamp)
 	_, err := cl.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(s.awsBucket),
-		Key:    aws.String(key),
-		Body:   bytes.NewReader([]byte(timestamp)),
+		Bucket:     aws.String(s.awsBucket),
+		Key:        aws.String(key),
+		Body:       bytes.NewReader(b),
+		ContentMD5: s.makeAWSMD5(b),
 	})
 	if err != nil {
 		return errors.Wrapf(err, "Failed to touch torrent bucket=%v key=%v", s.awsBucket, key)
@@ -252,10 +256,12 @@ func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *Compl
 	}
 	key := COMPLETED_PIECES + "/" + t.InfoHash().HexString()
 	log.Infof("Store completed pieces bucket=%v key=%v len=%v", s.awsBucket, key, st.Len())
+	b := st.ToBytes()
 	_, err := cl.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(s.awsBucket),
-		Key:    aws.String(key),
-		Body:   bytes.NewReader(st.ToBytes()),
+		Bucket:     aws.String(s.awsBucket),
+		Key:        aws.String(key),
+		Body:       bytes.NewReader(b),
+		ContentMD5: s.makeAWSMD5(b),
 	})
 	if err != nil {
 		return errors.Wrap(err, "Failed to store completed pieces")
@@ -263,10 +269,12 @@ func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *Compl
 	if st.Len() == t.NumPieces() {
 		key := "done/" + t.InfoHash().HexString()
 		log.Infof("Store done marker bucket=%v key=%v", s.awsBucket, key)
+		b := []byte("")
 		_, err := cl.PutObject(&s3.PutObjectInput{
-			Bucket: aws.String(s.awsBucket),
-			Key:    aws.String(key),
-			Body:   bytes.NewReader([]byte("")),
+			Bucket:     aws.String(s.awsBucket),
+			Key:        aws.String(key),
+			Body:       bytes.NewReader(b),
+			ContentMD5: s.makeAWSMD5(b),
 		})
 		if err != nil {
 			return errors.Wrapf(err, "Failed to store done marker bucket=%v key=%v", s.awsBucket, key)
@@ -283,9 +291,10 @@ func (s *Snapshot) storeTorrent(cl *s3.S3, t *torrent.Torrent) error {
 		return errors.Wrap(err, "Failed to bencode torrent")
 	}
 	_, err = cl.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(s.awsBucket),
-		Key:    aws.String(key),
-		Body:   bytes.NewReader(data),
+		Bucket:     aws.String(s.awsBucket),
+		Key:        aws.String(key),
+		Body:       bytes.NewReader(data),
+		ContentMD5: s.makeAWSMD5(data),
 	})
 	if err != nil {
 		return errors.Wrapf(err, "Failed to store torrent bucket=%v key=%v", s.awsBucket, key)
@@ -453,6 +462,12 @@ func (s *Snapshot) Start() error {
 	return nil
 }
 
+func (s *Snapshot) makeAWSMD5(b []byte) *string {
+	h := md5.Sum(b)
+	m := base64.StdEncoding.EncodeToString(h[:])
+	return aws.String(m)
+}
+
 func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPieces, ch chan *torrent.Piece, pb string) {
 	var wg sync.WaitGroup
 	for i := 0; i < s.awsConcurrency; i++ {
@@ -469,15 +484,11 @@ func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPiece
 				}
 				key := t.InfoHash().HexString() + "/" + p.Info().Hash().HexString()
 
-				h := md5.Sum(b)
-
-				md5s := base64.StdEncoding.EncodeToString(h[:])
-
 				_, err = cl.PutObject(&s3.PutObjectInput{
 					Bucket:     aws.String(pb),
 					Key:        aws.String(key),
 					Body:       bytes.NewReader(b),
-					ContentMD5: aws.String(md5s),
+					ContentMD5: s.makeAWSMD5(b),
 				})
 
 				if err != nil {
