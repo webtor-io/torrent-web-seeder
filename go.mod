@@ -19,7 +19,7 @@ require (
 	github.com/gosuri/uilive v0.0.4 // indirect
 	github.com/gosuri/uiprogress v0.0.1
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0
-	github.com/joonix/log v0.0.0-20200409080653-9c1d2ceb5f1d
+	github.com/joonix/log v0.0.0-20200409080653-9c1d2ceb5f1d // indirect
 	github.com/juju/ratelimit v1.0.1
 	github.com/mattn/go-isatty v0.0.13 // indirect
 	github.com/pion/webrtc/v3 v3.0.31 // indirect

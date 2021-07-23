@@ -226,7 +226,6 @@ github.com/jinzhu/inflection
 github.com/jmespath/go-jmespath
 # github.com/joonix/log v0.0.0-20200409080653-9c1d2ceb5f1d
 ## explicit
-github.com/joonix/log
 # github.com/juju/ratelimit v1.0.1
 ## explicit
 github.com/juju/ratelimit
@@ -396,8 +395,6 @@ golang.org/x/xerrors
 golang.org/x/xerrors/internal
 # google.golang.org/genproto v0.0.0-20210708141623-e76da96a951f
 ## explicit
-google.golang.org/genproto/googleapis/api/annotations
-google.golang.org/genproto/googleapis/logging/type
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v1.39.0
 ## explicit
