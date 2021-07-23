@@ -8,7 +8,6 @@ import (
 	"time"
 
 	logrusmiddleware "github.com/bakins/logrus-middleware"
-	joonix "github.com/joonix/log"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -83,7 +82,9 @@ func (s *Web) Serve() error {
 
 	mux := http.NewServeMux()
 	logger := log.New()
-	logger.SetFormatter(joonix.NewFormatter())
+	log.SetFormatter(&log.TextFormatter{
+		FullTimestamp: true,
+	})
 	l := logrusmiddleware.Middleware{
 		Logger: logger,
 	}

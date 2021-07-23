@@ -64,8 +64,11 @@ func run(c *cli.Context) error {
 	// Setting Stat
 	stat := s.NewStat(c, torrent)
 
+	// Setting BucketPool
+	bp := s.NewBucketPool()
+
 	// Setting WebSeeder
-	webSeeder := s.NewWebSeeder(torrent, counter)
+	webSeeder := s.NewWebSeeder(torrent, counter, bp)
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)

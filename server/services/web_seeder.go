@@ -10,7 +10,6 @@ import (
 
 	"io"
 
-	"code.cloudfoundry.org/bytefmt"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/anacrolix/torrent/bencode"
@@ -24,11 +23,16 @@ const (
 type WebSeeder struct {
 	t   *Torrent
 	c   *Counter
+	bp  *BucketPool
 	err error
 }
 
-func NewWebSeeder(t *Torrent, c *Counter) *WebSeeder {
-	return &WebSeeder{t: t, c: c}
+func NewWebSeeder(t *Torrent, c *Counter, bp *BucketPool) *WebSeeder {
+	return &WebSeeder{
+		t:  t,
+		c:  c,
+		bp: bp,
+	}
 }
 
 func (s *WebSeeder) renderTorrent(w http.ResponseWriter, r *http.Request) {
@@ -168,14 +172,14 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 				readahead = f.Length() / 10
 			}
 			torReader.SetReadahead(readahead)
-			if r.Header.Get("X-Download-Rate") != "" {
-				rate, err := bytefmt.ToBytes(r.Header.Get("X-Download-Rate"))
+			if r.Header.Get("X-Download-Rate") != "" && r.Header.Get("X-Session-ID") != "" {
+				b, err := s.bp.Get(r.Header.Get("X-Session-ID"), r.Header.Get("X-Download-Rate"))
 				if err != nil {
-					log.WithError(err).Error("Wrong download rate")
-					http.Error(w, "Wrong download rate", http.StatusInternalServerError)
+					log.WithError(err).Error("Failed to get bucket")
+					http.Error(w, "Failed to get bucket", http.StatusInternalServerError)
 					return
 				}
-				reader = NewThrottledReader(torReader, rate)
+				reader = NewThrottledReader(torReader, b)
 			} else {
 				reader = torReader
 			}
