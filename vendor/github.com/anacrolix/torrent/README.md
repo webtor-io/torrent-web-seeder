@@ -15,7 +15,7 @@ Some noteworthy package dependencies that can be used for other purposes include
 
 ## Installation
 
-Install the library package with `go get github.com/anacrolix/torrent`, or the provided cmds with `go get github.com/anacrolix/torrent/cmd/...`.
+Install the library package with `go get github.com/anacrolix/torrent`, or the provided cmds with `go install github.com/anacrolix/torrent/cmd/...@latest`.
 
 ## Library examples
 
@@ -42,6 +42,7 @@ There are several web-frontends and Android clients among the known public proje
  * [ANT-Downloader](https://github.com/anatasluo/ant)
  * [Go-PeersToHTTP](https://github.com/WinPooh32/peerstohttp)
  * [CortexFoundation/torrentfs](https://github.com/CortexFoundation/torrentfs): P2P file system of cortex full node
+ * [TorrServ](https://github.com/YouROK/TorrServer): Torrent streaming server over http.
 
 ## Help
 

@@ -53,7 +53,7 @@ type Client struct {
 
 	_mu    lockWithDeferreds
 	event  sync.Cond
-	closed missinggo.Event
+	closed chansync.SetOnce
 
 	config *ClientConfig
 	logger log.Logger
@@ -398,10 +398,8 @@ func (cl *Client) NewAnacrolixDhtServer(conn net.PacketConn) (s *dht.Server, err
 	return
 }
 
-func (cl *Client) Closed() <-chan struct{} {
-	cl.lock()
-	defer cl.unlock()
-	return cl.closed.C()
+func (cl *Client) Closed() chansync.Done {
+	return cl.closed.Done()
 }
 
 func (cl *Client) eachDhtServer(f func(DhtServer)) {
@@ -444,18 +442,6 @@ func (cl *Client) wantConns() bool {
 		}
 	}
 	return false
-}
-
-func (cl *Client) waitAccept() {
-	for {
-		if cl.closed.IsSet() {
-			return
-		}
-		if cl.wantConns() {
-			return
-		}
-		cl.event.Wait()
-	}
 }
 
 // TODO: Apply filters for non-standard networks, particularly rate-limiting.
@@ -539,7 +525,11 @@ func (cl *Client) incomingConnection(nc net.Conn) {
 	}
 	c := cl.newConnection(nc, false, nc.RemoteAddr(), nc.RemoteAddr().Network(),
 		regularNetConnPeerConnConnString(nc))
-	defer c.close()
+	defer func() {
+		cl.lock()
+		defer cl.unlock()
+		c.close()
+	}()
 	c.Discovery = PeerSourceIncoming
 	cl.runReceivedConn(c)
 }
@@ -918,11 +908,11 @@ func (cl *Client) runHandshookConn(c *PeerConn, t *Torrent) error {
 			connsToSelf.Add(1)
 			addr := c.conn.RemoteAddr().String()
 			cl.dopplegangerAddrs[addr] = struct{}{}
-		} else {
+		} /* else {
 			// Because the remote address is not necessarily the same as its client's torrent listen
 			// address, we won't record the remote address as a doppleganger. Instead, the initiator
 			// can record *us* as the doppleganger.
-		}
+		} */
 		return errors.New("local and remote peer ids are the same")
 	}
 	c.conn.SetWriteDeadline(time.Time{})
@@ -1323,7 +1313,11 @@ func (cl *Client) AddMagnet(uri string) (T *Torrent, err error) {
 }
 
 func (cl *Client) AddTorrent(mi *metainfo.MetaInfo) (T *Torrent, err error) {
-	T, _, err = cl.AddTorrentSpec(TorrentSpecFromMetaInfo(mi))
+	ts, err := TorrentSpecFromMetaInfoErr(mi)
+	if err != nil {
+		return
+	}
+	T, _, err = cl.AddTorrentSpec(ts)
 	return
 }
 
@@ -1421,14 +1415,6 @@ func firstNotNil(ips ...net.IP) net.IP {
 	return nil
 }
 
-func (cl *Client) eachDialer(f func(Dialer) bool) {
-	for _, s := range cl.dialers {
-		if !f(s) {
-			break
-		}
-	}
-}
-
 func (cl *Client) eachListener(f func(Listener) bool) {
 	for _, s := range cl.listeners {
 		if !f(s) {
@@ -1514,7 +1500,7 @@ func (cl *Client) clearAcceptLimits() {
 func (cl *Client) acceptLimitClearer() {
 	for {
 		select {
-		case <-cl.closed.LockedChan(cl.locker()):
+		case <-cl.closed.Done():
 			return
 		case <-time.After(15 * time.Minute):
 			cl.lock()

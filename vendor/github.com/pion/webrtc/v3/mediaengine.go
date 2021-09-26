@@ -12,6 +12,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/sdp/v3"
+	"github.com/pion/webrtc/v3/internal/fmtp"
 )
 
 const (
@@ -372,8 +373,8 @@ func (m *MediaEngine) matchRemoteCodec(remoteCodec RTPCodecParameters, typ RTPCo
 		codecs = m.audioCodecs
 	}
 
-	remoteFmtp := parseFmtp(remoteCodec.RTPCodecCapability.SDPFmtpLine)
-	if apt, hasApt := remoteFmtp["apt"]; hasApt {
+	remoteFmtp := fmtp.Parse(remoteCodec.RTPCodecCapability.MimeType, remoteCodec.RTPCodecCapability.SDPFmtpLine)
+	if apt, hasApt := remoteFmtp.Parameter("apt"); hasApt {
 		payloadType, err := strconv.Atoi(apt)
 		if err != nil {
 			return codecMatchNone, err
@@ -588,7 +589,9 @@ func payloaderForCodec(codec RTPCodecCapability) (rtp.Payloader, error) {
 	case strings.ToLower(MimeTypeOpus):
 		return &codecs.OpusPayloader{}, nil
 	case strings.ToLower(MimeTypeVP8):
-		return &codecs.VP8Payloader{}, nil
+		return &codecs.VP8Payloader{
+			EnablePictureID: true,
+		}, nil
 	case strings.ToLower(MimeTypeVP9):
 		return &codecs.VP9Payloader{}, nil
 	case strings.ToLower(MimeTypeG722):

@@ -1,8 +1,7 @@
 package torrent
 
 import (
-	"strings"
-
+	"github.com/RoaringBitmap/roaring"
 	"github.com/anacrolix/missinggo/v2/bitmap"
 
 	"github.com/anacrolix/torrent/metainfo"
@@ -10,12 +9,13 @@ import (
 
 // Provides access to regions of torrent data that correspond to its files.
 type File struct {
-	t      *Torrent
-	path   string
-	offset int64
-	length int64
-	fi     metainfo.FileInfo
-	prio   piecePriority
+	t           *Torrent
+	path        string
+	offset      int64
+	length      int64
+	fi          metainfo.FileInfo
+	displayPath string
+	prio        piecePriority
 }
 
 func (f *File) Torrent() *Torrent {
@@ -60,42 +60,38 @@ func fileBytesLeft(
 	fileEndPieceIndex int,
 	fileTorrentOffset int64,
 	fileLength int64,
-	torrentCompletedPieces bitmap.Bitmap,
+	torrentCompletedPieces *roaring.Bitmap,
 ) (left int64) {
 	numPiecesSpanned := fileEndPieceIndex - fileFirstPieceIndex
 	switch numPiecesSpanned {
 	case 0:
 	case 1:
-		if !torrentCompletedPieces.Get(bitmap.BitIndex(fileFirstPieceIndex)) {
+		if !torrentCompletedPieces.Contains(bitmap.BitIndex(fileFirstPieceIndex)) {
 			left += fileLength
 		}
 	default:
-		if !torrentCompletedPieces.Get(bitmap.BitIndex(fileFirstPieceIndex)) {
+		if !torrentCompletedPieces.Contains(bitmap.BitIndex(fileFirstPieceIndex)) {
 			left += torrentUsualPieceSize - (fileTorrentOffset % torrentUsualPieceSize)
 		}
-		if !torrentCompletedPieces.Get(bitmap.BitIndex(fileEndPieceIndex - 1)) {
+		if !torrentCompletedPieces.Contains(bitmap.BitIndex(fileEndPieceIndex - 1)) {
 			left += fileTorrentOffset + fileLength - int64(fileEndPieceIndex-1)*torrentUsualPieceSize
 		}
-		completedMiddlePieces := torrentCompletedPieces.Copy()
+		completedMiddlePieces := torrentCompletedPieces.Clone()
 		completedMiddlePieces.RemoveRange(0, bitmap.BitRange(fileFirstPieceIndex+1))
 		completedMiddlePieces.RemoveRange(bitmap.BitRange(fileEndPieceIndex-1), bitmap.ToEnd)
-		left += int64(numPiecesSpanned-2-pieceIndex(completedMiddlePieces.Len())) * torrentUsualPieceSize
+		left += int64(numPiecesSpanned-2-pieceIndex(completedMiddlePieces.GetCardinality())) * torrentUsualPieceSize
 	}
 	return
 }
 
 func (f *File) bytesLeft() (left int64) {
-	return fileBytesLeft(int64(f.t.usualPieceSize()), f.firstPieceIndex(), f.endPieceIndex(), f.offset, f.length, f.t._completedPieces)
+	return fileBytesLeft(int64(f.t.usualPieceSize()), f.firstPieceIndex(), f.endPieceIndex(), f.offset, f.length, &f.t._completedPieces)
 }
 
 // The relative file path for a multi-file torrent, and the torrent name for a
-// single-file torrent.
+// single-file torrent. Dir separators are '/'.
 func (f *File) DisplayPath() string {
-	fip := f.FileInfo().Path
-	if len(fip) == 0 {
-		return f.t.info.Name
-	}
-	return strings.Join(fip, "/")
+	return f.displayPath
 }
 
 // The download status of a piece that comprises part of a File.

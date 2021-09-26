@@ -22,14 +22,27 @@ type trackDetails struct {
 	kind     RTPCodecType
 	streamID string
 	id       string
-	ssrc     SSRC
+	ssrcs    []SSRC
 	rids     []string
 }
 
 func trackDetailsForSSRC(trackDetails []trackDetails, ssrc SSRC) *trackDetails {
 	for i := range trackDetails {
-		if trackDetails[i].ssrc == ssrc {
-			return &trackDetails[i]
+		for j := range trackDetails[i].ssrcs {
+			if trackDetails[i].ssrcs[j] == ssrc {
+				return &trackDetails[i]
+			}
+		}
+	}
+	return nil
+}
+
+func trackDetailsForRID(trackDetails []trackDetails, rid string) *trackDetails {
+	for i := range trackDetails {
+		for j := range trackDetails[i].rids {
+			if trackDetails[i].rids[j] == rid {
+				return &trackDetails[i]
+			}
 		}
 	}
 	return nil
@@ -37,20 +50,31 @@ func trackDetailsForSSRC(trackDetails []trackDetails, ssrc SSRC) *trackDetails {
 
 func filterTrackWithSSRC(incomingTracks []trackDetails, ssrc SSRC) []trackDetails {
 	filtered := []trackDetails{}
+	doesTrackHaveSSRC := func(t trackDetails) bool {
+		for i := range t.ssrcs {
+			if t.ssrcs[i] == ssrc {
+				return true
+			}
+		}
+
+		return false
+	}
+
 	for i := range incomingTracks {
-		if incomingTracks[i].ssrc != ssrc {
+		if !doesTrackHaveSSRC(incomingTracks[i]) {
 			filtered = append(filtered, incomingTracks[i])
 		}
 	}
+
 	return filtered
 }
 
 // extract all trackDetails from an SDP.
-func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) []trackDetails { // nolint:gocognit
-	incomingTracks := []trackDetails{}
-	rtxRepairFlows := map[uint32]bool{}
-
+func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) (incomingTracks []trackDetails) { // nolint:gocognit
 	for _, media := range s.MediaDescriptions {
+		tracksInMediaSection := []trackDetails{}
+		rtxRepairFlows := map[uint32]bool{}
+
 		// Plan B can have multiple tracks in a signle media section
 		streamID := ""
 		trackID := ""
@@ -93,7 +117,7 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 							continue
 						}
 						rtxRepairFlows[uint32(rtxRepairFlow)] = true
-						incomingTracks = filterTrackWithSSRC(incomingTracks, SSRC(rtxRepairFlow)) // Remove if rtx was added as track before
+						tracksInMediaSection = filterTrackWithSSRC(tracksInMediaSection, SSRC(rtxRepairFlow)) // Remove if rtx was added as track before
 					}
 				}
 
@@ -126,10 +150,12 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 
 				isNewTrack := true
 				trackDetails := &trackDetails{}
-				for i := range incomingTracks {
-					if incomingTracks[i].ssrc == SSRC(ssrc) {
-						trackDetails = &incomingTracks[i]
-						isNewTrack = false
+				for i := range tracksInMediaSection {
+					for j := range tracksInMediaSection[i].ssrcs {
+						if tracksInMediaSection[i].ssrcs[j] == SSRC(ssrc) {
+							trackDetails = &tracksInMediaSection[i]
+							isNewTrack = false
+						}
 					}
 				}
 
@@ -137,16 +163,16 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 				trackDetails.kind = codecType
 				trackDetails.streamID = streamID
 				trackDetails.id = trackID
-				trackDetails.ssrc = SSRC(ssrc)
+				trackDetails.ssrcs = []SSRC{SSRC(ssrc)}
 
 				if isNewTrack {
-					incomingTracks = append(incomingTracks, *trackDetails)
+					tracksInMediaSection = append(tracksInMediaSection, *trackDetails)
 				}
 			}
 		}
 
 		if rids := getRids(media); len(rids) != 0 && trackID != "" && streamID != "" {
-			newTrack := trackDetails{
+			simulcastTrack := trackDetails{
 				mid:      midValue,
 				kind:     codecType,
 				streamID: streamID,
@@ -154,19 +180,27 @@ func trackDetailsFromSDP(log logging.LeveledLogger, s *sdp.SessionDescription) [
 				rids:     []string{},
 			}
 			for rid := range rids {
-				newTrack.rids = append(newTrack.rids, rid)
+				simulcastTrack.rids = append(simulcastTrack.rids, rid)
+			}
+			if len(simulcastTrack.rids) == len(tracksInMediaSection) {
+				for i := range tracksInMediaSection {
+					simulcastTrack.ssrcs = append(simulcastTrack.ssrcs, tracksInMediaSection[i].ssrcs...)
+				}
 			}
 
-			incomingTracks = append(incomingTracks, newTrack)
+			tracksInMediaSection = []trackDetails{simulcastTrack}
 		}
+
+		incomingTracks = append(incomingTracks, tracksInMediaSection...)
 	}
+
 	return incomingTracks
 }
 
 func getRids(media *sdp.MediaDescription) map[string]string {
 	rids := map[string]string{}
 	for _, attr := range media.Attributes {
-		if attr.Key == "rid" {
+		if attr.Key == sdpAttributeRid {
 			split := strings.Split(attr.Value, " ")
 			rids[split[0]] = attr.Value
 		}
@@ -303,6 +337,11 @@ func addTransceiverSDP(d *sdp.SessionDescription, isPlanB, shouldAddCandidates b
 		}
 	}
 	if len(codecs) == 0 {
+		// If we are sender and we have no codecs throw an error early
+		if t.Sender() != nil {
+			return false, ErrSenderWithNoCodecs
+		}
+
 		// Explicitly reject track if we don't have the codec
 		d.WithMedia(&sdp.MediaDescription{
 			MediaName: sdp.MediaName{
@@ -336,7 +375,7 @@ func addTransceiverSDP(d *sdp.SessionDescription, isPlanB, shouldAddCandidates b
 		recvRids := make([]string, 0, len(mediaSection.ridMap))
 
 		for rid := range mediaSection.ridMap {
-			media.WithValueAttribute("rid", rid+" recv")
+			media.WithValueAttribute(sdpAttributeRid, rid+" recv")
 			recvRids = append(recvRids, rid)
 		}
 		// Simulcast
@@ -344,9 +383,9 @@ func addTransceiverSDP(d *sdp.SessionDescription, isPlanB, shouldAddCandidates b
 	}
 
 	for _, mt := range transceivers {
-		if mt.Sender() != nil && mt.Sender().Track() != nil {
-			track := mt.Sender().Track()
-			media = media.WithMediaSource(uint32(mt.Sender().ssrc), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
+		if sender := mt.Sender(); sender != nil && sender.Track() != nil {
+			track := sender.Track()
+			media = media.WithMediaSource(uint32(sender.ssrc), track.StreamID() /* cname */, track.StreamID() /* streamLabel */, track.ID())
 			if !isPlanB {
 				media = media.WithPropertyAttribute("msid:" + track.StreamID() + " " + track.ID())
 				break
@@ -648,7 +687,6 @@ func rtpExtensionsFromMediaDescription(m *sdp.MediaDescription) (map[string]int,
 // for subsequent calling, it updates Origin for SessionDescription from saved one
 // and increments session version by one.
 // https://tools.ietf.org/html/draft-ietf-rtcweb-jsep-25#section-5.2.2
-// https://tools.ietf.org/html/draft-ietf-rtcweb-jsep-25#section-5.3.2
 func updateSDPOrigin(origin *sdp.Origin, d *sdp.SessionDescription) {
 	if atomic.CompareAndSwapUint64(&origin.SessionVersion, 0, d.Origin.SessionVersion) { // store
 		atomic.StoreUint64(&origin.SessionID, d.Origin.SessionID)

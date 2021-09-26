@@ -646,7 +646,7 @@ func (cn *PeerConn) postBitfield() {
 		Type:     pp.Bitfield,
 		Bitfield: cn.t.bitfield(),
 	})
-	cn.sentHaves = cn.t._completedPieces.Copy()
+	cn.sentHaves = bitmap.Bitmap{cn.t._completedPieces.Clone()}
 }
 
 func (cn *PeerConn) updateRequests() {
@@ -1297,6 +1297,7 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 	c.allStats(add(int64(len(msg.Piece)), func(cs *ConnStats) *Count { return &cs.BytesReadUsefulData }))
 	if deletedRequest {
 		c.piecesReceivedSinceLastRequestUpdate++
+		c.updateRequests()
 		c.allStats(add(int64(len(msg.Piece)), func(cs *ConnStats) *Count { return &cs.BytesReadUsefulIntendedData }))
 	}
 	for _, f := range c.t.cl.config.Callbacks.ReceivedUsefulData {
@@ -1582,10 +1583,6 @@ func (l connectionTrust) Less(r connectionTrust) bool {
 	return multiless.New().Bool(l.Implicit, r.Implicit).Int64(l.NetGoodPiecesDirted, r.NetGoodPiecesDirted).Less()
 }
 
-func (cn *Peer) peerMaxRequests() int {
-	return cn.PeerMaxRequests
-}
-
 // Returns the pieces the peer could have based on their claims. If we don't know how many pieces
 // are in the torrent, it could be a very large range the peer has sent HaveAll.
 func (cn *PeerConn) PeerPieces() bitmap.Bitmap {
@@ -1605,10 +1602,6 @@ func (cn *Peer) newPeerPieces() bitmap.Bitmap {
 		}
 	}
 	return ret
-}
-
-func (cn *Peer) pieceRequestOrder() *prioritybitmap.PriorityBitmap {
-	return &cn._pieceRequestOrder
 }
 
 func (cn *Peer) stats() *ConnStats {

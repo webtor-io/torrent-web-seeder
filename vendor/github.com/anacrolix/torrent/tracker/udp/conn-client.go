@@ -23,8 +23,8 @@ type ConnClient struct {
 }
 
 func (cc *ConnClient) reader() {
+	b := make([]byte, 0x800)
 	for {
-		b := make([]byte, 0x800)
 		n, err := cc.conn.Read(b)
 		if err != nil {
 			// TODO: Do bad things to the dispatcher, and incoming calls to the client if we have a
@@ -32,10 +32,10 @@ func (cc *ConnClient) reader() {
 			cc.readErr = err
 			break
 		}
-		err = cc.d.Dispatch(b[:n])
-		if err != nil {
-			//log.Printf("dispatching packet received on %v (%q): %v", cc.conn, string(b[:n]), err)
-		}
+		_ = cc.d.Dispatch(b[:n])
+		// if err != nil {
+		// 	log.Printf("dispatching packet received on %v (%q): %v", cc.conn, string(b[:n]), err)
+		// }
 	}
 }
 

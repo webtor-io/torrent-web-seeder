@@ -19,14 +19,16 @@ func (cl *Client) requester() {
 			cl.doRequests()
 			return cl.updateRequests.Signaled()
 		}()
-		// We can probably tune how often to heed this signal. TODO: Currently disabled to retain
-		// existing behaviour, while the signalling is worked out.
-		update = nil
 		select {
-		case <-cl.closed.LockedChan(cl.locker()):
+		case <-cl.closed.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+		select {
+		case <-cl.closed.Done():
 			return
 		case <-update:
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(time.Second):
 		}
 	}
 }
@@ -125,9 +127,9 @@ func (p *Peer) applyNextRequestState() bool {
 		more, err := p.request(req)
 		if err != nil {
 			panic(err)
-		} else {
-			//log.Print(req)
-		}
+		} /* else {
+			log.Print(req)
+		} */
 		if !more {
 			return false
 		}

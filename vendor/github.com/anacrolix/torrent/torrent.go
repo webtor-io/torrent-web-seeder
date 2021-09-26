@@ -18,6 +18,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/anacrolix/dht/v2"
 	"github.com/anacrolix/log"
 	"github.com/anacrolix/missinggo/iter"
@@ -131,7 +132,7 @@ type Torrent struct {
 	// file priorities and completion states elsewhere.
 	_pendingPieces prioritybitmap.PriorityBitmap
 	// A cache of completed piece indices.
-	_completedPieces bitmap.Bitmap
+	_completedPieces roaring.Bitmap
 	// Pieces that need to be hashed.
 	piecesQueuedForHash bitmap.Bitmap
 	activePieceHashes   int
@@ -173,14 +174,6 @@ func (t *Torrent) incPieceAvailability(i pieceIndex) {
 		p := t.piece(i)
 		p.availability++
 	}
-}
-
-func (t *Torrent) numConns() int {
-	return len(t.conns)
-}
-
-func (t *Torrent) numReaders() int {
-	return len(t.readers)
 }
 
 func (t *Torrent) readerNowPieces() bitmap.Bitmap {
@@ -252,7 +245,7 @@ func (t *Torrent) setChunkSize(size pp.Integer) {
 }
 
 func (t *Torrent) pieceComplete(piece pieceIndex) bool {
-	return t._completedPieces.Get(bitmap.BitIndex(piece))
+	return t._completedPieces.Contains(bitmap.BitIndex(piece))
 }
 
 func (t *Torrent) pieceCompleteUncached(piece pieceIndex) storage.Completion {
@@ -456,7 +449,7 @@ func (t *Torrent) onSetInfo() {
 }
 
 // Called when metadata for a torrent becomes available.
-func (t *Torrent) setInfoBytes(b []byte) error {
+func (t *Torrent) setInfoBytesLocked(b []byte) error {
 	if metainfo.HashBytes(b) != t.infoHash {
 		return errors.New("info bytes have wrong hash")
 	}
@@ -755,9 +748,13 @@ func (t *Torrent) bytesMissingLocked() int64 {
 	return t.bytesLeft()
 }
 
+func iterFlipped(b *roaring.Bitmap, end uint64, cb func(uint32) bool) {
+	roaring.Flip(b, 0, end).Iterate(cb)
+}
+
 func (t *Torrent) bytesLeft() (left int64) {
-	bitmap.Flip(t._completedPieces, 0, bitmap.BitRange(t.numPieces())).IterTyped(func(piece int) bool {
-		p := &t.pieces[piece]
+	iterFlipped(&t._completedPieces, uint64(t.numPieces()), func(x uint32) bool {
+		p := t.piece(pieceIndex(x))
 		left += int64(p.length() - p.numDirtyBytes())
 		return true
 	})
@@ -792,14 +789,14 @@ func (t *Torrent) numPieces() pieceIndex {
 }
 
 func (t *Torrent) numPiecesCompleted() (num pieceIndex) {
-	return pieceIndex(t._completedPieces.Len())
+	return pieceIndex(t._completedPieces.GetCardinality())
 }
 
 func (t *Torrent) close() (err error) {
 	t.closed.Set()
 	t.tickleReaders()
 	if t.storage != nil {
-		func() {
+		go func() {
 			t.storageLock.Lock()
 			defer t.storageLock.Unlock()
 			if f := t.storage.Close; f != nil {
@@ -838,7 +835,7 @@ func (t *Torrent) writeChunk(piece int, begin int64, data []byte) (err error) {
 
 func (t *Torrent) bitfield() (bf []bool) {
 	bf = make([]bool, t.numPieces())
-	t._completedPieces.IterTyped(func(piece int) (again bool) {
+	t._completedPieces.Iterate(func(piece uint32) (again bool) {
 		bf[piece] = true
 		return true
 	})
@@ -895,14 +892,14 @@ func (t *Torrent) hashPiece(piece pieceIndex) (ret metainfo.Hash, err error) {
 }
 
 func (t *Torrent) haveAnyPieces() bool {
-	return t._completedPieces.Len() != 0
+	return t._completedPieces.GetCardinality() != 0
 }
 
 func (t *Torrent) haveAllPieces() bool {
 	if !t.haveInfo() {
 		return false
 	}
-	return t._completedPieces.Len() == bitmap.BitRange(t.numPieces())
+	return t._completedPieces.GetCardinality() == bitmap.BitRange(t.numPieces())
 }
 
 func (t *Torrent) havePiece(index pieceIndex) bool {
@@ -1238,7 +1235,12 @@ func (t *Torrent) updatePieceCompletion(piece pieceIndex) bool {
 	changed := cached != uncached
 	complete := uncached.Complete
 	p.storageCompletionOk = uncached.Ok
-	t._completedPieces.Set(bitmap.BitIndex(piece), complete)
+	x := uint32(piece)
+	if complete {
+		t._completedPieces.Add(x)
+	} else {
+		t._completedPieces.Remove(x)
+	}
 	if complete && len(p.dirtiers) != 0 {
 		t.logger.Printf("marked piece %v complete but still has dirtiers", piece)
 	}
@@ -1278,7 +1280,7 @@ func (t *Torrent) maybeCompleteMetadata() error {
 		// Don't have enough metadata pieces.
 		return nil
 	}
-	err := t.setInfoBytes(t.metadataBytes)
+	err := t.setInfoBytesLocked(t.metadataBytes)
 	if err != nil {
 		t.invalidateMetadata()
 		return fmt.Errorf("error setting info bytes: %s", err)
@@ -1347,13 +1349,13 @@ func (t *Torrent) bytesCompleted() int64 {
 	if !t.haveInfo() {
 		return 0
 	}
-	return t.info.TotalLength() - t.bytesLeft()
+	return *t.length - t.bytesLeft()
 }
 
 func (t *Torrent) SetInfoBytes(b []byte) (err error) {
 	t.cl.lock()
 	defer t.cl.unlock()
-	return t.setInfoBytes(b)
+	return t.setInfoBytesLocked(b)
 }
 
 // Returns true if connection is removed from torrent.Conns.
@@ -1633,9 +1635,9 @@ func (t *Torrent) consumeDhtAnnouncePeers(pvs <-chan dht.PeersValues) {
 			}
 		}
 		cl.unlock()
-		if added != 0 {
-			//log.Printf("added %v peers from dht for %v", added, t.InfoHash().HexString())
-		}
+		// if added != 0 {
+		// 	log.Printf("added %v peers from dht for %v", added, t.InfoHash().HexString())
+		// }
 	}
 }
 
@@ -1656,7 +1658,7 @@ func (t *Torrent) AnnounceToDht(s DhtServer) (done <-chan struct{}, stop func(),
 	return
 }
 
-func (t *Torrent) announceToDht(s DhtServer) error {
+func (t *Torrent) timeboxedAnnounceToDht(s DhtServer) error {
 	_, stop, err := t.AnnounceToDht(s)
 	if err != nil {
 		return err
@@ -1693,7 +1695,7 @@ func (t *Torrent) dhtAnnouncer(s DhtServer) {
 			t.numDHTAnnounces++
 			cl.unlock()
 			defer cl.lock()
-			err := t.announceToDht(s)
+			err := t.timeboxedAnnounceToDht(s)
 			if err != nil {
 				t.logger.WithDefaultLevel(log.Warning).Printf("error announcing %q to DHT: %s", t, err)
 			}
@@ -1857,7 +1859,9 @@ func (t *Torrent) pieceHashed(piece pieceIndex, passed bool, hashIoErr error) {
 		if passed {
 			pieceHashedCorrect.Add(1)
 		} else {
-			log.Fmsg("piece %d failed hash: %d connections contributed", piece, len(p.dirtiers)).AddValues(t, p).Log(t.logger)
+			log.Fmsg(
+				"piece %d failed hash: %d connections contributed", piece, len(p.dirtiers),
+			).AddValues(t, p).SetLevel(log.Debug).Log(t.logger)
 			pieceHashedNotCorrect.Add(1)
 		}
 	}
