@@ -165,7 +165,6 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 			}
-			w.Header().Set("Last-Modified", time.Unix(0, 0).Format(http.TimeFormat))
 			var reader io.ReadSeeker
 			torReader := f.NewReader()
 			torReader.SetResponsive()
