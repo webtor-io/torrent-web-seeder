@@ -1171,6 +1171,8 @@ func (pc *PeerConnection) startReceiver(incoming trackDetails, receiver *RTPRece
 		if len(incoming.ssrcs) > i {
 			encodings[i].SSRC = incoming.ssrcs[i]
 		}
+
+		encodings[i].RTX.SSRC = incoming.repairSsrc
 	}
 
 	if err := receiver.Receive(RTPReceiveParameters{Encodings: encodings}); err != nil {
@@ -1225,19 +1227,15 @@ func (pc *PeerConnection) startRTPReceivers(incomingTracks []trackDetails, curre
 	}
 
 	// Ensure we haven't already started a transceiver for this ssrc
-	for i := range incomingTracks {
-		if len(incomingTracks) <= i {
-			break
-		}
-		incomingTrack := incomingTracks[i]
-
+	filteredTracks := append([]trackDetails{}, incomingTracks...)
+	for _, incomingTrack := range incomingTracks {
 		// If we already have a TrackRemote for a given SSRC don't handle it again
 		for _, t := range localTransceivers {
 			if receiver := t.Receiver(); receiver != nil {
 				for _, track := range receiver.Tracks() {
 					for _, ssrc := range incomingTrack.ssrcs {
 						if ssrc == track.SSRC() {
-							incomingTracks = filterTrackWithSSRC(incomingTracks, track.SSRC())
+							filteredTracks = filterTrackWithSSRC(filteredTracks, track.SSRC())
 						}
 					}
 				}
@@ -1245,12 +1243,12 @@ func (pc *PeerConnection) startRTPReceivers(incomingTracks []trackDetails, curre
 		}
 	}
 
-	unhandledTracks := incomingTracks[:0]
-	for i := range incomingTracks {
+	unhandledTracks := filteredTracks[:0]
+	for i := range filteredTracks {
 		trackHandled := false
 		for j := range localTransceivers {
 			t := localTransceivers[j]
-			incomingTrack := incomingTracks[i]
+			incomingTrack := filteredTracks[i]
 
 			if t.Mid() != incomingTrack.mid {
 				continue
@@ -1270,7 +1268,7 @@ func (pc *PeerConnection) startRTPReceivers(incomingTracks []trackDetails, curre
 		}
 
 		if !trackHandled {
-			unhandledTracks = append(unhandledTracks, incomingTracks[i])
+			unhandledTracks = append(unhandledTracks, filteredTracks[i])
 		}
 	}
 
@@ -1451,7 +1449,9 @@ func (pc *PeerConnection) handleIncomingSSRC(rtpStream io.Reader, ssrc SSRC) err
 			}
 
 			if rsid != "" {
-				return receiver.receiveForRsid(rsid, streamInfo, readStream, interceptor, rtcpReadStream, rtcpInterceptor)
+				receiver.mu.Lock()
+				defer receiver.mu.Unlock()
+				return receiver.receiveForRtx(SSRC(0), rsid, streamInfo, readStream, interceptor, rtcpReadStream, rtcpInterceptor)
 			}
 
 			track, err := receiver.receiveForRid(rid, params, streamInfo, readStream, interceptor, rtcpReadStream, rtcpInterceptor)
@@ -2114,14 +2114,14 @@ func (pc *PeerConnection) startRTP(isRenegotiation bool, remoteDesc *SessionDesc
 					t.mu.Lock()
 					defer t.mu.Unlock()
 
-					if t.ssrc != 0 {
-						if details := trackDetailsForSSRC(trackDetails, t.ssrc); details != nil {
+					if t.rid != "" {
+						if details := trackDetailsForRID(trackDetails, t.rid); details != nil {
 							t.id = details.id
 							t.streamID = details.streamID
 							continue
 						}
-					} else if t.rid != "" {
-						if details := trackDetailsForRID(trackDetails, t.rid); details != nil {
+					} else if t.ssrc != 0 {
+						if details := trackDetailsForSSRC(trackDetails, t.ssrc); details != nil {
 							t.id = details.id
 							t.streamID = details.streamID
 							continue

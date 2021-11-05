@@ -1,6 +1,7 @@
 package services
 
 import (
+	"crypto/sha1"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -164,6 +165,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 			}
+			w.Header().Set("Last-Modified", time.Unix(0, 0).Format(http.TimeFormat))
 			var reader io.ReadSeeker
 			torReader := f.NewReader()
 			torReader.SetResponsive()
@@ -183,7 +185,8 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 			} else {
 				reader = torReader
 			}
-			http.ServeContent(s.c.NewResponseWriter(w), r, f.Path(), time.Unix(t.Metainfo().CreationDate, 0), reader)
+			w.Header().Set("ETag", fmt.Sprintf("%x", sha1.Sum([]byte(t.InfoHash().String()+p))))
+			http.ServeContent(s.c.NewResponseWriter(w), r, f.Path(), time.Unix(0, 0), reader)
 			found = true
 		}
 	}

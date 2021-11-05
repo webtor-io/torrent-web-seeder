@@ -1,2 +1,3 @@
-.torrent.bolt.db
 .idea
+*-run.gob
+.envrc*

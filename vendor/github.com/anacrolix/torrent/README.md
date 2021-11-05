@@ -1,6 +1,6 @@
 # torrent
 
-[![PkgGoDev](https://pkg.go.dev/badge/github.com/anacrolix/torrent)](https://pkg.go.dev/github.com/anacrolix/torrent)
+[![godocs.io](https://godocs.io/github.com/anacrolix/torrent?status.svg)](https://godocs.io/github.com/anacrolix/torrent)
 
 This repository implements BitTorrent-related packages and command-line utilities in Go. The emphasis is on use as a library from other projects. It's been used 24/7 in production by downstream services since late 2014. The implementation was specifically created to explore Go's concurrency capabilities, and to include the ability to stream data directly from the BitTorrent network. To this end it [supports seeking, readaheads and other features](https://godoc.org/github.com/anacrolix/torrent#Reader) exposing torrents and their files with the various Go idiomatic `io` package interfaces. This is also demonstrated through [torrentfs](#torrentfs).
 
@@ -23,7 +23,7 @@ There are some small [examples](https://godoc.org/github.com/anacrolix/torrent#p
 
 ## Mentions
 
- * [@anacrolix](https://github.com/anacrolix) and this repo are in [Console 32](https://console.substack.com/p/console-32).
+ * [@anacrolix](https://github.com/anacrolix) is interviewed about this repo in [Console 32](https://console.substack.com/p/console-32).
 
 ### Downstream projects
 
@@ -43,6 +43,7 @@ There are several web-frontends and Android clients among the known public proje
  * [Go-PeersToHTTP](https://github.com/WinPooh32/peerstohttp)
  * [CortexFoundation/torrentfs](https://github.com/CortexFoundation/torrentfs): P2P file system of cortex full node
  * [TorrServ](https://github.com/YouROK/TorrServer): Torrent streaming server over http.
+ * [Webtor](https://webtor.io/): free cloud BitTorrent-client
 
 ## Help
 
@@ -50,9 +51,11 @@ Communication about the project is primarily through [Discussions](https://githu
 
 ## Command packages
 
-Here I'll describe what some of the packages in `./cmd` do. Install them with `go get github.com/anacrolix/torrent/cmd/...`.
+Here I'll describe what some of the packages in `./cmd` do. See [installation](#installation) to make them available.
 
 ### torrent
+
+#### torrent download
 
 Downloads torrents from the command-line.
 
@@ -64,6 +67,15 @@ Downloads torrents from the command-line.
     1b305d585b1918f297164add46784116  ubuntu-14.04.2-desktop-amd64.iso
     $ echo such amaze
     wow
+
+#### torrent metainfo magnet
+
+Creates a magnet link from a torrent file. Note the extracted trackers, display name, and info hash.
+
+    $ torrent metainfo testdata/debian-10.8.0-amd64-netinst.iso.torrent magnet
+    magnet:?xt=urn:btih:4090c3c2a394a49974dfbbf2ce7ad0db3cdeddd7&dn=debian-10.8.0-amd64-netinst.iso&tr=http%3A%2F%2Fbttracker.debian.org%3A6969%2Fannounce
+
+See `torrent metainfo --help` for other metainfo related commands.
 
 ### torrentfs
 
@@ -80,9 +92,3 @@ torrentfs mounts a FUSE filesystem at `-mountDir`. The contents are the torrents
     996MB 0:04:40 [3.55MB/s] [========================================>] 100%
     1b305d585b1918f297164add46784116  -
 
-### torrent-magnet
-
-Creates a magnet link from a torrent file. Note the extracted trackers, display name, and info hash.
-
-    $ torrent-magnet < torrents/ubuntu-14.04.2-desktop-amd64.iso.torrent
-    magnet:?xt=urn:btih:546cf15f724d19c4319cc17b179d7e035f89c1f4&dn=ubuntu-14.04.2-desktop-amd64.iso&tr=http%3A%2F%2Ftorrent.ubuntu.com%3A6969%2Fannounce&tr=http%3A%2F%2Fipv6.torrent.ubuntu.com%3A6969%2Fannounce

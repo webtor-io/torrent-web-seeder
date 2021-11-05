@@ -1,10 +1,10 @@
 package request_strategy
 
-import (
-	"github.com/anacrolix/torrent/types"
-)
+type ChunksIterFunc func(func(ChunkIndex))
 
-type ChunksIter func(func(types.ChunkSpec))
+type ChunksIter interface {
+	Iter(func(ci ChunkIndex))
+}
 
 type Piece struct {
 	Request           bool
@@ -16,9 +16,9 @@ type Piece struct {
 	IterPendingChunks ChunksIter
 }
 
-func (p Piece) iterPendingChunksWrapper(f func(ChunkSpec)) {
+func (p Piece) iterPendingChunksWrapper(f func(ChunkIndex)) {
 	i := p.IterPendingChunks
 	if i != nil {
-		i(f)
+		i.Iter(f)
 	}
 }

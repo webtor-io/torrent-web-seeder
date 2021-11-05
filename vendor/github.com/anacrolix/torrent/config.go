@@ -10,7 +10,6 @@ import (
 	"github.com/anacrolix/dht/v2/krpc"
 	"github.com/anacrolix/log"
 	"github.com/anacrolix/missinggo/v2"
-	"github.com/anacrolix/missinggo/v2/expect"
 	"github.com/anacrolix/torrent/version"
 	"golang.org/x/time/rate"
 
@@ -91,6 +90,9 @@ type ClientConfig struct {
 	// Defines proxy for HTTP requests, such as for trackers. It's commonly set from the result of
 	// "net/http".ProxyURL(HTTPProxy).
 	HTTPProxy func(*http.Request) (*url.URL, error)
+	// Takes a tracker's hostname and requests DNS A and AAAA records.
+	// Used in case DNS lookups require a special setup (i.e., dns-over-https)
+	LookupTrackerIp func(*url.URL) ([]net.IP, error)
 	// HTTPUserAgent changes default UserAgent for HTTP requests
 	HTTPUserAgent string
 	// Updated occasionally to when there's been some changes to client
@@ -139,11 +141,16 @@ type ClientConfig struct {
 	DropMutuallyCompletePeers bool
 	// Whether to accept peer connections at all.
 	AcceptPeerConnections bool
+	// Whether a Client should want conns without delegating to any attached Torrents. This is
+	// useful when torrents might be added dynmically in callbacks for example.
+	AlwaysWantConns bool
 
 	// OnQuery hook func
 	DHTOnQuery func(query *krpc.Msg, source net.Addr) (propagate bool)
 
 	Extensions PeerExtensionBits
+	// Bits that peers must have set to proceed past handshakes.
+	MinPeerExtensions PeerExtensionBits
 
 	DisableWebtorrent bool
 	DisableWebseeds   bool
@@ -153,7 +160,9 @@ type ClientConfig struct {
 
 func (cfg *ClientConfig) SetListenAddr(addr string) *ClientConfig {
 	host, port, err := missinggo.ParseHostPort(addr)
-	expect.Nil(err)
+	if err != nil {
+		panic(err)
+	}
 	cfg.ListenHost = func(string) string { return host }
 	cfg.ListenPort = port
 	return cfg

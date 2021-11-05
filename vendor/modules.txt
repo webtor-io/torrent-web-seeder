@@ -10,15 +10,17 @@ crawshaw.io/sqlite/sqlitex
 ## explicit; go 1.14
 github.com/RoaringBitmap/roaring
 github.com/RoaringBitmap/roaring/internal
-# github.com/anacrolix/chansync v0.2.0
+# github.com/anacrolix/chansync v0.3.0
 ## explicit; go 1.16
 github.com/anacrolix/chansync
-# github.com/anacrolix/confluence v1.8.1
+github.com/anacrolix/chansync/events
+# github.com/anacrolix/confluence v1.9.0
 ## explicit; go 1.17
 github.com/anacrolix/confluence/debug-writer
-# github.com/anacrolix/dht/v2 v2.10.4
+# github.com/anacrolix/dht/v2 v2.11.0
 ## explicit; go 1.17
 github.com/anacrolix/dht/v2
+github.com/anacrolix/dht/v2/bep44
 github.com/anacrolix/dht/v2/containers
 github.com/anacrolix/dht/v2/int160
 github.com/anacrolix/dht/v2/k-nearest-nodes
@@ -32,7 +34,7 @@ github.com/anacrolix/envpprof
 # github.com/anacrolix/go-libutp v1.0.4
 ## explicit; go 1.14
 github.com/anacrolix/go-libutp
-# github.com/anacrolix/log v0.9.0
+# github.com/anacrolix/log v0.10.0
 ## explicit; go 1.12
 github.com/anacrolix/log
 # github.com/anacrolix/missinggo v1.3.0
@@ -55,7 +57,6 @@ github.com/anacrolix/missinggo/perf
 ## explicit; go 1.13
 github.com/anacrolix/missinggo/v2
 github.com/anacrolix/missinggo/v2/bitmap
-github.com/anacrolix/missinggo/v2/expect
 github.com/anacrolix/missinggo/v2/iter
 github.com/anacrolix/missinggo/v2/pproffd
 github.com/anacrolix/missinggo/v2/prioritybitmap
@@ -74,7 +75,7 @@ github.com/anacrolix/stm/stmutil
 # github.com/anacrolix/sync v0.4.0
 ## explicit; go 1.13
 github.com/anacrolix/sync
-# github.com/anacrolix/torrent v1.31.0
+# github.com/anacrolix/torrent v1.35.0
 ## explicit; go 1.17
 github.com/anacrolix/torrent
 github.com/anacrolix/torrent/bencode
@@ -222,6 +223,11 @@ github.com/golang/protobuf/ptypes/timestamp
 github.com/google/btree
 # github.com/google/go-cmp v0.5.6
 ## explicit; go 1.8
+github.com/google/go-cmp/cmp
+github.com/google/go-cmp/cmp/internal/diff
+github.com/google/go-cmp/cmp/internal/flags
+github.com/google/go-cmp/cmp/internal/function
+github.com/google/go-cmp/cmp/internal/value
 # github.com/google/uuid v1.3.0
 ## explicit
 github.com/google/uuid
@@ -264,10 +270,10 @@ github.com/mattn/go-isatty
 # github.com/mschoch/smat v0.2.0
 ## explicit; go 1.13
 github.com/mschoch/smat
-# github.com/pion/datachannel v1.4.21
+# github.com/pion/datachannel v1.5.0
 ## explicit; go 1.13
 github.com/pion/datachannel
-# github.com/pion/dtls/v2 v2.0.9
+# github.com/pion/dtls/v2 v2.0.10
 ## explicit; go 1.13
 github.com/pion/dtls/v2
 github.com/pion/dtls/v2/internal/ciphersuite
@@ -287,7 +293,7 @@ github.com/pion/dtls/v2/pkg/protocol/alert
 github.com/pion/dtls/v2/pkg/protocol/extension
 github.com/pion/dtls/v2/pkg/protocol/handshake
 github.com/pion/dtls/v2/pkg/protocol/recordlayer
-# github.com/pion/ice/v2 v2.1.12
+# github.com/pion/ice/v2 v2.1.13
 ## explicit; go 1.13
 github.com/pion/ice/v2
 # github.com/pion/interceptor v0.1.0
@@ -308,7 +314,7 @@ github.com/pion/randutil
 # github.com/pion/rtcp v1.2.8
 ## explicit; go 1.13
 github.com/pion/rtcp
-# github.com/pion/rtp v1.7.2
+# github.com/pion/rtp v1.7.4
 ## explicit; go 1.13
 github.com/pion/rtp
 github.com/pion/rtp/codecs
@@ -343,7 +349,7 @@ github.com/pion/turn/v2/internal/server
 # github.com/pion/udp v0.1.1
 ## explicit; go 1.14
 github.com/pion/udp
-# github.com/pion/webrtc/v3 v3.1.1
+# github.com/pion/webrtc/v3 v3.1.7
 ## explicit; go 1.13
 github.com/pion/webrtc/v3
 github.com/pion/webrtc/v3/internal/fmtp
@@ -354,7 +360,7 @@ github.com/pion/webrtc/v3/pkg/rtcerr
 # github.com/pkg/errors v0.9.1
 ## explicit
 github.com/pkg/errors
-# github.com/rs/dnscache v0.0.0-20210201191234-295bba877686
+# github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417
 ## explicit; go 1.12
 github.com/rs/dnscache
 # github.com/russross/blackfriday/v2 v2.1.0
@@ -417,7 +423,7 @@ golang.org/x/crypto/cryptobyte/asn1
 golang.org/x/crypto/curve25519
 golang.org/x/crypto/curve25519/internal/field
 golang.org/x/crypto/pbkdf2
-# golang.org/x/net v0.0.0-20210924151903-3ad01bbaa167
+# golang.org/x/net v0.0.0-20211105192438-b53810dc28af
 ## explicit; go 1.17
 golang.org/x/net/bpf
 golang.org/x/net/context
@@ -436,7 +442,7 @@ golang.org/x/net/trace
 # golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 ## explicit
 golang.org/x/sync/singleflight
-# golang.org/x/sys v0.0.0-20210925032602-92d5a993a665
+# golang.org/x/sys v0.0.0-20211105183446-c75c47738b0c
 ## explicit; go 1.17
 golang.org/x/sys/cpu
 golang.org/x/sys/internal/unsafeheader

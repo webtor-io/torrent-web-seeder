@@ -154,7 +154,7 @@ func (d *Decoder) parseString(v reflect.Value) error {
 
 	// read the string length first
 	d.readUntil(':')
-	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 0)
+	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 32)
 	checkForIntParseError(err, start)
 
 	defer d.buf.Reset()
@@ -611,28 +611,21 @@ func (d *Decoder) parseIntInterface() (ret interface{}) {
 	return
 }
 
-func (d *Decoder) parseStringInterface() interface{} {
-	start := d.Offset - 1
-
+func (d *Decoder) parseStringInterface() string {
 	// read the string length first
 	d.readUntil(':')
-	length, err := strconv.ParseInt(d.buf.String(), 10, 64)
-	checkForIntParseError(err, start)
-
-	d.buf.Reset()
-	n, err := io.CopyN(&d.buf, d.r, length)
-	d.Offset += n
+	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 32)
 	if err != nil {
-		checkForUnexpectedEOF(err, d.Offset)
-		panic(&SyntaxError{
-			Offset: d.Offset,
-			What:   errors.New("unexpected I/O error: " + err.Error()),
-		})
+		panic(&SyntaxError{Offset: d.Offset - 1, What: err})
 	}
-
-	s := d.buf.String()
 	d.buf.Reset()
-	return s
+	b := make([]byte, length)
+	n, err := io.ReadFull(d.r, b)
+	d.Offset += int64(n)
+	if err != nil {
+		panic(&SyntaxError{Offset: d.Offset, What: err})
+	}
+	return bytesAsString(b)
 }
 
 func (d *Decoder) parseDictInterface() interface{} {
@@ -661,18 +654,12 @@ func (d *Decoder) parseDictInterface() interface{} {
 	return dict
 }
 
-func (d *Decoder) parseListInterface() interface{} {
-	var list []interface{}
-	for {
-		valuei, ok := d.parseValueInterface()
-		if !ok {
-			break
-		}
-
+func (d *Decoder) parseListInterface() (list []interface{}) {
+	list = []interface{}{}
+	valuei, ok := d.parseValueInterface()
+	for ok {
 		list = append(list, valuei)
+		valuei, ok = d.parseValueInterface()
 	}
-	if list == nil {
-		list = make([]interface{}, 0)
-	}
-	return list
+	return
 }
