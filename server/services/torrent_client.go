@@ -56,7 +56,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		}
 		dr = int64(drp)
 	}
-	return &TorrentClient{rLimit: dr, dataDir: c.String(TORRENT_CLIENT_DATA_DIR_FLAG), inited: false}, nil
+	return &TorrentClient{rLimit: dr, dataDir: c.String(TORRENT_CLIENT_DATA_DIR_FLAG)}, nil
 }
 
 func (s *TorrentClient) get() (*torrent.Client, error) {
@@ -67,10 +67,10 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.DefaultStorage = storage.NewMMap(s.dataDir)
 	cfg.Logger = torrentlogger.Discard
 	// cfg.DefaultRequestStrategy = torrent.RequestStrategyFuzzing()
-	cfg.EstablishedConnsPerTorrent = 100
-	cfg.HalfOpenConnsPerTorrent = 50
-	cfg.TorrentPeersHighWater = 1000
-	cfg.TorrentPeersLowWater = 500
+	// cfg.EstablishedConnsPerTorrent = 100
+	// cfg.HalfOpenConnsPerTorrent = 50
+	// cfg.TorrentPeersHighWater = 1000
+	// cfg.TorrentPeersLowWater = 500
 	if s.rLimit != -1 {
 		cfg.DownloadRateLimiter = rate.NewLimiter(rate.Limit(s.rLimit), int(s.rLimit))
 	}

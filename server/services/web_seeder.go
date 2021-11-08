@@ -168,9 +168,9 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 			var reader io.ReadSeeker
 			torReader := f.NewReader()
 			torReader.SetResponsive()
-			readahead := int64(10 * 1024 * 1024)
-			if readahead < f.Length()/10 {
-				readahead = f.Length() / 10
+			readahead := int64(100 * 1024 * 1024)
+			if readahead > f.Length() {
+				readahead = f.Length()
 			}
 			torReader.SetReadahead(readahead)
 			if r.Header.Get("X-Download-Rate") != "" && r.Header.Get("X-Session-ID") != "" {
