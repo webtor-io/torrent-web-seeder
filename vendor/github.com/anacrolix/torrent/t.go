@@ -42,7 +42,7 @@ func (t *Torrent) newReader(offset, length int64) Reader {
 		offset: offset,
 		length: length,
 	}
-	r.readaheadFunc = r.defaultReadaheadFunc
+	r.readaheadFunc = defaultReadaheadFunc
 	t.addReader(&r)
 	return &r
 }
@@ -232,7 +232,6 @@ func (t *Torrent) initFiles() {
 		})
 		offset += fi.Length
 	}
-
 }
 
 // Returns handles to the files in the torrent. This requires that the Info is

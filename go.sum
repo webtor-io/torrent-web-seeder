@@ -88,6 +88,8 @@ github.com/anacrolix/confluence v1.8.1 h1:a2IC3sZQEcgqAy+q9RJzVP4GC5mZo6ljHxMpWR
 github.com/anacrolix/confluence v1.8.1/go.mod h1:dL/3ynCRDXCWXl3Q2pxrhsFjL6KwnrkcIo6+n9e50yQ=
 github.com/anacrolix/confluence v1.9.0 h1:7WrWktoDw7P4uo1bzgaA8FFesvc7NsTp37sAsG54XlE=
 github.com/anacrolix/confluence v1.9.0/go.mod h1:O5uS+WVgip+3SOcV1K7E/jE3m4DtK7Jk6QJTnU2VS5s=
+github.com/anacrolix/confluence v1.10.0 h1:xXhz98JUXzJ8223pdMRaVPwG7vrpScEzFzmbT30gCc0=
+github.com/anacrolix/confluence v1.10.0/go.mod h1:dEf1nWBXs0AV9w1u8m/UWugPtzgW2nTL7lYZ2cemA/Q=
 github.com/anacrolix/dht v0.0.0-20180412060941-24cbf25b72a4/go.mod h1:hQfX2BrtuQsLQMYQwsypFAab/GvHg8qxwVi4OJdR1WI=
 github.com/anacrolix/dht v0.0.0-20181127122252-acaa69c368bb h1:XgF37lxo6RjJOKaW3X4Q0n7qAIonVruzv4dGyJcYj+M=
 github.com/anacrolix/dht v0.0.0-20181127122252-acaa69c368bb/go.mod h1:Z/mP+H70xwnUv957UXVkTrzYRhKs0mGjS0lyqS331g4=
@@ -106,6 +108,8 @@ github.com/anacrolix/dht/v2 v2.10.4 h1:4iW6sCgUROtwPuEAjvDR+M0u9PtUns3e9hrwTlW+2
 github.com/anacrolix/dht/v2 v2.10.4/go.mod h1:zHjijcebN+L7JbzxW0mOraHis+I81EIgsJAAtiw8bQ8=
 github.com/anacrolix/dht/v2 v2.11.0 h1:IG6B1sZojVfwrygSxEoz6zyICa12ZHLjw4fclthNhq0=
 github.com/anacrolix/dht/v2 v2.11.0/go.mod h1:G75C3ePsDBduMIHSaV3HL8Wbg6hJsxr2HF7I6P2z26w=
+github.com/anacrolix/dht/v2 v2.12.1 h1:fvE/JkfDVEHFImsrWCzUsBR/BwyZyLKxZRdUllyAZVU=
+github.com/anacrolix/dht/v2 v2.12.1/go.mod h1:GfoiqvbDg0um5RVTJYf5HdPLDgk6TQeWKnPDfQ4bmWw=
 github.com/anacrolix/envpprof v0.0.0-20180404065416-323002cec2fa/go.mod h1:KgHhUaQMc8cC0+cEflSgCFNFbKwi5h54gqtVn8yhP7c=
 github.com/anacrolix/envpprof v1.0.0/go.mod h1:KgHhUaQMc8cC0+cEflSgCFNFbKwi5h54gqtVn8yhP7c=
 github.com/anacrolix/envpprof v1.0.1/go.mod h1:My7T5oSqVfEn4MD4Meczkw/f5lSIndGAKu/0SM/rkf4=
@@ -206,6 +210,10 @@ github.com/anacrolix/torrent v1.31.0 h1:G/vERyt+9oiJz6Ehpd+KqFIKh22/qfeUeWCwCVRG
 github.com/anacrolix/torrent v1.31.0/go.mod h1:IUGa0cjbz4vo2S0jNx2RQXAiCew+WITcUoxaw2gF20o=
 github.com/anacrolix/torrent v1.35.0 h1:XuTuufcAC0jLV0bEMkFJ9yHZ9y9isE6GmK5Gw17pNno=
 github.com/anacrolix/torrent v1.35.0/go.mod h1:eNmTGUF2tnLB4adDjYgx2+hAZhCYW8r8vjF6ZITO2pU=
+github.com/anacrolix/torrent v1.36.1-0.20211110232428-2df54098afe9 h1:KtguBut+/NIbcYU+GBO387vceroDXVdJo0FNPD7dpGI=
+github.com/anacrolix/torrent v1.36.1-0.20211110232428-2df54098afe9/go.mod h1:Pc6Tg5UJ5VUgmw+3sw8+C7ngainyeLhOgMzHS4FWCFw=
+github.com/anacrolix/torrent v1.37.1-0.20211114025441-0434b1621adb h1:IQmNDF3+hIbTR1Jc0lObrueZyn/y0y3ru2IBww1TfAQ=
+github.com/anacrolix/torrent v1.37.1-0.20211114025441-0434b1621adb/go.mod h1:Z/PwbVgpAthgWLagZoqip84l6XI2NUKr72M+BoF/6vg=
 github.com/anacrolix/upnp v0.1.1/go.mod h1:LXsbsp5h+WGN7YR+0A7iVXm5BL1LYryDev1zuJMWYQo=
 github.com/anacrolix/upnp v0.1.2-0.20200416075019-5e9378ed1425 h1:/Wi6l2ONI1FUFWN4cBwHOO90V4ylp4ud/eov6GUcVFk=
 github.com/anacrolix/upnp v0.1.2-0.20200416075019-5e9378ed1425/go.mod h1:Pz94W3kl8rf+wxH3IbCa9Sq+DTJr8OSbV2Q3/y51vYs=
@@ -647,6 +655,9 @@ github.com/pion/datachannel v1.4.21 h1:3ZvhNyfmxsAqltQrApLPQMhSFNA+aT87RqyCq4OXm
 github.com/pion/datachannel v1.4.21/go.mod h1:oiNyP4gHx2DIwRzX/MFyH0Rz/Gz05OgBlayAI2hAWjg=
 github.com/pion/datachannel v1.5.0 h1:Jy6xWr9hysxet69qP23ibiJ6M0P30ZRnndHU+N6cpkY=
 github.com/pion/datachannel v1.5.0/go.mod h1:TVbgWP+PVM9TlwL1IkG3JqXXfjGxLvsu9QUeFdpTegI=
+github.com/pion/datachannel v1.5.1/go.mod h1:FTGQWaHrdCwIJ1rw6xBIfZVkslikjShim5yr05XFuCQ=
+github.com/pion/datachannel v1.5.2 h1:piB93s8LGmbECrpO84DnkIVWasRMk3IimbcXkTQLE6E=
+github.com/pion/datachannel v1.5.2/go.mod h1:FTGQWaHrdCwIJ1rw6xBIfZVkslikjShim5yr05XFuCQ=
 github.com/pion/dtls/v2 v2.0.1/go.mod h1:uMQkz2W0cSqY00xav7WByQ4Hb+18xeQh2oH2fRezr5U=
 github.com/pion/dtls/v2 v2.0.2/go.mod h1:27PEO3MDdaCfo21heT59/vsdmZc0zMt9wQPcSlLu/1I=
 github.com/pion/dtls/v2 v2.0.4/go.mod h1:qAkFscX0ZHoI1E07RfYPoRw3manThveu+mlTDdOxoGI=
@@ -699,6 +710,8 @@ github.com/pion/sctp v1.7.10/go.mod h1:EhpTUQu1/lcK3xI+eriS6/96fWetHGCvBi9MSsnaB
 github.com/pion/sctp v1.7.11/go.mod h1:EhpTUQu1/lcK3xI+eriS6/96fWetHGCvBi9MSsnaBN0=
 github.com/pion/sctp v1.7.12 h1:GsatLufywVruXbZZT1CKg+Jr8ZTkwiPnmUC/oO9+uuY=
 github.com/pion/sctp v1.7.12/go.mod h1:xFe9cLMZ5Vj6eOzpyiKjT9SwGM4KpK/8Jbw5//jc+0s=
+github.com/pion/sctp v1.8.0 h1:6erMF2qmQwXr+0iB1lm0AUSmDr9LdmpaBzgSVAEgehw=
+github.com/pion/sctp v1.8.0/go.mod h1:xFe9cLMZ5Vj6eOzpyiKjT9SwGM4KpK/8Jbw5//jc+0s=
 github.com/pion/sdp/v2 v2.4.0/go.mod h1:L2LxrOpSTJbAns244vfPChbciR/ReU1KWfG04OpkR7E=
 github.com/pion/sdp/v3 v3.0.4 h1:2Kf+dgrzJflNCSw3TV5v2VLeI0s/qkzy2r5jlR0wzf8=
 github.com/pion/sdp/v3 v3.0.4/go.mod h1:bNiSknmJE0HYBprTHXKPQ3+JjacTv5uap92ueJZKsRk=
@@ -733,6 +746,8 @@ github.com/pion/webrtc/v3 v3.1.1 h1:UA4qU+zoAAlUkl0J7ek/YnV3e0orvE8V667imvmnAoo=
 github.com/pion/webrtc/v3 v3.1.1/go.mod h1:t51XSam1k56eYLuO1Ubxjs3pDBfGYxkGBFhYf55Mn/s=
 github.com/pion/webrtc/v3 v3.1.7 h1:BXkjdVmj+HYiou8eBX6F3Y8xdRkQejg8px5JudTOv0M=
 github.com/pion/webrtc/v3 v3.1.7/go.mod h1:SQxttydYlKo2rCQjHzkUCJFAfEO/Oh2efMWbKYXLk98=
+github.com/pion/webrtc/v3 v3.1.8 h1:NQWcCR3ooRBRXwr5sIVYNQiGVR7wHZd6r1NwuEXBAYQ=
+github.com/pion/webrtc/v3 v3.1.8/go.mod h1:ZTd1fKjcn/YteWziy2ZHQi1GbakS0RFxNPOFbpA8nlY=
 github.com/pkg/errors v0.8.0/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
@@ -973,6 +988,8 @@ golang.org/x/crypto v0.0.0-20210421170649-83a5a9bb288b/go.mod h1:T9bdIzuCu7OtxOm
 golang.org/x/crypto v0.0.0-20210813211128-0a44fdfbc16e/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=
 golang.org/x/crypto v0.0.0-20210921155107-089bfa567519 h1:7I4JAnoQBe7ZtJcBaYHi5UtiO8tQHbUSXxL+pnGRANg=
 golang.org/x/crypto v0.0.0-20210921155107-089bfa567519/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=
+golang.org/x/crypto v0.0.0-20211108221036-ceb1ce70b4fa h1:idItI2DDfCokpg0N51B2VtiLdJ4vAuXC9fnCb2gACo4=
+golang.org/x/crypto v0.0.0-20211108221036-ceb1ce70b4fa/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=
 golang.org/x/exp v0.0.0-20190121172915-509febef88a4/go.mod h1:CJ0aWSM057203Lf6IL+f9T1iT9GByDxfZKAQTCR3kQA=
 golang.org/x/exp v0.0.0-20190306152737-a1d7652674e8/go.mod h1:CJ0aWSM057203Lf6IL+f9T1iT9GByDxfZKAQTCR3kQA=
 golang.org/x/exp v0.0.0-20190510132918-efd6b22b2522/go.mod h1:ZjyILWgesfNpC6sMxTJOJm9Kp84zZh5NQWvqDGG3Qr8=
@@ -1077,6 +1094,8 @@ golang.org/x/net v0.0.0-20211005001312-d4b1ae081e3b/go.mod h1:9nx3DQGgdP8bBQD5qx
 golang.org/x/net v0.0.0-20211020060615-d418f374d309/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
 golang.org/x/net v0.0.0-20211105192438-b53810dc28af h1:SMeNJG/vclJ5wyBBd4xupMsSJIHTd1coW9g7q6KOjmY=
 golang.org/x/net v0.0.0-20211105192438-b53810dc28af/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
+golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2 h1:CIJ76btIcR3eFI5EgSo6k1qKw9KJexJuRLI9G7Hp5wE=
+golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
 golang.org/x/oauth2 v0.0.0-20180821212333-d2e6202438be/go.mod h1:N/0e6XlmueqKjAGxoOufVs8QHGRruUQn6yWY3a++T0U=
 golang.org/x/oauth2 v0.0.0-20181017192945-9dcd33a902f4/go.mod h1:N/0e6XlmueqKjAGxoOufVs8QHGRruUQn6yWY3a++T0U=
 golang.org/x/oauth2 v0.0.0-20181203162652-d668ce993890/go.mod h1:N/0e6XlmueqKjAGxoOufVs8QHGRruUQn6yWY3a++T0U=
@@ -1179,6 +1198,8 @@ golang.org/x/sys v0.0.0-20210925032602-92d5a993a665/go.mod h1:oPkhp1MJrh7nUepCBc
 golang.org/x/sys v0.0.0-20211025201205-69cdffdb9359/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.0.0-20211105183446-c75c47738b0c h1:+8miTPjMCTXwih7BQmvWwd0PjdBZq2MKp/qQaahSzEM=
 golang.org/x/sys v0.0.0-20211105183446-c75c47738b0c/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.0.0-20211113001501-0c823b97ae02 h1:7NCfEGl0sfUojmX78nK9pBJuUlSZWEJA/TwASvfiPLo=
+golang.org/x/sys v0.0.0-20211113001501-0c823b97ae02/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/term v0.0.0-20201117132131-f5c789dd3221/go.mod h1:Nr5EML6q2oocZ2LXRh80K7BxOlk5/8JxuGnuhpl+muw=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
 golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=

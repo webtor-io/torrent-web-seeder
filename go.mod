@@ -8,7 +8,7 @@ require (
 	github.com/anacrolix/chansync v0.3.0 // indirect
 	github.com/anacrolix/log v0.10.0
 	github.com/anacrolix/sync v0.4.0 // indirect
-	github.com/anacrolix/torrent v1.35.0
+	github.com/anacrolix/torrent v1.37.1-0.20211114025441-0434b1621adb
 	github.com/aws/aws-sdk-go v1.39.4
 	github.com/bakins/logrus-middleware v0.0.0-20180426214643-ce4c6f8deb07
 	github.com/bakins/test-helpers v0.0.0-20141028124846-af83df64dc31 // indirect
@@ -21,7 +21,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0
 	github.com/juju/ratelimit v1.0.1
 	github.com/mattn/go-isatty v0.0.13 // indirect
-	github.com/pion/webrtc/v3 v3.1.7 // indirect
+	github.com/pion/webrtc/v3 v3.1.8 // indirect
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.8.1
 	github.com/urfave/cli v1.22.5
@@ -30,8 +30,8 @@ require (
 	github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5
 	github.com/webtor-io/torrent-store v0.0.0-20210710130004-9afe9e0d1ff5
 	go.etcd.io/bbolt v1.3.6 // indirect
-	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519 // indirect
-	golang.org/x/sys v0.0.0-20211105183446-c75c47738b0c // indirect
+	golang.org/x/crypto v0.0.0-20211108221036-ceb1ce70b4fa // indirect
+	golang.org/x/sys v0.0.0-20211113001501-0c823b97ae02 // indirect
 	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac
 	google.golang.org/genproto v0.0.0-20210708141623-e76da96a951f // indirect
 	google.golang.org/grpc v1.39.0
@@ -39,8 +39,8 @@ require (
 
 require (
 	crawshaw.io/sqlite v0.3.3-0.20210127221821-98b1f83c5508 // indirect
-	github.com/anacrolix/confluence v1.9.0 // indirect
-	github.com/anacrolix/dht/v2 v2.11.0 // indirect
+	github.com/anacrolix/confluence v1.10.0 // indirect
+	github.com/anacrolix/dht/v2 v2.12.1 // indirect
 	github.com/anacrolix/envpprof v1.1.1 // indirect
 	github.com/anacrolix/go-libutp v1.0.4 // indirect
 	github.com/anacrolix/missinggo v1.3.0 // indirect
@@ -68,7 +68,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
-	github.com/pion/datachannel v1.5.0 // indirect
+	github.com/pion/datachannel v1.5.2 // indirect
 	github.com/pion/dtls/v2 v2.0.10 // indirect
 	github.com/pion/ice/v2 v2.1.13 // indirect
 	github.com/pion/interceptor v0.1.0 // indirect
@@ -77,7 +77,7 @@ require (
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.8 // indirect
 	github.com/pion/rtp v1.7.4 // indirect
-	github.com/pion/sctp v1.7.12 // indirect
+	github.com/pion/sctp v1.8.0 // indirect
 	github.com/pion/sdp/v3 v3.0.4 // indirect
 	github.com/pion/srtp/v2 v2.0.5 // indirect
 	github.com/pion/stun v0.3.5 // indirect
@@ -94,7 +94,7 @@ require (
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/willf/bitset v1.1.11 // indirect
 	github.com/willf/bloom v2.0.3+incompatible // indirect
-	golang.org/x/net v0.0.0-20211105192438-b53810dc28af // indirect
+	golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2 // indirect
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
 	golang.org/x/text v0.3.6 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect

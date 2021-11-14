@@ -111,11 +111,6 @@ type Peer struct {
 	peerRequests          map[Request]*peerRequestState
 	PeerPrefersEncryption bool // as indicated by 'e' field in extension handshake
 	PeerListenPort        int
-	// The pieces the peer has claimed to have.
-	_peerPieces roaring.Bitmap
-	// The peer has everything. This can occur due to a special message, when
-	// we may not even know the number of pieces in the torrent yet.
-	peerSentHaveAll bool
 	// The highest possible number of pieces the torrent could have based on
 	// communication with the peer. Generally only useful until we have the
 	// torrent info.
@@ -154,6 +149,12 @@ type PeerConn struct {
 
 	uploadTimer *time.Timer
 	pex         pexConnState
+
+	// The pieces the peer has claimed to have.
+	_peerPieces roaring.Bitmap
+	// The peer has everything. This can occur due to a special message, when
+	// we may not even know the number of pieces in the torrent yet.
+	peerSentHaveAll bool
 }
 
 func (cn *PeerConn) connStatusString() string {
@@ -233,7 +234,7 @@ func (cn *Peer) cumInterest() time.Duration {
 	return ret
 }
 
-func (cn *Peer) peerHasAllPieces() (all bool, known bool) {
+func (cn *PeerConn) peerHasAllPieces() (all bool, known bool) {
 	if cn.peerSentHaveAll {
 		return true, true
 	}
@@ -261,8 +262,8 @@ func (cn *Peer) bestPeerNumPieces() pieceIndex {
 }
 
 func (cn *Peer) completedString() string {
-	have := pieceIndex(cn._peerPieces.GetCardinality())
-	if cn.peerSentHaveAll {
+	have := pieceIndex(cn.peerPieces().GetCardinality())
+	if all, _ := cn.peerHasAllPieces(); all {
 		have = cn.bestPeerNumPieces()
 	}
 	return fmt.Sprintf("%d/%d", have, cn.bestPeerNumPieces())
@@ -277,6 +278,10 @@ func (cn *PeerConn) onGotInfo(info *metainfo.Info) {
 func (cn *PeerConn) setNumPieces(num pieceIndex) {
 	cn._peerPieces.RemoveRange(bitmap.BitRange(num), bitmap.ToEnd)
 	cn.peerPiecesChanged()
+}
+
+func (cn *PeerConn) peerPieces() *roaring.Bitmap {
+	return &cn._peerPieces
 }
 
 func eventAgeString(t time.Time) string {
@@ -428,8 +433,13 @@ func (cn *PeerConn) onClose() {
 	}
 }
 
+// Peer definitely has a piece, for purposes of requesting. So it's not sufficient that we think
+// they do (known=true).
 func (cn *Peer) peerHasPiece(piece pieceIndex) bool {
-	return cn.peerSentHaveAll || cn._peerPieces.Contains(bitmap.BitIndex(piece))
+	if all, known := cn.peerHasAllPieces(); all && known {
+		return true
+	}
+	return cn.peerPieces().ContainsInt(piece)
 }
 
 // 64KiB, but temporarily less to work around an issue with WebRTC. TODO: Update when
@@ -481,7 +491,6 @@ func (cn *Peer) totalExpectingTime() (ret time.Duration) {
 		ret += time.Since(cn.lastStartedExpectingToReceiveChunks)
 	}
 	return
-
 }
 
 func (cn *PeerConn) onPeerSentCancel(r Request) {
@@ -790,7 +799,7 @@ func (cn *PeerConn) peerSentBitfield(bf []bool) error {
 	return nil
 }
 
-func (cn *Peer) onPeerHasAllPieces() {
+func (cn *PeerConn) onPeerHasAllPieces() {
 	t := cn.t
 	if t.haveInfo() {
 		npp, pc := cn.newPeerPieces(), t.numPieces()
@@ -961,7 +970,7 @@ func (c *PeerConn) onReadRequest(r Request) error {
 	value := &peerRequestState{}
 	c.peerRequests[r] = value
 	go c.peerRequestDataReader(r, value)
-	//c.tickleWriter()
+	// c.tickleWriter()
 	return nil
 }
 
@@ -1235,7 +1244,7 @@ func (c *PeerConn) onReadExtendedMsg(id pp.ExtensionNumber, payload []byte) (err
 		if cb := c.callbacks.ReadExtendedHandshake; cb != nil {
 			cb(c, &d)
 		}
-		//c.logger.WithDefaultLevel(log.Debug).Printf("received extended handshake message:\n%s", spew.Sdump(d))
+		// c.logger.WithDefaultLevel(log.Debug).Printf("received extended handshake message:\n%s", spew.Sdump(d))
 		if d.Reqq != 0 {
 			c.PeerMaxRequests = d.Reqq
 		}
@@ -1346,7 +1355,7 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 
 	// Do we actually want this chunk?
 	if t.haveChunk(ppReq) {
-		//panic(fmt.Sprintf("%+v", ppReq))
+		// panic(fmt.Sprintf("%+v", ppReq))
 		chunksReceived.Add("wasted", 1)
 		c.allStats(add(1, func(cs *ConnStats) *Count { return &cs.ChunksReadWasted }))
 		return nil
@@ -1510,13 +1519,13 @@ func (cn *Peer) netGoodPiecesDirtied() int64 {
 }
 
 func (c *Peer) peerHasWantedPieces() bool {
-	if c.peerSentHaveAll {
+	if all, _ := c.peerHasAllPieces(); all {
 		return !c.t.haveAllPieces()
 	}
 	if !c.t.haveInfo() {
-		return !c._peerPieces.IsEmpty()
+		return !c.peerPieces().IsEmpty()
 	}
-	return c._peerPieces.Intersects(&c.t._pendingPieces)
+	return c.peerPieces().Intersects(&c.t._pendingPieces)
 }
 
 func (c *Peer) deleteRequest(r RequestIndex) bool {
@@ -1647,8 +1656,8 @@ func (cn *PeerConn) PeerPieces() *roaring.Bitmap {
 // Returns a new Bitmap that includes bits for all pieces the peer could have based on their claims.
 func (cn *Peer) newPeerPieces() *roaring.Bitmap {
 	// TODO: Can we use copy on write?
-	ret := cn._peerPieces.Clone()
-	if cn.peerSentHaveAll {
+	ret := cn.peerPieces().Clone()
+	if all, _ := cn.peerHasAllPieces(); all {
 		if cn.t.haveInfo() {
 			ret.AddRange(0, bitmap.BitRange(cn.t.numPieces()))
 		} else {

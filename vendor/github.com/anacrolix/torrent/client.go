@@ -82,8 +82,7 @@ type Client struct {
 	websocketTrackers websocketTrackers
 
 	activeAnnounceLimiter limiter.Instance
-
-	updateRequests chansync.BroadcastCond
+	webseedHttpClient     *http.Client
 }
 
 type ipStr string
@@ -201,9 +200,14 @@ func (cl *Client) init(cfg *ClientConfig) {
 	cl.torrents = make(map[metainfo.Hash]*Torrent)
 	cl.dialRateLimiter = rate.NewLimiter(10, 10)
 	cl.activeAnnounceLimiter.SlotsPerKey = 2
-
 	cl.event.L = cl.locker()
 	cl.ipBlockList = cfg.IPBlocklist
+	cl.webseedHttpClient = &http.Client{
+		Transport: &http.Transport{
+			Proxy:           cfg.HTTPProxy,
+			MaxConnsPerHost: 10,
+		},
+	}
 }
 
 func NewClient(cfg *ClientConfig) (cl *Client, err error) {
@@ -402,7 +406,7 @@ func (cl *Client) NewAnacrolixDhtServer(conn net.PacketConn) (s *dht.Server, err
 			if err != nil {
 				cl.logger.Printf("error bootstrapping dht: %s", err)
 			}
-			log.Fstr("%v completed bootstrap (%v)", s, ts).AddValues(s, ts).Log(cl.logger)
+			log.Fstr("%v completed bootstrap (%+v)", s, ts).AddValues(s, ts).Log(cl.logger)
 		}()
 	}
 	return
@@ -477,7 +481,6 @@ func (cl *Client) rejectAccepted(conn net.Conn) error {
 		}
 		if cl.config.DisableIPv4 && len(rip) == net.IPv4len {
 			return errors.New("ipv4 disabled")
-
 		}
 		if cl.config.DisableIPv6 && len(rip) == net.IPv6len && rip.To4() == nil {
 			return errors.New("ipv6 disabled")
@@ -735,7 +738,7 @@ func (cl *Client) establishOutgoingConn(t *Torrent, addr PeerRemoteAddr) (c *Pee
 		torrent.Add("initiated conn with preferred header obfuscation", 1)
 		return
 	}
-	//cl.logger.Printf("error establishing connection to %s (obfuscatedHeader=%t): %v", addr, obfuscatedHeaderFirst, err)
+	// cl.logger.Printf("error establishing connection to %s (obfuscatedHeader=%t): %v", addr, obfuscatedHeaderFirst, err)
 	if cl.config.HeaderObfuscationPolicy.RequirePreferred {
 		// We should have just tried with the preferred header obfuscation. If it was required,
 		// there's nothing else to try.
@@ -746,7 +749,7 @@ func (cl *Client) establishOutgoingConn(t *Torrent, addr PeerRemoteAddr) (c *Pee
 	if err == nil {
 		torrent.Add("initiated conn with fallback header obfuscation", 1)
 	}
-	//cl.logger.Printf("error establishing fallback connection to %v: %v", addr, err)
+	// cl.logger.Printf("error establishing fallback connection to %v: %v", addr, err)
 	return
 }
 
@@ -1137,14 +1140,14 @@ func (cl *Client) badPeerIPPort(ip net.IP, port int) bool {
 
 // Return a Torrent ready for insertion into a Client.
 func (cl *Client) newTorrent(ih metainfo.Hash, specStorage storage.ClientImpl) (t *Torrent) {
-	return cl.newTorrentOpt(addTorrentOpts{
+	return cl.newTorrentOpt(AddTorrentOpts{
 		InfoHash: ih,
 		Storage:  specStorage,
 	})
 }
 
 // Return a Torrent ready for insertion into a Client.
-func (cl *Client) newTorrentOpt(opts addTorrentOpts) (t *Torrent) {
+func (cl *Client) newTorrentOpt(opts AddTorrentOpts) (t *Torrent) {
 	// use provided storage, if provided
 	storageClient := cl.defaultStorage
 	if opts.Storage != nil {
@@ -1225,7 +1228,7 @@ func (cl *Client) AddTorrentInfoHashWithStorage(infoHash metainfo.Hash, specStor
 // Adds a torrent by InfoHash with a custom Storage implementation.
 // If the torrent already exists then this Storage is ignored and the
 // existing torrent returned with `new` set to `false`
-func (cl *Client) AddTorrentOpt(opts addTorrentOpts) (t *Torrent, new bool) {
+func (cl *Client) AddTorrentOpt(opts AddTorrentOpts) (t *Torrent, new bool) {
 	infoHash := opts.InfoHash
 	cl.lock()
 	defer cl.unlock()
@@ -1249,7 +1252,7 @@ func (cl *Client) AddTorrentOpt(opts addTorrentOpts) (t *Torrent, new bool) {
 	return
 }
 
-type addTorrentOpts struct {
+type AddTorrentOpts struct {
 	InfoHash  InfoHash
 	Storage   storage.ClientImpl
 	ChunkSize pp.Integer
@@ -1258,7 +1261,7 @@ type addTorrentOpts struct {
 // Add or merge a torrent spec. Returns new if the torrent wasn't already in the client. See also
 // Torrent.MergeSpec.
 func (cl *Client) AddTorrentSpec(spec *TorrentSpec) (t *Torrent, new bool, err error) {
-	t, new = cl.AddTorrentOpt(addTorrentOpts{
+	t, new = cl.AddTorrentOpt(AddTorrentOpts{
 		InfoHash:  spec.InfoHash,
 		Storage:   spec.Storage,
 		ChunkSize: spec.ChunkSize,

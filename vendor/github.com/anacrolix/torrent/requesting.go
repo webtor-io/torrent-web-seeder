@@ -15,10 +15,6 @@ import (
 	request_strategy "github.com/anacrolix/torrent/request-strategy"
 )
 
-func (cl *Client) tickleRequester() {
-	cl.updateRequests.Broadcast()
-}
-
 func (cl *Client) getRequestStrategyInput() request_strategy.Input {
 	ts := make([]request_strategy.Torrent, 0, len(cl.torrents))
 	for _, t := range cl.torrents {
@@ -116,8 +112,10 @@ func (p *peerId) GobDecode(b []byte) error {
 	return nil
 }
 
-type RequestIndex = request_strategy.RequestIndex
-type chunkIndexType = request_strategy.ChunkIndex
+type (
+	RequestIndex   = request_strategy.RequestIndex
+	chunkIndexType = request_strategy.ChunkIndex
+)
 
 type peerRequests struct {
 	requestIndexes       []RequestIndex

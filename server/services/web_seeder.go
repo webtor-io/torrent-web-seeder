@@ -13,12 +13,14 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
 )
 
 const (
 	PIECE_PATH          = "piece/"
 	SOURCE_TORRENT_PATH = "source.torrent"
+	MAX_READAHEAD       = 50 * 1024 * 1024
 )
 
 type WebSeeder struct {
@@ -168,16 +170,13 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 			var reader io.ReadSeeker
 			torReader := f.NewReader()
 			torReader.SetResponsive()
-			readahead := int64(10 * 1024 * 1024)
-			if readahead > f.Length() {
-				readahead = f.Length()
-			} else if readahead < f.Length()/10 {
-				readahead = f.Length() / 10
-			}
-			if readahead > int64(50*1024*1024) {
-				readahead = int64(50 * 1024 * 1024)
-			}
-			torReader.SetReadahead(readahead)
+			torReader.SetReadaheadFunc(func(r torrent.ReadaheadContext) int64 {
+				ra := (r.CurrentPos-r.ContiguousReadStartPos)*2 + 1024*1024
+				if ra > MAX_READAHEAD {
+					return MAX_READAHEAD
+				}
+				return ra
+			})
 			if r.Header.Get("X-Download-Rate") != "" && r.Header.Get("X-Session-ID") != "" {
 				b, err := s.bp.Get(r.Header.Get("X-Session-ID"), r.Header.Get("X-Download-Rate"))
 				if err != nil {
