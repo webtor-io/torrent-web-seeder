@@ -172,7 +172,8 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 			torReader := f.NewReader()
 			torReader.SetResponsive()
 			torReader.SetReadaheadFunc(func(r torrent.ReadaheadContext) int64 {
-				ra := (r.CurrentPos - r.ContiguousReadStartPos) * 2
+				p := f.Length() / 100
+				ra := (r.CurrentPos-r.ContiguousReadStartPos)*2 + p
 				if ra < MIN_READAHEAD {
 					ra = MIN_READAHEAD
 				}
