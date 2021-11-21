@@ -20,7 +20,7 @@ import (
 const (
 	PIECE_PATH          = "piece/"
 	SOURCE_TORRENT_PATH = "source.torrent"
-	MAX_READAHEAD       = 50 * 1024 * 1024
+	MAX_READAHEAD       = 250 * 1024 * 1024
 	MIN_READAHEAD       = 1024 * 1024
 )
 
