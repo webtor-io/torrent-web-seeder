@@ -148,9 +148,9 @@ func (s *grpcServer) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 		p := t.Piece(i)
 		ps := p.State()
 		pr := pb.Piece_NONE
-		if ps.Priority != torrent.PiecePriorityNormal {
+		if ps.Priority == torrent.PiecePriorityNormal {
 			pr = pb.Piece_NORMAL
-		} else if ps.Priority != torrent.PiecePriorityNone {
+		} else if ps.Priority > torrent.PiecePriorityNormal {
 			pr = pb.Piece_HIGH
 		}
 		pieces = append(pieces, &pb.Piece{Position: int64(i), Complete: ps.Complete, Priority: pr})
@@ -179,9 +179,9 @@ func (s *grpcServer) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatRepl
 	pieces := []*pb.Piece{}
 	for i, p := range f.State() {
 		pr := pb.Piece_NONE
-		if p.Priority != torrent.PiecePriorityNormal {
+		if p.Priority == torrent.PiecePriorityNormal {
 			pr = pb.Piece_NORMAL
-		} else if p.Priority != torrent.PiecePriorityNone {
+		} else if p.Priority > torrent.PiecePriorityNormal {
 			pr = pb.Piece_HIGH
 		}
 		pieces = append(pieces, &pb.Piece{Position: int64(i), Complete: p.Complete, Priority: pr})

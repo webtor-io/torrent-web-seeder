@@ -8,7 +8,6 @@ import (
 	"github.com/pion/interceptor"
 	"github.com/pion/logging"
 	"github.com/pion/rtcp"
-	"github.com/pion/rtp"
 )
 
 // GeneratorInterceptorFactory is a interceptor.Factory for a GeneratorInterceptor
@@ -19,7 +18,7 @@ type GeneratorInterceptorFactory struct {
 // NewInterceptor constructs a new ReceiverInterceptor
 func (g *GeneratorInterceptorFactory) NewInterceptor(id string) (interceptor.Interceptor, error) {
 	i := &GeneratorInterceptor{
-		size:        8192,
+		size:        512,
 		skipLastN:   0,
 		interval:    time.Millisecond * 100,
 		receiveLogs: map[uint32]*receiveLog{},
@@ -96,11 +95,14 @@ func (n *GeneratorInterceptor) BindRemoteStream(info *interceptor.StreamInfo, re
 			return 0, nil, err
 		}
 
-		pkt := rtp.Packet{}
-		if err = pkt.Unmarshal(b[:i]); err != nil {
+		if attr == nil {
+			attr = make(interceptor.Attributes)
+		}
+		header, err := attr.GetRTPHeader(b[:i])
+		if err != nil {
 			return 0, nil, err
 		}
-		receiveLog.add(pkt.Header.SequenceNumber)
+		receiveLog.add(header.SequenceNumber)
 
 		return i, attr, nil
 	})
