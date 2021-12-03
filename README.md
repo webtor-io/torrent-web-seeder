@@ -28,11 +28,11 @@ GLOBAL OPTIONS:
    --port value                http listening port (default: 8080)
    --grace value               grace in seconds (default: 600) [$GRACE]
    --download-rate value       download rate [$DOWNLOAD_RATE]
-   --torrent-store-host value  torrent store host [$TORRENT_STORE_SERVICE_HOST, $ TORRENT_STORE_HOST]
-   --torrent-store-port value  torrent store port (default: 50051) [$TORRENT_STORE_SERVICE_PORT, $ TORRENT_STORE_PORT]
+   --torrent-store-host value  torrent store host [$TORRENT_STORE_SERVICE_HOST, $TORRENT_STORE_HOST]
+   --torrent-store-port value  torrent store port (default: 50051) [$TORRENT_STORE_SERVICE_PORT, $TORRENT_STORE_PORT]
    --stat-host value           stat listening host
    --stat-port value           stat listening port (default: 50051)
-   --info-hash value           torrent infohash [$TORRENT_INFO_HASH, $ INFO_HASH]
+   --info-hash value           torrent infohash [$TORRENT_INFO_HASH, $INFO_HASH]
    --input value               torrent file path
    --help, -h                  show help
    --version, -v               print the version
