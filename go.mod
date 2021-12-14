@@ -8,7 +8,7 @@ require (
 	github.com/anacrolix/chansync v0.3.0 // indirect
 	github.com/anacrolix/log v0.10.0
 	github.com/anacrolix/sync v0.4.0 // indirect
-	github.com/anacrolix/torrent v1.39.1
+	github.com/anacrolix/torrent v1.38.1
 	github.com/aws/aws-sdk-go v1.39.4
 	github.com/bakins/logrus-middleware v0.0.0-20180426214643-ce4c6f8deb07
 	github.com/bakins/test-helpers v0.0.0-20141028124846-af83df64dc31 // indirect

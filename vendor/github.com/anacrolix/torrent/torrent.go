@@ -27,8 +27,8 @@ import (
 	"github.com/anacrolix/missinggo/v2/bitmap"
 	"github.com/anacrolix/multiless"
 	"github.com/anacrolix/sync"
-	request_strategy "github.com/anacrolix/torrent/request-strategy"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/google/go-cmp/cmp"
 	"github.com/pion/datachannel"
 
 	"github.com/anacrolix/torrent/bencode"
@@ -138,8 +138,7 @@ type Torrent struct {
 	initialPieceCheckDisabled bool
 
 	// Count of each request across active connections.
-	pendingRequests map[RequestIndex]*Peer
-	lastRequested   map[RequestIndex]time.Time
+	pendingRequests pendingRequests
 	// Chunks we've written to since the corresponding piece was last checked.
 	dirtyChunks roaring.Bitmap
 
@@ -167,7 +166,6 @@ func (t *Torrent) decPieceAvailability(i pieceIndex) {
 		panic(p.availability)
 	}
 	p.availability--
-	t.updatePieceRequestOrder(i)
 }
 
 func (t *Torrent) incPieceAvailability(i pieceIndex) {
@@ -175,7 +173,6 @@ func (t *Torrent) incPieceAvailability(i pieceIndex) {
 	if t.haveInfo() {
 		p := t.piece(i)
 		p.availability++
-		t.updatePieceRequestOrder(i)
 	}
 }
 
@@ -261,14 +258,8 @@ func (t *Torrent) addrActive(addr string) bool {
 }
 
 func (t *Torrent) appendUnclosedConns(ret []*PeerConn) []*PeerConn {
-	return t.appendConns(ret, func(conn *PeerConn) bool {
-		return !conn.closed.IsSet()
-	})
-}
-
-func (t *Torrent) appendConns(ret []*PeerConn, f func(*PeerConn) bool) []*PeerConn {
 	for c := range t.conns {
-		if f(c) {
+		if !c.closed.IsSet() {
 			ret = append(ret, c)
 		}
 	}
@@ -428,16 +419,8 @@ func (t *Torrent) setInfo(info *metainfo.Info) error {
 	return nil
 }
 
-func (t *Torrent) pieceRequestOrderKey(i int) request_strategy.PieceRequestOrderKey {
-	return request_strategy.PieceRequestOrderKey{
-		InfoHash: t.infoHash,
-		Index:    i,
-	}
-}
-
 // This seems to be all the follow-up tasks after info is set, that can't fail.
 func (t *Torrent) onSetInfo() {
-	t.initPieceRequestOrder()
 	for i := range t.pieces {
 		p := &t.pieces[i]
 		// Need to add availability before updating piece completion, as that may result in conns
@@ -446,7 +429,6 @@ func (t *Torrent) onSetInfo() {
 			panic(p.availability)
 		}
 		p.availability = int64(t.pieceAvailabilityFromPeers(i))
-		t.addRequestOrderPiece(i)
 		t.updatePieceCompletion(pieceIndex(i))
 		if !t.initialPieceCheckDisabled && !p.storageCompletionOk {
 			// t.logger.Printf("piece %s completion unknown, queueing check", p)
@@ -456,8 +438,7 @@ func (t *Torrent) onSetInfo() {
 	t.cl.event.Broadcast()
 	close(t.gotMetainfoC)
 	t.updateWantPeersEvent()
-	t.pendingRequests = make(map[RequestIndex]*Peer)
-	t.lastRequested = make(map[RequestIndex]time.Time)
+	t.pendingRequests.Init(t.numRequests())
 	t.tryCreateMorePieceHashers()
 	t.iterPeers(func(p *Peer) {
 		p.onGotInfo(t.info)
@@ -830,9 +811,6 @@ func (t *Torrent) close(wg *sync.WaitGroup) (err error) {
 	t.iterPeers(func(p *Peer) {
 		p.close()
 	})
-	if t.storage != nil {
-		t.deletePieceRequestOrder()
-	}
 	t.pex.Reset()
 	t.cl.event.Broadcast()
 	t.pieceStateChanges.Close()
@@ -931,7 +909,7 @@ func (t *Torrent) hashPiece(piece pieceIndex) (ret metainfo.Hash, err error) {
 }
 
 func (t *Torrent) haveAnyPieces() bool {
-	return !t._completedPieces.IsEmpty()
+	return t._completedPieces.GetCardinality() != 0
 }
 
 func (t *Torrent) haveAllPieces() bool {
@@ -992,23 +970,21 @@ func (t *Torrent) wantPieceIndex(index pieceIndex) bool {
 // conns (which is a map).
 var peerConnSlices sync.Pool
 
-func getPeerConnSlice(cap int) []*PeerConn {
-	getInterface := peerConnSlices.Get()
-	if getInterface == nil {
-		return make([]*PeerConn, 0, cap)
-	} else {
-		return getInterface.([]*PeerConn)[:0]
-	}
-}
-
 // The worst connection is one that hasn't been sent, or sent anything useful for the longest. A bad
 // connection is one that usually sends us unwanted pieces, or has been in the worse half of the
 // established connections for more than a minute. This is O(n log n). If there was a way to not
 // consider the position of a conn relative to the total number, it could be reduced to O(n).
 func (t *Torrent) worstBadConn() (ret *PeerConn) {
-	wcs := worseConnSlice{conns: t.appendUnclosedConns(getPeerConnSlice(len(t.conns)))}
-	defer peerConnSlices.Put(wcs.conns)
-	wcs.initKeys()
+	var sl []*PeerConn
+	getInterface := peerConnSlices.Get()
+	if getInterface == nil {
+		sl = make([]*PeerConn, 0, len(t.conns))
+	} else {
+		sl = getInterface.([]*PeerConn)[:0]
+	}
+	sl = t.appendUnclosedConns(sl)
+	defer peerConnSlices.Put(sl)
+	wcs := worseConnSlice{sl}
 	heap.Init(&wcs)
 	for wcs.Len() != 0 {
 		c := heap.Pop(&wcs).(*PeerConn)
@@ -1099,16 +1075,13 @@ func (t *Torrent) maybeNewConns() {
 func (t *Torrent) piecePriorityChanged(piece pieceIndex, reason string) {
 	if t._pendingPieces.Contains(uint32(piece)) {
 		t.iterPeers(func(c *Peer) {
-			// if c.requestState.Interested {
-			// 	return
-			// }
+			if c.actualRequestState.Interested {
+				return
+			}
 			if !c.isLowOnRequests() {
 				return
 			}
 			if !c.peerHasPiece(piece) {
-				return
-			}
-			if c.requestState.Interested && c.peerChoking && !c.peerAllowedFast.Contains(uint32(piece)) {
 				return
 			}
 			c.updateRequests(reason)
@@ -1119,11 +1092,6 @@ func (t *Torrent) piecePriorityChanged(piece pieceIndex, reason string) {
 }
 
 func (t *Torrent) updatePiecePriority(piece pieceIndex, reason string) {
-	if !t.closed.IsSet() {
-		// It would be possible to filter on pure-priority changes here to avoid churning the piece
-		// request order.
-		t.updatePieceRequestOrder(piece)
-	}
 	p := &t.pieces[piece]
 	newPrio := p.uncachedPriority()
 	// t.logger.Printf("torrent %p: piece %d: uncached priority: %v", t, piece, newPrio)
@@ -1256,11 +1224,9 @@ func (t *Torrent) updatePieceCompletion(piece pieceIndex) bool {
 	x := uint32(piece)
 	if complete {
 		t._completedPieces.Add(x)
-		t.openNewConns()
 	} else {
 		t._completedPieces.Remove(x)
 	}
-	p.t.updatePieceRequestOrder(piece)
 	t.updateComplete()
 	if complete && len(p.dirtiers) != 0 {
 		t.logger.Printf("marked piece %v complete but still has dirtiers", piece)
@@ -1396,13 +1362,7 @@ func (t *Torrent) deletePeerConn(c *PeerConn) (ret bool) {
 		}
 	}
 	torrent.Add("deleted connections", 1)
-	if !c.deleteAllRequests().IsEmpty() {
-		t.iterPeers(func(p *Peer) {
-			if p.isLowOnRequests() {
-				p.updateRequests("Torrent.deletePeerConn")
-			}
-		})
-	}
+	c.deleteAllRequests()
 	t.assertPendingRequests()
 	return
 }
@@ -1421,20 +1381,20 @@ func (t *Torrent) assertPendingRequests() {
 	if !check {
 		return
 	}
-	// var actual pendingRequests
-	// if t.haveInfo() {
-	// 	actual.m = make([]int, t.numRequests())
-	// }
-	// t.iterPeers(func(p *Peer) {
-	// 	p.requestState.Requests.Iterate(func(x uint32) bool {
-	// 		actual.Inc(x)
-	// 		return true
-	// 	})
-	// })
-	// diff := cmp.Diff(actual.m, t.pendingRequests.m)
-	// if diff != "" {
-	// 	panic(diff)
-	// }
+	var actual pendingRequests
+	if t.haveInfo() {
+		actual.m = make([]int, t.numRequests())
+	}
+	t.iterPeers(func(p *Peer) {
+		p.actualRequestState.Requests.Iterate(func(x uint32) bool {
+			actual.Inc(x)
+			return true
+		})
+	})
+	diff := cmp.Diff(actual.m, t.pendingRequests.m)
+	if diff != "" {
+		panic(diff)
+	}
 }
 
 func (t *Torrent) dropConnection(c *PeerConn) {
@@ -1445,7 +1405,6 @@ func (t *Torrent) dropConnection(c *PeerConn) {
 	}
 }
 
-// Peers as in contact information for dialing out.
 func (t *Torrent) wantPeers() bool {
 	if t.closed.IsSet() {
 		return false
@@ -1453,7 +1412,7 @@ func (t *Torrent) wantPeers() bool {
 	if t.peers.Len() > t.cl.config.TorrentPeersLowWater {
 		return false
 	}
-	return t.wantConns()
+	return t.needData() || t.seeding()
 }
 
 func (t *Torrent) updateWantPeersEvent() {
@@ -1509,7 +1468,6 @@ func (t *Torrent) onWebRtcConn(
 	} else {
 		pc.Discovery = PeerSourceIncoming
 	}
-	pc.conn.SetWriteDeadline(time.Time{})
 	t.cl.lock()
 	defer t.cl.unlock()
 	err = t.cl.runHandshookConn(pc, t)
@@ -1711,10 +1669,7 @@ func (t *Torrent) dhtAnnouncer(s DhtServer) {
 			if t.closed.IsSet() {
 				return
 			}
-			// We're also announcing ourselves as a listener, so we don't just want peer addresses.
-			// TODO: We can include the announce_peer step depending on whether we can receive
-			// inbound connections. We should probably only announce once every 15 mins too.
-			if !t.wantConns() {
+			if !t.wantPeers() {
 				goto wait
 			}
 			// TODO: Determine if there's a listener on the port we're announcing.
@@ -1856,10 +1811,13 @@ func (t *Torrent) wantConns() bool {
 	if t.closed.IsSet() {
 		return false
 	}
-	if !t.needData() && (!t.seeding() || !t.haveAnyPieces()) {
+	if !t.seeding() && !t.needData() {
 		return false
 	}
-	return len(t.conns) < t.maxEstablishedConns || t.worstBadConn() != nil
+	if len(t.conns) < t.maxEstablishedConns {
+		return true
+	}
+	return t.worstBadConn() != nil
 }
 
 func (t *Torrent) SetMaxEstablishedConns(max int) (oldMax int) {
@@ -1867,15 +1825,11 @@ func (t *Torrent) SetMaxEstablishedConns(max int) (oldMax int) {
 	defer t.cl.unlock()
 	oldMax = t.maxEstablishedConns
 	t.maxEstablishedConns = max
-	wcs := worseConnSlice{
-		conns: t.appendConns(nil, func(*PeerConn) bool {
-			return true
-		}),
-	}
-	wcs.initKeys()
-	heap.Init(&wcs)
+	wcs := slices.HeapInterface(slices.FromMapKeys(t.conns), func(l, r *PeerConn) bool {
+		return worseConn(&l.Peer, &r.Peer)
+	})
 	for len(t.conns) > t.maxEstablishedConns && wcs.Len() > 0 {
-		t.dropConnection(heap.Pop(&wcs).(*PeerConn))
+		t.dropConnection(wcs.Pop().(*PeerConn))
 	}
 	t.openNewConns()
 	return oldMax
@@ -2232,12 +2186,10 @@ func (t *Torrent) addWebSeed(url string) {
 	if _, ok := t.webSeeds[url]; ok {
 		return
 	}
-	// I don't think Go http supports pipelining requests. However, we can have more ready to go
+	// I don't think Go http supports pipelining requests. However we can have more ready to go
 	// right away. This value should be some multiple of the number of connections to a host. I
-	// would expect that double maxRequests plus a bit would be appropriate. This value is based on
-	// downloading Sintel (08ada5a7a6183aae1e09d831df6748d566095a10) from
-	// "https://webtorrent.io/torrents/".
-	const maxRequests = 16
+	// would expect that double maxRequests plus a bit would be appropriate.
+	const maxRequests = 32
 	ws := webseedPeer{
 		peer: Peer{
 			t:                        t,
@@ -2262,7 +2214,7 @@ func (t *Torrent) addWebSeed(url string) {
 	ws.peer.initUpdateRequestsTimer()
 	ws.requesterCond.L = t.cl.locker()
 	for i := 0; i < maxRequests; i += 1 {
-		go ws.requester(i)
+		go ws.requester()
 	}
 	for _, f := range t.callbacks().NewPeer {
 		f(&ws.peer)
@@ -2302,17 +2254,4 @@ func (t *Torrent) pieceRequestIndexOffset(piece pieceIndex) RequestIndex {
 
 func (t *Torrent) updateComplete() {
 	t.Complete.SetBool(t.haveAllPieces())
-}
-
-func (t *Torrent) cancelRequest(r RequestIndex) *Peer {
-	p := t.pendingRequests[r]
-	if p != nil {
-		p.cancel(r)
-	}
-	delete(t.pendingRequests, r)
-	return p
-}
-
-func (t *Torrent) requestingPeer(r RequestIndex) *Peer {
-	return t.pendingRequests[r]
 }

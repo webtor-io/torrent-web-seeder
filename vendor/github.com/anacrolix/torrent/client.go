@@ -27,7 +27,6 @@ import (
 	"github.com/anacrolix/missinggo/v2/bitmap"
 	"github.com/anacrolix/missinggo/v2/pproffd"
 	"github.com/anacrolix/sync"
-	request_strategy "github.com/anacrolix/torrent/request-strategy"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/dustin/go-humanize"
 	"github.com/google/btree"
@@ -75,7 +74,6 @@ type Client struct {
 	dopplegangerAddrs map[string]struct{}
 	badPeerIPs        map[string]struct{}
 	torrents          map[InfoHash]*Torrent
-	pieceRequestOrder map[interface{}]*request_strategy.PieceRequestOrder
 
 	acceptLimiter   map[ipStr]int
 	dialRateLimiter *rate.Limiter
@@ -262,7 +260,7 @@ func NewClient(cfg *ClientConfig) (cl *Client, err error) {
 
 	for _, _s := range sockets {
 		s := _s // Go is fucking retarded.
-		cl.onClose = append(cl.onClose, func() { go s.Close() })
+		cl.onClose = append(cl.onClose, func() { s.Close() })
 		if peerNetworkEnabled(parseNetworkString(s.Addr().Network()), cl.config) {
 			cl.dialers = append(cl.dialers, s)
 			cl.listeners = append(cl.listeners, s)
@@ -424,23 +422,26 @@ func (cl *Client) eachDhtServer(f func(DhtServer)) {
 	}
 }
 
-// Stops the client. All connections to peers are closed and all activity will come to a halt.
+// Stops the client. All connections to peers are closed and all activity will
+// come to a halt.
 func (cl *Client) Close() (errs []error) {
+	cl.closed.Set()
 	var closeGroup sync.WaitGroup // For concurrent cleanup to complete before returning
 	cl.lock()
+	cl.event.Broadcast()
 	for _, t := range cl.torrents {
 		err := t.close(&closeGroup)
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
+	cl.unlock()
+	closeGroup.Wait() // defer is LIFO. We want to Wait() after cl.unlock()
+	cl.lock()
 	for i := range cl.onClose {
 		cl.onClose[len(cl.onClose)-1-i]()
 	}
-	cl.closed.Set()
 	cl.unlock()
-	cl.event.Broadcast()
-	closeGroup.Wait() // defer is LIFO. We want to Wait() after cl.unlock()
 	return
 }
 
@@ -502,7 +503,7 @@ func (cl *Client) acceptConnections(l Listener) {
 		cl.rLock()
 		closed := cl.closed.IsSet()
 		var reject error
-		if !closed && conn != nil {
+		if conn != nil {
 			reject = cl.rejectAccepted(conn)
 		}
 		cl.rUnlock()
@@ -757,9 +758,6 @@ func (cl *Client) establishOutgoingConn(t *Torrent, addr PeerRemoteAddr) (c *Pee
 func (cl *Client) outgoingConnection(t *Torrent, addr PeerRemoteAddr, ps PeerSource, trusted bool) {
 	cl.dialRateLimiter.Wait(context.Background())
 	c, err := cl.establishOutgoingConn(t, addr)
-	if err == nil {
-		c.conn.SetWriteDeadline(time.Time{})
-	}
 	cl.lock()
 	defer cl.unlock()
 	// Don't release lock between here and addPeerConn, unless it's for
@@ -929,7 +927,6 @@ func (cl *Client) runReceivedConn(c *PeerConn) {
 		return
 	}
 	torrent.Add("received handshake for loaded torrent", 1)
-	c.conn.SetWriteDeadline(time.Time{})
 	cl.lock()
 	defer cl.unlock()
 	t.runHandshookConnLoggingErr(c)
@@ -940,13 +937,13 @@ func (cl *Client) runHandshookConn(c *PeerConn, t *Torrent) error {
 	c.setTorrent(t)
 	for i, b := range cl.config.MinPeerExtensions {
 		if c.PeerExtensionBytes[i]&b != b {
-			return fmt.Errorf("peer did not meet minimum peer extensions: %x", c.PeerExtensionBytes[:])
+			return fmt.Errorf("peer did not meet minimum peer extensions: %x", c.PeerExtensionBytes)
 		}
 	}
 	if c.PeerID == cl.peerID {
 		if c.outgoing {
 			connsToSelf.Add(1)
-			addr := c.RemoteAddr.String()
+			addr := c.conn.RemoteAddr().String()
 			cl.dopplegangerAddrs[addr] = struct{}{}
 		} /* else {
 			// Because the remote address is not necessarily the same as its client's torrent listen
@@ -956,6 +953,7 @@ func (cl *Client) runHandshookConn(c *PeerConn, t *Torrent) error {
 		t.logger.WithLevel(log.Debug).Printf("local and remote peer ids are the same")
 		return nil
 	}
+	c.conn.SetWriteDeadline(time.Time{})
 	c.r = deadlineReader{c.conn, c.r}
 	completedHandshakeConnectionFlags.Add(c.connectionFlags(), 1)
 	if connIsIpv6(c.conn) {

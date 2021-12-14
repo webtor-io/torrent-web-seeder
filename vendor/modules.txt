@@ -3,10 +3,12 @@
 code.cloudfoundry.org/bytefmt
 # crawshaw.io/sqlite v0.3.3-0.20210127221821-98b1f83c5508
 ## explicit; go 1.12
+crawshaw.io/sqlite
+crawshaw.io/sqlite/c
+crawshaw.io/sqlite/sqlitex
 # github.com/RoaringBitmap/roaring v0.9.4
 ## explicit; go 1.14
 github.com/RoaringBitmap/roaring
-github.com/RoaringBitmap/roaring/BitSliceIndexing
 github.com/RoaringBitmap/roaring/internal
 # github.com/anacrolix/chansync v0.3.0
 ## explicit; go 1.16
@@ -38,11 +40,13 @@ github.com/anacrolix/log
 # github.com/anacrolix/missinggo v1.3.0
 ## explicit; go 1.16
 github.com/anacrolix/missinggo
+github.com/anacrolix/missinggo/bitmap
 github.com/anacrolix/missinggo/expect
 github.com/anacrolix/missinggo/httptoo
 github.com/anacrolix/missinggo/inproc
 github.com/anacrolix/missinggo/iter
 github.com/anacrolix/missinggo/mime
+github.com/anacrolix/missinggo/orderedmap
 github.com/anacrolix/missinggo/pproffd
 github.com/anacrolix/missinggo/pubsub
 github.com/anacrolix/missinggo/slices
@@ -55,6 +59,7 @@ github.com/anacrolix/missinggo/v2
 github.com/anacrolix/missinggo/v2/bitmap
 github.com/anacrolix/missinggo/v2/iter
 github.com/anacrolix/missinggo/v2/pproffd
+github.com/anacrolix/missinggo/v2/prioritybitmap
 github.com/anacrolix/missinggo/v2/resource
 # github.com/anacrolix/mmsg v1.0.0
 ## explicit
@@ -70,7 +75,7 @@ github.com/anacrolix/stm/stmutil
 # github.com/anacrolix/sync v0.4.0
 ## explicit; go 1.13
 github.com/anacrolix/sync
-# github.com/anacrolix/torrent v1.39.1
+# github.com/anacrolix/torrent v1.38.1
 ## explicit; go 1.17
 github.com/anacrolix/torrent
 github.com/anacrolix/torrent/bencode
@@ -179,6 +184,7 @@ github.com/dustin/go-humanize
 github.com/edsrzf/mmap-go
 # github.com/elliotchance/orderedmap v1.4.0
 ## explicit; go 1.12
+github.com/elliotchance/orderedmap
 # github.com/go-pg/migrations/v8 v8.1.0
 ## explicit; go 1.16
 github.com/go-pg/migrations/v8
@@ -217,6 +223,11 @@ github.com/golang/protobuf/ptypes/timestamp
 github.com/google/btree
 # github.com/google/go-cmp v0.5.6
 ## explicit; go 1.8
+github.com/google/go-cmp/cmp
+github.com/google/go-cmp/cmp/internal/diff
+github.com/google/go-cmp/cmp/internal/flags
+github.com/google/go-cmp/cmp/internal/function
+github.com/google/go-cmp/cmp/internal/value
 # github.com/google/uuid v1.3.0
 ## explicit
 github.com/google/uuid
@@ -351,7 +362,6 @@ github.com/pion/webrtc/v3/pkg/rtcerr
 github.com/pkg/errors
 # github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0
 ## explicit; go 1.12
-github.com/remyoudompheng/bigfft
 # github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417
 ## explicit; go 1.12
 github.com/rs/dnscache
@@ -360,6 +370,7 @@ github.com/rs/dnscache
 github.com/russross/blackfriday/v2
 # github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46
 ## explicit
+github.com/ryszard/goskiplist/skiplist
 # github.com/sirupsen/logrus v1.8.1
 ## explicit; go 1.13
 github.com/sirupsen/logrus
@@ -539,43 +550,11 @@ google.golang.org/protobuf/types/known/timestamppb
 mellium.im/sasl
 # modernc.org/libc v1.11.104
 ## explicit; go 1.16
-modernc.org/libc
-modernc.org/libc/errno
-modernc.org/libc/fcntl
-modernc.org/libc/fts
-modernc.org/libc/grp
-modernc.org/libc/honnef.co/go/netdb
-modernc.org/libc/langinfo
-modernc.org/libc/limits
-modernc.org/libc/netdb
-modernc.org/libc/netinet/in
-modernc.org/libc/poll
-modernc.org/libc/pthread
-modernc.org/libc/pwd
-modernc.org/libc/signal
-modernc.org/libc/stdio
-modernc.org/libc/stdlib
-modernc.org/libc/sys/socket
-modernc.org/libc/sys/stat
-modernc.org/libc/sys/types
-modernc.org/libc/termios
-modernc.org/libc/time
-modernc.org/libc/unistd
-modernc.org/libc/utime
-modernc.org/libc/uuid
-modernc.org/libc/uuid/uuid
-modernc.org/libc/wctype
 # modernc.org/mathutil v1.4.1
 ## explicit; go 1.13
-modernc.org/mathutil
 # modernc.org/memory v1.0.5
 ## explicit; go 1.15
-modernc.org/memory
 # modernc.org/sqlite v1.14.3
 ## explicit; go 1.16
-modernc.org/sqlite/lib
 # zombiezen.com/go/sqlite v0.8.0
 ## explicit; go 1.15
-zombiezen.com/go/sqlite
-zombiezen.com/go/sqlite/fs
-zombiezen.com/go/sqlite/sqlitex

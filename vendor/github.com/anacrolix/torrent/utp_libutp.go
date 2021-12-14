@@ -4,7 +4,7 @@
 package torrent
 
 import (
-	utp "github.com/anacrolix/go-libutp"
+	"github.com/anacrolix/go-libutp"
 )
 
 func NewUtpSocket(network, addr string, fc firewallCallback) (utpSocket, error) {
@@ -16,7 +16,7 @@ func NewUtpSocket(network, addr string, fc firewallCallback) (utpSocket, error) 
 		return s, err
 	}
 	if fc != nil {
-		s.SetSyncFirewallCallback(fc)
+		s.SetFirewallCallback(utp.FirewallCallback(fc))
 	}
 	return s, err
 }

@@ -48,17 +48,6 @@ func binaryToJsonString(b []byte) string {
 }
 
 func jsonStringToInfoHash(s string) (ih [20]byte, err error) {
-	b, err := decodeJsonByteString(s, ih[:0])
-	if err != nil {
-		return
-	}
-	if len(b) != len(ih) {
-		err = fmt.Errorf("string decoded to %v bytes", len(b))
-	}
-	return
-}
-
-func decodeJsonByteString(s string, b []byte) ([]byte, error) {
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -66,11 +55,12 @@ func decodeJsonByteString(s string, b []byte) ([]byte, error) {
 		}
 		panic(fmt.Sprintf("%q", s))
 	}()
-	for _, c := range []rune(s) {
+	for i, c := range []rune(s) {
 		if c < 0 || c > math.MaxUint8 {
-			return b, fmt.Errorf("rune out of bounds: %v", c)
+			err = fmt.Errorf("bad infohash string: %v", s)
+			return
 		}
-		b = append(b, byte(c))
+		ih[i] = byte(c)
 	}
-	return b, nil
+	return
 }

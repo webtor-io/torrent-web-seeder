@@ -223,6 +223,8 @@ github.com/anacrolix/torrent v1.37.1-0.20211114025441-0434b1621adb h1:IQmNDF3+hI
 github.com/anacrolix/torrent v1.37.1-0.20211114025441-0434b1621adb/go.mod h1:Z/PwbVgpAthgWLagZoqip84l6XI2NUKr72M+BoF/6vg=
 github.com/anacrolix/torrent v1.38.0 h1:HxSErXlfxjSnPRT9LJT4v7c6hGEFp9JLSS7eRcs3G14=
 github.com/anacrolix/torrent v1.38.0/go.mod h1:QC5d3J5OQMZC67Ni2nKkvwph/vc/MA7ikHqtdiGSq7M=
+github.com/anacrolix/torrent v1.38.1 h1:N3UbfTBO/PC/8iB+OMpJlRkOH7nok9Ds6JKULcJdH8I=
+github.com/anacrolix/torrent v1.38.1/go.mod h1:xhm8s8my535OAsBJSExmtvQHqXnHCs7yD3Cx2z6vpdM=
 github.com/anacrolix/torrent v1.39.1 h1:50qR55q6cXdqhR1TQQL5sOds7ZXHo+EY+KwD9nw81bU=
 github.com/anacrolix/torrent v1.39.1/go.mod h1:TTvBSuNJyyokxryCQCSb1J4bxb/fqYx5HeSW/kivSEg=
 github.com/anacrolix/upnp v0.1.1/go.mod h1:LXsbsp5h+WGN7YR+0A7iVXm5BL1LYryDev1zuJMWYQo=
