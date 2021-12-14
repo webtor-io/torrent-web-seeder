@@ -3,7 +3,6 @@ package twcc
 
 import (
 	"math"
-	"sort"
 
 	"github.com/pion/rtcp"
 )
@@ -42,39 +41,56 @@ func (r *Recorder) Record(mediaSSRC uint32, sequenceNumber uint16, arrivalTime i
 	if sequenceNumber < 0x0fff && (r.lastSequenceNumber&0xffff) > 0xf000 {
 		r.cycles += 1 << 16
 	}
-	r.receivedPackets = append(r.receivedPackets, pktInfo{
+	r.receivedPackets = insertSorted(r.receivedPackets, pktInfo{
 		sequenceNumber: r.cycles | uint32(sequenceNumber),
 		arrivalTime:    arrivalTime,
 	})
 	r.lastSequenceNumber = sequenceNumber
 }
 
+func insertSorted(list []pktInfo, element pktInfo) []pktInfo {
+	if len(list) == 0 {
+		return append(list, element)
+	}
+	for i := len(list) - 1; i >= 0; i-- {
+		if list[i].sequenceNumber < element.sequenceNumber {
+			list = append(list, pktInfo{})
+			copy(list[i+2:], list[i+1:])
+			list[i+1] = element
+			return list
+		}
+		if list[i].sequenceNumber == element.sequenceNumber {
+			list[i] = element
+			return list
+		}
+	}
+	// element.sequenceNumber is between 0 and first ever received sequenceNumber
+	return append([]pktInfo{element}, list...)
+}
+
 // BuildFeedbackPacket creates a new RTCP packet containing a TWCC feedback report.
 func (r *Recorder) BuildFeedbackPacket() []rtcp.Packet {
 	feedback := newFeedback(r.senderSSRC, r.mediaSSRC, r.fbPktCnt)
+	r.fbPktCnt++
 	if len(r.receivedPackets) < 2 {
+		r.receivedPackets = []pktInfo{}
 		return []rtcp.Packet{feedback.getRTCP()}
 	}
 
-	sort.Slice(r.receivedPackets, func(i, j int) bool {
-		return r.receivedPackets[i].sequenceNumber < r.receivedPackets[j].sequenceNumber
-	})
 	feedback.setBase(uint16(r.receivedPackets[0].sequenceNumber&0xffff), r.receivedPackets[0].arrivalTime)
 
 	var pkts []rtcp.Packet
 	for _, pkt := range r.receivedPackets {
-		built := feedback.addReceived(uint16(pkt.sequenceNumber&0xffff), pkt.arrivalTime)
-		if !built {
+		ok := feedback.addReceived(uint16(pkt.sequenceNumber&0xffff), pkt.arrivalTime)
+		if !ok {
 			pkts = append(pkts, feedback.getRTCP())
-			r.fbPktCnt++
 			feedback = newFeedback(r.senderSSRC, r.mediaSSRC, r.fbPktCnt)
+			r.fbPktCnt++
 			feedback.addReceived(uint16(pkt.sequenceNumber&0xffff), pkt.arrivalTime)
 		}
 	}
 	r.receivedPackets = []pktInfo{}
 	pkts = append(pkts, feedback.getRTCP())
-
-	r.fbPktCnt++
 
 	return pkts
 }
@@ -113,10 +129,10 @@ func (f *feedback) getRTCP() *rtcp.TransportLayerCC {
 	f.rtcp.PacketStatusCount = f.sequenceNumberCount
 	f.rtcp.ReferenceTime = uint32(f.refTimestamp64MS)
 	f.rtcp.BaseSequenceNumber = f.baseSequenceNumber
-	if len(f.lastChunk.deltas) > 0 {
+	for len(f.lastChunk.deltas) > 0 {
 		f.chunks = append(f.chunks, f.lastChunk.encode())
-		f.rtcp.PacketChunks = append(f.rtcp.PacketChunks, f.chunks...)
 	}
+	f.rtcp.PacketChunks = append(f.rtcp.PacketChunks, f.chunks...)
 	f.rtcp.RecvDeltas = f.deltas
 
 	padLen := 20 + len(f.rtcp.PacketChunks)*2 + f.len // 4 bytes header + 16 bytes twcc header + 2 bytes for each chunk + length of deltas

@@ -3,12 +3,10 @@
 code.cloudfoundry.org/bytefmt
 # crawshaw.io/sqlite v0.3.3-0.20210127221821-98b1f83c5508
 ## explicit; go 1.12
-crawshaw.io/sqlite
-crawshaw.io/sqlite/c
-crawshaw.io/sqlite/sqlitex
 # github.com/RoaringBitmap/roaring v0.9.4
 ## explicit; go 1.14
 github.com/RoaringBitmap/roaring
+github.com/RoaringBitmap/roaring/BitSliceIndexing
 github.com/RoaringBitmap/roaring/internal
 # github.com/anacrolix/chansync v0.3.0
 ## explicit; go 1.16
@@ -17,7 +15,7 @@ github.com/anacrolix/chansync/events
 # github.com/anacrolix/confluence v1.10.0
 ## explicit; go 1.17
 github.com/anacrolix/confluence/debug-writer
-# github.com/anacrolix/dht/v2 v2.13.0
+# github.com/anacrolix/dht/v2 v2.14.0
 ## explicit; go 1.17
 github.com/anacrolix/dht/v2
 github.com/anacrolix/dht/v2/bep44
@@ -31,7 +29,7 @@ github.com/anacrolix/dht/v2/types
 # github.com/anacrolix/envpprof v1.1.1
 ## explicit; go 1.12
 github.com/anacrolix/envpprof
-# github.com/anacrolix/go-libutp v1.0.4
+# github.com/anacrolix/go-libutp v1.1.0
 ## explicit; go 1.14
 github.com/anacrolix/go-libutp
 # github.com/anacrolix/log v0.10.0
@@ -40,13 +38,11 @@ github.com/anacrolix/log
 # github.com/anacrolix/missinggo v1.3.0
 ## explicit; go 1.16
 github.com/anacrolix/missinggo
-github.com/anacrolix/missinggo/bitmap
 github.com/anacrolix/missinggo/expect
 github.com/anacrolix/missinggo/httptoo
 github.com/anacrolix/missinggo/inproc
 github.com/anacrolix/missinggo/iter
 github.com/anacrolix/missinggo/mime
-github.com/anacrolix/missinggo/orderedmap
 github.com/anacrolix/missinggo/pproffd
 github.com/anacrolix/missinggo/pubsub
 github.com/anacrolix/missinggo/slices
@@ -59,7 +55,6 @@ github.com/anacrolix/missinggo/v2
 github.com/anacrolix/missinggo/v2/bitmap
 github.com/anacrolix/missinggo/v2/iter
 github.com/anacrolix/missinggo/v2/pproffd
-github.com/anacrolix/missinggo/v2/prioritybitmap
 github.com/anacrolix/missinggo/v2/resource
 # github.com/anacrolix/mmsg v1.0.0
 ## explicit
@@ -75,7 +70,7 @@ github.com/anacrolix/stm/stmutil
 # github.com/anacrolix/sync v0.4.0
 ## explicit; go 1.13
 github.com/anacrolix/sync
-# github.com/anacrolix/torrent v1.38.0
+# github.com/anacrolix/torrent v1.39.1
 ## explicit; go 1.17
 github.com/anacrolix/torrent
 github.com/anacrolix/torrent/bencode
@@ -99,7 +94,7 @@ github.com/anacrolix/torrent/types
 github.com/anacrolix/torrent/version
 github.com/anacrolix/torrent/webseed
 github.com/anacrolix/torrent/webtorrent
-# github.com/anacrolix/upnp v0.1.2-0.20200416075019-5e9378ed1425
+# github.com/anacrolix/upnp v0.1.2
 ## explicit; go 1.12
 github.com/anacrolix/upnp
 # github.com/anacrolix/utp v0.1.0
@@ -184,7 +179,6 @@ github.com/dustin/go-humanize
 github.com/edsrzf/mmap-go
 # github.com/elliotchance/orderedmap v1.4.0
 ## explicit; go 1.12
-github.com/elliotchance/orderedmap
 # github.com/go-pg/migrations/v8 v8.1.0
 ## explicit; go 1.16
 github.com/go-pg/migrations/v8
@@ -223,11 +217,6 @@ github.com/golang/protobuf/ptypes/timestamp
 github.com/google/btree
 # github.com/google/go-cmp v0.5.6
 ## explicit; go 1.8
-github.com/google/go-cmp/cmp
-github.com/google/go-cmp/cmp/internal/diff
-github.com/google/go-cmp/cmp/internal/flags
-github.com/google/go-cmp/cmp/internal/function
-github.com/google/go-cmp/cmp/internal/value
 # github.com/google/uuid v1.3.0
 ## explicit
 github.com/google/uuid
@@ -264,7 +253,7 @@ github.com/jmespath/go-jmespath
 # github.com/juju/ratelimit v1.0.1
 ## explicit
 github.com/juju/ratelimit
-# github.com/mattn/go-isatty v0.0.13
+# github.com/mattn/go-isatty v0.0.14
 ## explicit; go 1.12
 github.com/mattn/go-isatty
 # github.com/mschoch/smat v0.2.0
@@ -273,7 +262,7 @@ github.com/mschoch/smat
 # github.com/pion/datachannel v1.5.2
 ## explicit; go 1.13
 github.com/pion/datachannel
-# github.com/pion/dtls/v2 v2.0.10
+# github.com/pion/dtls/v2 v2.0.12
 ## explicit; go 1.13
 github.com/pion/dtls/v2
 github.com/pion/dtls/v2/internal/ciphersuite
@@ -296,7 +285,7 @@ github.com/pion/dtls/v2/pkg/protocol/recordlayer
 # github.com/pion/ice/v2 v2.1.14
 ## explicit; go 1.13
 github.com/pion/ice/v2
-# github.com/pion/interceptor v0.1.2
+# github.com/pion/interceptor v0.1.4
 ## explicit; go 1.15
 github.com/pion/interceptor
 github.com/pion/interceptor/pkg/nack
@@ -360,6 +349,9 @@ github.com/pion/webrtc/v3/pkg/rtcerr
 # github.com/pkg/errors v0.9.1
 ## explicit
 github.com/pkg/errors
+# github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0
+## explicit; go 1.12
+github.com/remyoudompheng/bigfft
 # github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417
 ## explicit; go 1.12
 github.com/rs/dnscache
@@ -368,7 +360,6 @@ github.com/rs/dnscache
 github.com/russross/blackfriday/v2
 # github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46
 ## explicit
-github.com/ryszard/goskiplist/skiplist
 # github.com/sirupsen/logrus v1.8.1
 ## explicit; go 1.13
 github.com/sirupsen/logrus
@@ -413,14 +404,14 @@ github.com/webtor-io/torrent-store/torrent-store
 # go.etcd.io/bbolt v1.3.6
 ## explicit; go 1.12
 go.etcd.io/bbolt
-# golang.org/x/crypto v0.0.0-20211117183948-ae814b36b871
+# golang.org/x/crypto v0.0.0-20211209193657-4570a0811e8b
 ## explicit; go 1.17
 golang.org/x/crypto/cryptobyte
 golang.org/x/crypto/cryptobyte/asn1
 golang.org/x/crypto/curve25519
 golang.org/x/crypto/curve25519/internal/field
 golang.org/x/crypto/pbkdf2
-# golang.org/x/net v0.0.0-20211123203042-d83791d6bcd9
+# golang.org/x/net v0.0.0-20211209124913-491a49abca63
 ## explicit; go 1.17
 golang.org/x/net/bpf
 golang.org/x/net/context
@@ -439,7 +430,7 @@ golang.org/x/net/trace
 # golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 ## explicit
 golang.org/x/sync/singleflight
-# golang.org/x/sys v0.0.0-20211124211545-fe61309f8881
+# golang.org/x/sys v0.0.0-20211214170744-3b038e5940ed
 ## explicit; go 1.17
 golang.org/x/sys/cpu
 golang.org/x/sys/internal/unsafeheader
@@ -546,3 +537,45 @@ google.golang.org/protobuf/types/known/timestamppb
 # mellium.im/sasl v0.2.1
 ## explicit
 mellium.im/sasl
+# modernc.org/libc v1.11.104
+## explicit; go 1.16
+modernc.org/libc
+modernc.org/libc/errno
+modernc.org/libc/fcntl
+modernc.org/libc/fts
+modernc.org/libc/grp
+modernc.org/libc/honnef.co/go/netdb
+modernc.org/libc/langinfo
+modernc.org/libc/limits
+modernc.org/libc/netdb
+modernc.org/libc/netinet/in
+modernc.org/libc/poll
+modernc.org/libc/pthread
+modernc.org/libc/pwd
+modernc.org/libc/signal
+modernc.org/libc/stdio
+modernc.org/libc/stdlib
+modernc.org/libc/sys/socket
+modernc.org/libc/sys/stat
+modernc.org/libc/sys/types
+modernc.org/libc/termios
+modernc.org/libc/time
+modernc.org/libc/unistd
+modernc.org/libc/utime
+modernc.org/libc/uuid
+modernc.org/libc/uuid/uuid
+modernc.org/libc/wctype
+# modernc.org/mathutil v1.4.1
+## explicit; go 1.13
+modernc.org/mathutil
+# modernc.org/memory v1.0.5
+## explicit; go 1.15
+modernc.org/memory
+# modernc.org/sqlite v1.14.3
+## explicit; go 1.16
+modernc.org/sqlite/lib
+# zombiezen.com/go/sqlite v0.8.0
+## explicit; go 1.15
+zombiezen.com/go/sqlite
+zombiezen.com/go/sqlite/fs
+zombiezen.com/go/sqlite/sqlitex
