@@ -12,7 +12,16 @@ import (
 	"sync"
 )
 
+// The default bencode string length limit. This is a poor attempt to prevent excessive memory
+// allocation when parsing, but also leaves the window open to implement a better solution.
+const DefaultDecodeMaxStrLen = 1<<27 - 1 // ~128MiB
+
+type MaxStrLen = int64
+
 type Decoder struct {
+	// Maximum parsed bencode string length. Defaults to DefaultMaxStrLen if zero.
+	MaxStrLen MaxStrLen
+
 	r interface {
 		io.ByteScanner
 		io.Reader
@@ -28,13 +37,20 @@ func (d *Decoder) Decode(v interface{}) (err error) {
 			return
 		}
 		r := recover()
+		if r == nil {
+			return
+		}
 		_, ok := r.(runtime.Error)
 		if ok {
 			panic(r)
 		}
-		err, ok = r.(error)
-		if !ok && r != nil {
+		if err, ok = r.(error); !ok {
 			panic(r)
+		}
+		// Errors thrown from deeper in parsing are unexpected. At value boundaries, errors should
+		// be returned directly (at least until all the panic nonsense is removed entirely).
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
 		}
 	}()
 
@@ -101,17 +117,29 @@ func (d *Decoder) throwSyntaxError(offset int64, err error) {
 	})
 }
 
-// called when 'i' was consumed
+// Assume the 'i' is already consumed. Read and validate the rest of an int into the buffer.
+func (d *Decoder) readInt() error {
+	// start := d.Offset - 1
+	d.readUntil('e')
+	if err := d.checkBufferedInt(); err != nil {
+		return err
+	}
+	// if d.buf.Len() == 0 {
+	// 	panic(&SyntaxError{
+	// 		Offset: start,
+	// 		What:   errors.New("empty integer value"),
+	// 	})
+	// }
+	return nil
+}
+
+// called when 'i' was consumed, for the integer type in v.
 func (d *Decoder) parseInt(v reflect.Value) error {
 	start := d.Offset - 1
-	d.readUntil('e')
-	if d.buf.Len() == 0 {
-		panic(&SyntaxError{
-			Offset: start,
-			What:   errors.New("empty integer value"),
-		})
-	}
 
+	if err := d.readInt(); err != nil {
+		return err
+	}
 	s := bytesAsString(d.buf.Bytes())
 
 	switch v.Kind() {
@@ -149,16 +177,45 @@ func (d *Decoder) parseInt(v reflect.Value) error {
 	return nil
 }
 
-func (d *Decoder) parseString(v reflect.Value) error {
+func (d *Decoder) checkBufferedInt() error {
+	b := d.buf.Bytes()
+	if len(b) <= 1 {
+		return nil
+	}
+	if b[0] == '-' {
+		b = b[1:]
+	}
+	if b[0] < '1' || b[0] > '9' {
+		return errors.New("invalid leading digit")
+	}
+	return nil
+}
+
+func (d *Decoder) parseStringLength() (uint64, error) {
+	// We should have already consumed the first byte of the length into the Decoder buf.
 	start := d.Offset - 1
-
-	// read the string length first
 	d.readUntil(':')
-	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 32)
+	if err := d.checkBufferedInt(); err != nil {
+		return 0, err
+	}
+	// Really the limit should be the uint size for the platform. But we can't pass in an allocator,
+	// or limit total memory use in Go, the best we might hope to do is limit the size of a single
+	// decoded value (by reading it in in-place and then operating on a view).
+	length, err := strconv.ParseUint(bytesAsString(d.buf.Bytes()), 10, 0)
 	checkForIntParseError(err, start)
+	if int64(length) > d.getMaxStrLen() {
+		err = fmt.Errorf("parsed string length %v exceeds limit (%v)", length, DefaultDecodeMaxStrLen)
+	}
+	d.buf.Reset()
+	return length, err
+}
 
+func (d *Decoder) parseString(v reflect.Value) error {
+	length, err := d.parseStringLength()
+	if err != nil {
+		return err
+	}
 	defer d.buf.Reset()
-
 	read := func(b []byte) {
 		n, err := io.ReadFull(d.r, b)
 		d.Offset += int64(n)
@@ -231,13 +288,13 @@ func getDictField(dict reflect.Type, key string) (_ dictField, err error) {
 		}, nil
 	case reflect.Struct:
 		return getStructFieldForKey(dict, key), nil
-		//if sf.r.PkgPath != "" {
+		// if sf.r.PkgPath != "" {
 		//	panic(&UnmarshalFieldError{
 		//		Key:   key,
 		//		Type:  dict.Type(),
 		//		Field: sf.r,
 		//	})
-		//}
+		// }
 	default:
 		err = fmt.Errorf("can't assign bencode dict items into a %v", k)
 		return
@@ -516,7 +573,7 @@ func (d *Decoder) parseValue(v reflect.Value) (bool, error) {
 
 	b, err := d.r.ReadByte()
 	if err != nil {
-		panic(err)
+		return false, err
 	}
 	d.Offset++
 
@@ -580,16 +637,13 @@ func (d *Decoder) parseValueInterface() (interface{}, bool) {
 	}
 }
 
+// Called after 'i', for an arbitrary integer size.
 func (d *Decoder) parseIntInterface() (ret interface{}) {
 	start := d.Offset - 1
-	d.readUntil('e')
-	if d.buf.Len() == 0 {
-		panic(&SyntaxError{
-			Offset: start,
-			What:   errors.New("empty integer value"),
-		})
-	}
 
+	if err := d.readInt(); err != nil {
+		panic(err)
+	}
 	n, err := strconv.ParseInt(d.buf.String(), 10, 64)
 	if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {
 		i := new(big.Int)
@@ -610,17 +664,24 @@ func (d *Decoder) parseIntInterface() (ret interface{}) {
 	return
 }
 
-func (d *Decoder) parseStringInterface() string {
-	// read the string length first
-	d.readUntil(':')
-	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 32)
+func (d *Decoder) readBytes(length int) []byte {
+	b, err := io.ReadAll(io.LimitReader(d.r, int64(length)))
 	if err != nil {
-		panic(&SyntaxError{Offset: d.Offset - 1, What: err})
+		panic(err)
 	}
-	d.buf.Reset()
-	b := make([]byte, length)
-	n, err := io.ReadFull(d.r, b)
-	d.Offset += int64(n)
+	if len(b) != length {
+		panic(fmt.Errorf("read %v bytes expected %v", len(b), length))
+	}
+	return b
+}
+
+func (d *Decoder) parseStringInterface() string {
+	length, err := d.parseStringLength()
+	if err != nil {
+		panic(err)
+	}
+	b := d.readBytes(int(length))
+	d.Offset += int64(len(b))
 	if err != nil {
 		panic(&SyntaxError{Offset: d.Offset, What: err})
 	}
@@ -629,7 +690,10 @@ func (d *Decoder) parseStringInterface() string {
 
 func (d *Decoder) parseDictInterface() interface{} {
 	dict := make(map[string]interface{})
+	var lastKey string
+	lastKeyOk := false
 	for {
+		start := d.Offset
 		keyi, ok := d.parseValueInterface()
 		if !ok {
 			break
@@ -642,12 +706,17 @@ func (d *Decoder) parseDictInterface() interface{} {
 				What:   errors.New("non-string key in a dict"),
 			})
 		}
-
+		if lastKeyOk && key <= lastKey {
+			d.throwSyntaxError(start, fmt.Errorf("dict keys unsorted: %q <= %q", key, lastKey))
+		}
+		start = d.Offset
 		valuei, ok := d.parseValueInterface()
 		if !ok {
-			break
+			d.throwSyntaxError(start, fmt.Errorf("dict elem missing value [key=%v]", key))
 		}
 
+		lastKey = key
+		lastKeyOk = true
 		dict[key] = valuei
 	}
 	return dict
@@ -661,4 +730,11 @@ func (d *Decoder) parseListInterface() (list []interface{}) {
 		valuei, ok = d.parseValueInterface()
 	}
 	return
+}
+
+func (d *Decoder) getMaxStrLen() int64 {
+	if d.MaxStrLen == 0 {
+		return DefaultDecodeMaxStrLen
+	}
+	return d.MaxStrLen
 }

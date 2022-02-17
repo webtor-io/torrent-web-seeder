@@ -40,31 +40,31 @@ func NewWebSeeder(t *Torrent, c *Counter, bp *BucketPool) *WebSeeder {
 }
 
 func (s *WebSeeder) renderTorrent(w http.ResponseWriter, r *http.Request) {
-	log.Info("Serve torrent")
+	log.Info("serve torrent")
 
 	t, err := s.t.Get()
 
 	if err != nil {
-		http.Error(w, "Failed to get torrent", http.StatusInternalServerError)
+		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-bittorrent")
 
 	err = bencode.NewEncoder(w).Encode(t.Metainfo())
 	if err != nil {
-		log.WithError(err).Error("Failed to encode torrent")
-		http.Error(w, "Failed to encode torrent", http.StatusInternalServerError)
+		log.WithError(err).Error("failed to encode torrent")
+		http.Error(w, "failed to encode torrent", http.StatusInternalServerError)
 		return
 	}
 }
 
 func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, hash string) {
-	log.Infof("Serve piece data for hash=%v", hash)
+	log.Infof("serve piece data for hash=%v", hash)
 
 	t, err := s.t.Get()
 
 	if err != nil {
-		http.Error(w, "Failed to get torrent", http.StatusInternalServerError)
+		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		w.WriteHeader(500)
 		return
 	}
@@ -79,7 +79,7 @@ func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, hash
 }
 
 func (s *WebSeeder) renderPiece(w http.ResponseWriter, r *http.Request, hash string) {
-	log.Infof("Serve piece hash=%v", hash)
+	log.Infof("serve piece hash=%v", hash)
 	if hash == "" {
 		s.renderPieceIndex(w, r)
 	} else {
@@ -88,12 +88,12 @@ func (s *WebSeeder) renderPiece(w http.ResponseWriter, r *http.Request, hash str
 }
 
 func (s *WebSeeder) renderPieceIndex(w http.ResponseWriter, r *http.Request) {
-	log.Info("Serve piece index")
+	log.Info("serve piece index")
 
 	t, err := s.t.Get()
 
 	if err != nil {
-		http.Error(w, "Failed to get torrent", http.StatusInternalServerError)
+		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
 
@@ -126,7 +126,7 @@ func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
 	t, err := s.t.Get()
 
 	if err != nil {
-		http.Error(w, "Failed to get torrent", http.StatusInternalServerError)
+		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
 	h := t.InfoHash().HexString()
@@ -154,12 +154,12 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 	t, err := s.t.Get()
 
 	if err != nil {
-		http.Error(w, "Failed to get torrent", http.StatusInternalServerError)
+		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
 	for _, f := range t.Files() {
 		if f.Path() == p {
-			log.WithField("range", r.Header.Get("Range")).Info("Serve file")
+			log.WithField("range", r.Header.Get("Range")).Info("serve file")
 			if download {
 				w.Header().Add("Content-Type", "application/octet-stream")
 				w.Header().Add("Content-Disposition", "attachment; filename=\""+filepath.Base(p)+"\"")
@@ -188,8 +188,8 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 			if r.Header.Get("X-Download-Rate") != "" && r.Header.Get("X-Session-ID") != "" {
 				b, err := s.bp.Get(r.Header.Get("X-Session-ID"), r.Header.Get("X-Download-Rate"))
 				if err != nil {
-					log.WithError(err).Error("Failed to get bucket")
-					http.Error(w, "Failed to get bucket", http.StatusInternalServerError)
+					log.WithError(err).Error("failed to get bucket")
+					http.Error(w, "failed to get bucket", http.StatusInternalServerError)
 					return
 				}
 				reader = NewThrottledReader(torReader, b)
@@ -203,7 +203,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 		}
 	}
 	if !found {
-		log.Info("File not found")
+		log.Info("file not found")
 
 		http.NotFound(w, r)
 	}
@@ -212,7 +212,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t, err := s.t.Get()
 	if err != nil {
-		log.WithError(err).Error("Failed to get torrent")
+		log.WithError(err).Error("failed to get torrent")
 		w.WriteHeader(500)
 		return
 	}

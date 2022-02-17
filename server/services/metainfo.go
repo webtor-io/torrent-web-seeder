@@ -62,26 +62,26 @@ func (s *MetaInfo) Get() (*metainfo.MetaInfo, error) {
 }
 
 func (s *MetaInfo) get() (*metainfo.MetaInfo, error) {
-	log.Info("Initializing MetaInfo")
+	log.Info("initializing MetaInfo")
 	if s.input != "" {
-		log.Info("Loading from file")
+		log.Info("loading from file")
 		return metainfo.LoadFromFile(s.input)
 	}
 	c, err := s.cl.Get()
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get torrent store client")
+		return nil, errors.Wrap(err, "failed to get torrent store client")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	r, err := c.Pull(ctx, &ts.PullRequest{InfoHash: s.infoHash})
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to pull torrent from the torrent store")
+		return nil, errors.Wrap(err, "failed to pull torrent from the torrent store")
 	}
 	reader := bytes.NewReader(r.Torrent)
 	mi, err := metainfo.Load(reader)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to parse torrent")
+		return nil, errors.Wrap(err, "failed to parse torrent")
 	}
-	log.Info("Torrent pulled successfully")
+	log.Info("torrent pulled successfully")
 	return mi, nil
 }

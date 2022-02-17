@@ -1,3 +1,4 @@
+//go:build !js
 // +build !js
 
 package webrtc
@@ -326,6 +327,10 @@ func (t *DTLSTransport) Start(remoteParameters DTLSParameters) error {
 		dtlsConfig.ReplayProtectionWindow = int(*t.api.settingEngine.replayProtection.DTLS)
 	}
 
+	if t.api.settingEngine.dtls.retransmissionInterval != 0 {
+		dtlsConfig.FlightInterval = t.api.settingEngine.dtls.retransmissionInterval
+	}
+
 	// Connect as DTLS Client/Server, function is blocking and we
 	// must not hold the DTLSTransport lock
 	if role == DTLSRoleClient {
@@ -445,7 +450,7 @@ func (t *DTLSTransport) validateFingerPrint(remoteCert *x509.Certificate) error 
 }
 
 func (t *DTLSTransport) ensureICEConn() error {
-	if t.iceTransport == nil || t.iceTransport.State() == ICETransportStateNew {
+	if t.iceTransport == nil {
 		return errICEConnectionNotStarted
 	}
 

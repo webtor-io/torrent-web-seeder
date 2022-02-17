@@ -190,7 +190,7 @@ func NewServer(c *ServerConfig) (s *Server, err error) {
 	c.InitNodeId()
 	// If Logger is empty, emulate the old behaviour: Everything is logged to the default location,
 	// and there are no debug messages.
-	if c.Logger.LoggerImpl == nil {
+	if c.Logger.IsZero() {
 		c.Logger = log.Default.FilterLevel(log.Info)
 	}
 	// Add log.Debug by default.
@@ -437,7 +437,7 @@ func filterPeers(querySourceIp net.IP, queryWants []krpc.Want, allPeers []krpc.N
 				return nil, false
 			}
 		}(peer.IP); ok {
-			filtered = append(filtered, krpc.NodeAddr{ip, peer.Port})
+			filtered = append(filtered, krpc.NodeAddr{IP: ip, Port: peer.Port})
 		}
 	}
 	return
@@ -544,7 +544,7 @@ func (s *Server) handleQuery(source Addr, m krpc.Msg) {
 		if ps := s.config.PeerStore; ps != nil {
 			go ps.AddPeer(
 				peer_store.InfoHash(args.InfoHash),
-				krpc.NodeAddr{source.IP(), port},
+				krpc.NodeAddr{IP: source.IP(), Port: port},
 			)
 		}
 
@@ -619,10 +619,10 @@ func (s *Server) handleQuery(source Addr, m krpc.Msg) {
 		r.Sig = item.Sig
 
 		s.reply(source, m.T, r)
-	//case "sample_infohashes":
-	//// Nodes supporting this extension should always include the samples field in the response,
-	//// even when it is zero-length. This lets indexing nodes to distinguish nodes supporting this
-	//// extension from those that respond to unknown query types which contain a target field [2].
+	// case "sample_infohashes":
+	// // Nodes supporting this extension should always include the samples field in the response,
+	// // even when it is zero-length. This lets indexing nodes to distinguish nodes supporting this
+	// // extension from those that respond to unknown query types which contain a target field [2].
 	default:
 		// TODO: http://libtorrent.org/dht_extensions.html#forward-compatibility
 		s.sendError(source, m.T, krpc.ErrorMethodUnknown)
@@ -909,8 +909,10 @@ type QueryRateLimiting struct {
 	// Don't rate-limit any sends for a query. Note that there's still built-in waits before retries.
 	NotAny        bool
 	WaitOnRetries bool
+	NoWaitFirst   bool
 }
 
+// The zero value for this uses reasonable/traditional defaults on Server methods.
 type QueryInput struct {
 	MsgArgs      krpc.MsgArgs
 	RateLimiting QueryRateLimiting
@@ -994,8 +996,23 @@ func (s *Server) transactionQuerySender(
 			wrote, err := s.writeToNode(sendCtx, b, addr,
 				// We only wait for the first write by default if rate-limiting is enabled for this
 				// query.
-				*writes == 0 || rateLimiting.WaitOnRetries,
-				!rateLimiting.NotAny && !(rateLimiting.NotFirst && *writes == 0))
+				func() bool {
+					if *writes == 0 {
+						return !rateLimiting.NoWaitFirst
+					} else {
+						return rateLimiting.WaitOnRetries
+					}
+				}(),
+				func() bool {
+					if rateLimiting.NotAny {
+						return false
+					}
+					if *writes == 0 {
+						return !rateLimiting.NotFirst
+					}
+					return true
+				}(),
+			)
 			if wrote {
 				*writes++
 			}
@@ -1017,9 +1034,9 @@ func (s *Server) transactionQuerySender(
 }
 
 // Sends a ping query to the address given.
-func (s *Server) Ping(node *net.UDPAddr) QueryResult {
+func (s *Server) PingQueryInput(node *net.UDPAddr, qi QueryInput) QueryResult {
 	addr := NewAddr(node)
-	res := s.Query(context.TODO(), addr, "ping", QueryInput{})
+	res := s.Query(context.TODO(), addr, "ping", qi)
 	if res.Err == nil {
 		id := res.Reply.SenderID()
 		if id != nil {
@@ -1027,6 +1044,11 @@ func (s *Server) Ping(node *net.UDPAddr) QueryResult {
 		}
 	}
 	return res
+}
+
+// Sends a ping query to the address given.
+func (s *Server) Ping(node *net.UDPAddr) QueryResult {
+	return s.PingQueryInput(node, QueryInput{})
 }
 
 // Put adds a new item to node. You need to call Get first for a write token.
@@ -1053,13 +1075,18 @@ func (s *Server) Put(ctx context.Context, node Addr, i bep44.Put, token string, 
 	return s.Query(ctx, node, "put", qi)
 }
 
-func (s *Server) announcePeer(node Addr, infoHash int160.T, port int, token string, impliedPort bool, rl QueryRateLimiting) (ret QueryResult) {
+func (s *Server) announcePeer(
+	ctx context.Context,
+	node Addr, infoHash int160.T, port int, token string, impliedPort bool, rl QueryRateLimiting,
+) (
+	ret QueryResult,
+) {
 	if port == 0 && !impliedPort {
 		ret.Err = errors.New("no port specified")
 		return
 	}
 	ret = s.Query(
-		context.TODO(), node, "announce_peer",
+		ctx, node, "announce_peer",
 		QueryInput{
 			MsgArgs: krpc.MsgArgs{
 				ImpliedPort: impliedPort,
@@ -1072,8 +1099,9 @@ func (s *Server) announcePeer(node Addr, infoHash int160.T, port int, token stri
 	if ret.Err != nil {
 		return
 	}
-	if ret.Err = ret.Reply.Error(); ret.Err != nil {
+	if krpcError := ret.Reply.Error(); krpcError != nil {
 		announceErrors.Add(1)
+		ret.Err = krpcError
 		return
 	}
 	s.mu.Lock()
@@ -1195,7 +1223,7 @@ func (s *Server) closestNodes(k int, target int160.T, filter func(*node) bool) [
 func (s *Server) TraversalStartingNodes() (nodes []addrMaybeId, err error) {
 	s.mu.RLock()
 	s.table.forNodes(func(n *node) bool {
-		nodes = append(nodes, addrMaybeId{n.Addr.KRPC(), &n.Id})
+		nodes = append(nodes, addrMaybeId{Addr: n.Addr.KRPC(), Id: &n.Id})
 		return true
 	})
 	s.mu.RUnlock()
@@ -1207,7 +1235,7 @@ func (s *Server) TraversalStartingNodes() (nodes []addrMaybeId, err error) {
 		// resolution attempts. This would require that we're unable to get replies because we can't
 		// resolve, transmit or receive on the network. Nodes currently don't get expired from the
 		// table, so once we have some entries, we should never have to fallback.
-		s.logger().WithValues(log.Warning).Printf("falling back on starting nodes")
+		s.logger().Levelf(log.Debug, "falling back on starting nodes")
 		addrs, err := s.config.StartingNodes()
 		if err != nil {
 			return nil, errors.Wrap(err, "getting starting nodes")
@@ -1215,7 +1243,7 @@ func (s *Server) TraversalStartingNodes() (nodes []addrMaybeId, err error) {
 			// log.Printf("resolved %v addresses", len(addrs))
 		}
 		for _, a := range addrs {
-			nodes = append(nodes, addrMaybeId{a.KRPC(), nil})
+			nodes = append(nodes, addrMaybeId{Addr: a.KRPC(), Id: nil})
 		}
 	}
 	if len(nodes) == 0 {
@@ -1353,16 +1381,16 @@ func (s *Server) TableMaintainer() {
 		s.mu.RLock()
 		for i := range s.table.buckets {
 			s.pingQuestionableNodesInBucket(i)
-			//if time.Since(b.lastChanged) < 15*time.Minute {
+			// if time.Since(b.lastChanged) < 15*time.Minute {
 			//	continue
-			//}
+			// }
 			if s.shouldStopRefreshingBucket(i) {
 				continue
 			}
-			s.logger().WithLevel(log.Info).Printf("refreshing bucket %v", i)
+			s.logger().Levelf(log.Info, "refreshing bucket %v", i)
 			s.mu.RUnlock()
 			stats := s.refreshBucket(i)
-			s.logger().WithLevel(log.Info).Printf("finished refreshing bucket %v: %v", i, stats)
+			s.logger().Levelf(log.Info, "finished refreshing bucket %v: %v", i, stats)
 			s.mu.RLock()
 			if !s.shouldStopRefreshingBucket(i) {
 				// Presumably we couldn't fill the bucket anymore, so assume we're as deep in the
@@ -1426,6 +1454,6 @@ func validNodeAddr(addr net.Addr) bool {
 	return true
 }
 
-//func (s *Server) refreshBucket(bucketIndex int) {
+// func (s *Server) refreshBucket(bucketIndex int) {
 //	targetId := s.table.randomIdForBucket(bucketIndex)
-//}
+// }

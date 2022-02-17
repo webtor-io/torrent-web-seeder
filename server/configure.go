@@ -26,6 +26,10 @@ func configure(app *cli.App) {
 }
 
 func run(c *cli.Context) error {
+	defer func() {
+		log.Info("shuting down... at last!")
+	}()
+
 	// Setting TorrentStore
 	torrentStore := s.NewTorrentStore(c)
 	defer torrentStore.Close()
@@ -85,7 +89,7 @@ func run(c *cli.Context) error {
 	err = serve.Serve()
 
 	if err != nil {
-		log.WithError(err).Error("Got server error")
+		log.WithError(err).Error("got server error")
 	}
 
 	return err

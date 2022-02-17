@@ -52,12 +52,12 @@ func NewTorrentStore(c *cli.Context) *TorrentStore {
 }
 
 func (s *TorrentStore) get() (ts.TorrentStoreClient, error) {
-	log.Info("Initializing TorrentStoreClient")
+	log.Info("initializing TorrentStoreClient")
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	conn, err := grpc.Dial(addr, grpc.WithInsecure())
 	s.conn = conn
 	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to dial torrent store addr=%v", addr)
+		return nil, errors.Wrapf(err, "failed to dial torrent store addr=%v", addr)
 	}
 	return ts.NewTorrentStoreClient(s.conn), nil
 }

@@ -22,11 +22,6 @@ import (
 	"github.com/anacrolix/torrent"
 	log "github.com/sirupsen/logrus"
 	pb "github.com/webtor-io/torrent-web-seeder/torrent-web-seeder"
-
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
-	grpc_logrus "github.com/grpc-ecosystem/go-grpc-middleware/logging/logrus"
-	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
-	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
 )
 
 type Stat struct {
@@ -72,10 +67,10 @@ func (ss *Stat) Serve() error {
 	addr := fmt.Sprintf("%s:%d", ss.host, ss.port)
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		return errors.Wrap(err, "Failed to listen to tcp connection")
+		return errors.Wrap(err, "failed to listen to tcp connection")
 	}
 	ss.l = l
-	log.Infof("Serving Stat at %v", addr)
+	log.Infof("serving Stat at %v", addr)
 	return s.Serve(l)
 }
 
@@ -86,23 +81,8 @@ func (ss *Stat) Close() {
 }
 
 func (ss *Stat) get() (*grpc.Server, error) {
-	log.Info("Initializing Stat")
-	grpcLog := log.WithFields(log.Fields{})
-	alwaysLoggingDeciderServer := func(ctx context.Context, fullMethodName string, servingObject interface{}) bool { return true }
-	s := grpc.NewServer(
-		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
-			grpc_ctxtags.StreamServerInterceptor(),
-			grpc_logrus.StreamServerInterceptor(grpcLog),
-			grpc_logrus.PayloadStreamServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
-			grpc_recovery.StreamServerInterceptor(),
-		)),
-		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
-			grpc_ctxtags.UnaryServerInterceptor(),
-			grpc_logrus.UnaryServerInterceptor(grpcLog),
-			grpc_logrus.PayloadUnaryServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
-			grpc_recovery.UnaryServerInterceptor(),
-		)),
-	)
+	log.Info("initializing Stat")
+	s := grpc.NewServer()
 	pb.RegisterTorrentWebSeederServer(s, &grpcServer{ts: ss.ts})
 	reflection.Register(s)
 	return s, nil
@@ -228,7 +208,7 @@ func (s *grpcServer) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatRepl
 	}
 	f := findFile(t, in.GetPath())
 	if f == nil {
-		return nil, status.Errorf(codes.NotFound, "Unable to find file for path=%v", in.GetPath())
+		return nil, status.Errorf(codes.NotFound, "unable to find file for path=%v", in.GetPath())
 	}
 	return s.fileStat(t, f)
 }
@@ -259,7 +239,7 @@ func (s *grpcServer) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_S
 		for range ticker.C {
 			rep, err := s.Stat(nil, in)
 			if err != nil {
-				log.WithError(err).Error("Failed to get stat")
+				log.WithError(err).Error("failed to get stat")
 				errCh <- err
 			}
 			if prevRep != nil &&
@@ -281,9 +261,8 @@ func (s *grpcServer) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_S
 				Total:     rep.GetTotal(),
 				Pieces:    diffPieces,
 			}
-			log.WithField("rep", diffRep).WithField("path", in.GetPath()).Info("Sending stat")
 			if err := stream.Send(diffRep); err != nil {
-				log.WithError(err).Error("Failed to send stat")
+				log.WithError(err).Error("failed to send stat")
 				errCh <- err
 			}
 			if rep.GetTotal() == rep.GetCompleted() && rep.GetStatus() != pb.StatReply_INITIALIZATION && rep.GetStatus() != pb.StatReply_RESTORING {
@@ -304,14 +283,14 @@ func (s *grpcServer) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_S
 	case <-stream.Context().Done():
 		err := stream.Context().Err()
 		if err != nil {
-			log.WithError(err).Error("Failed to send stat")
+			log.WithError(err).Error("failed to send stat")
 		} else {
-			log.WithField("path", in.GetPath()).Info("Sending stats completed")
+			log.WithField("path", in.GetPath()).Info("sending stats completed")
 		}
 		return err
 	case err := <-errCh:
 		if err != nil {
-			return status.Errorf(codes.Internal, "Got error=%v", err)
+			return status.Errorf(codes.Internal, "got error=%v", err)
 		}
 		return nil
 	}

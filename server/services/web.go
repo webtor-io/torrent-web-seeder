@@ -65,7 +65,7 @@ func (s *Web) getListener() (*gracenet.GraceListener, error) {
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		s.err = errors.Wrap(err, "Failed to listen to tcp connection")
+		s.err = errors.Wrap(err, "failed to listen to tcp connection")
 		s.gln = nil
 		return s.gln, s.err
 	}
@@ -89,7 +89,7 @@ func (s *Web) Serve() error {
 		Logger: logger,
 	}
 	mux.Handle("/", l.Handler(s.ws, ""))
-	log.Infof("Serving Web at %v", fmt.Sprintf("%s:%d", s.host, s.port))
+	log.Infof("serving Web at %v", fmt.Sprintf("%s:%d", s.host, s.port))
 	return http.Serve(ln, mux)
 
 }

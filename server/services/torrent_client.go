@@ -10,7 +10,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 
-	torrentlogger "github.com/anacrolix/log"
 	"github.com/anacrolix/torrent/storage"
 	"golang.org/x/time/rate"
 )
@@ -65,7 +64,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.Seed = false
 	cfg.NoUpload = true
 	cfg.DefaultStorage = storage.NewMMap(s.dataDir)
-	cfg.Logger = torrentlogger.Discard
+	// cfg.Logger = torrentlogger.Discard
 	// cfg.DefaultRequestStrategy = torrent.RequestStrategyFuzzing()
 	// cfg.EstablishedConnsPerTorrent = 100
 	// cfg.HalfOpenConnsPerTorrent = 50

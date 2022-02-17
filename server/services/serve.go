@@ -68,19 +68,19 @@ func (s *Serve) Serve() error {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case <-expire:
-		log.Info("No activity for a grace period")
+		log.Info("no activity for a grace period")
 	case sig := <-sigs:
-		log.WithField("signal", sig).Info("Got syscall")
+		log.WithField("signal", sig).Info("got syscall")
 	case err := <-webError:
-		return errors.Wrap(err, "Got Web error")
+		return errors.Wrap(err, "got Web error")
 	case err := <-probeError:
-		return errors.Wrap(err, "Got Probe error")
+		return errors.Wrap(err, "got Probe error")
 	case err := <-statError:
-		return errors.Wrap(err, "Got Stat error")
+		return errors.Wrap(err, "got Stat error")
 	case err := <-torrentError:
-		return errors.Wrap(err, "Failed to fetch torrent")
+		return errors.Wrap(err, "failed to fetch torrent")
 	case err := <-snapshotError:
-		return errors.Wrap(err, "Got snapshot error")
+		return errors.Wrap(err, "got snapshot error")
 	}
 	return nil
 }

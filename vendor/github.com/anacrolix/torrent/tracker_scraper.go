@@ -81,6 +81,12 @@ func (me *trackerScraper) getIp() (ip net.IP, err error) {
 		err = errors.New("no ips")
 		return
 	}
+	me.t.cl.rLock()
+	defer me.t.cl.rUnlock()
+	if me.t.cl.closed.IsSet() {
+		err = errors.New("client is closed")
+		return
+	}
 	for _, ip = range ips {
 		if me.t.cl.ipIsBlocked(ip) {
 			continue
@@ -160,6 +166,7 @@ func (me *trackerScraper) announce(ctx context.Context, event tracker.AnnounceEv
 		UdpNetwork: me.u.Scheme,
 		ClientIp4:  krpc.NodeAddr{IP: me.t.cl.config.PublicIp4},
 		ClientIp6:  krpc.NodeAddr{IP: me.t.cl.config.PublicIp6},
+		Logger:     me.t.logger,
 	}.Do()
 	me.t.logger.WithDefaultLevel(log.Debug).Printf("announce to %q returned %#v: %v", me.u.String(), res, err)
 	if err != nil {

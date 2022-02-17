@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	"github.com/anacrolix/log"
+	"github.com/anacrolix/torrent/tracker/http"
+	"github.com/gorilla/websocket"
 
 	"github.com/anacrolix/torrent/tracker"
 	"github.com/anacrolix/torrent/webtorrent"
@@ -37,6 +39,7 @@ type websocketTrackers struct {
 	OnConn             func(datachannel.ReadWriteCloser, webtorrent.DataChannelContext)
 	mu                 sync.Mutex
 	clients            map[string]*refCountedWebtorrentTrackerClient
+	Proxy              http.ProxyFunc
 }
 
 func (me *websocketTrackers) Get(url string) (*webtorrent.TrackerClient, func()) {
@@ -44,8 +47,10 @@ func (me *websocketTrackers) Get(url string) (*webtorrent.TrackerClient, func())
 	defer me.mu.Unlock()
 	value, ok := me.clients[url]
 	if !ok {
+		dialer := &websocket.Dialer{Proxy: me.Proxy, HandshakeTimeout: websocket.DefaultDialer.HandshakeTimeout}
 		value = &refCountedWebtorrentTrackerClient{
 			TrackerClient: webtorrent.TrackerClient{
+				Dialer:             dialer,
 				Url:                url,
 				GetAnnounceRequest: me.GetAnnounceRequest,
 				PeerId:             me.PeerId,
