@@ -397,6 +397,7 @@ func (s *Snapshot) Start() error {
 			}
 			completedNum := 0
 			downloadedSize := int64(s.counter.Count())
+			s.mux.Lock()
 			for i := 0; i < t.NumPieces(); i++ {
 				ps := t.PieceState(i)
 				p := t.Piece(i)
@@ -404,6 +405,7 @@ func (s *Snapshot) Start() error {
 					completedNum++
 				}
 			}
+			s.mux.Unlock()
 			if downloadedSize > currDownloadedSize+1024*1024*10 {
 				err := s.storeDownloadedSize(cl, t, prevDownloadedSize+currDownloadedSize)
 				if err != nil {
