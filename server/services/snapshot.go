@@ -29,10 +29,10 @@ type Snapshot struct {
 	awsBucket                  string
 	awsBucketSpread            bool
 	awsConcurrency             int
+	awsStatWriteDelay          time.Duration
 	stop                       bool
 	start                      bool
 	stopCh                     chan (bool)
-	err                        error
 	t                          *Torrent
 	mux                        sync.Mutex
 	startThreshold             float64
@@ -79,6 +79,7 @@ const (
 	AWS_BUCKET                             = "aws-bucket"
 	AWS_BUCKET_SPREAD                      = "aws-bucket-spread"
 	AWS_CONCURRENCY                        = "aws-concurrency"
+	AWS_STAT_WRITE_DELAY                   = "aws-stat-write-delay"
 	USE_SNAPSHOT                           = "use-snapshot"
 	SNAPSHOT_START_THRESHOLD               = "snapshot-start-threshold"
 	SNAPSHOT_DOWNLOAD_RATIO                = "snapshot-download-ratio"
@@ -125,6 +126,12 @@ func RegisterSnapshotFlags(f []cli.Flag) []cli.Flag {
 			Value:  5,
 			EnvVar: "AWS_CONCURRENCY",
 		},
+		cli.IntFlag{
+			Name:   AWS_STAT_WRITE_DELAY,
+			Usage:  "AWS Stat Write Delay (Sec)",
+			Value:  60,
+			EnvVar: "AWS_STAT_WRITE_DELAY",
+		},
 		cli.StringFlag{
 			Name:   AWS_BUCKET,
 			Usage:  "AWS Bucket",
@@ -148,17 +155,22 @@ func split(buf []byte, lim int) [][]byte {
 }
 
 func NewSnapshot(c *cli.Context, t *Torrent, co *Counter, s3 *cs.S3Client) (*Snapshot, error) {
-	if c.Bool(USE_SNAPSHOT) == false {
+	if !c.Bool(USE_SNAPSHOT) {
 		return nil, nil
 	}
 	if c.String(AWS_BUCKET) == "" {
 		return nil, errors.Errorf("AWS Bucket can't be empty")
 	}
 	return &Snapshot{
-		awsBucket: c.String(AWS_BUCKET), awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD), awsConcurrency: c.Int(AWS_CONCURRENCY), t: t,
-		startThreshold: c.Float64(SNAPSHOT_START_THRESHOLD), startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD),
-		torrentSizeLimit: c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT), downloadRatio: c.Float64(SNAPSHOT_DOWNLOAD_RATIO),
-		counter: co, s3: s3,
+		awsBucket:       c.String(AWS_BUCKET),
+		awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD),
+		awsConcurrency:  c.Int(AWS_CONCURRENCY), t: t,
+		awsStatWriteDelay:          time.Duration(c.Int(AWS_STAT_WRITE_DELAY)),
+		startThreshold:             c.Float64(SNAPSHOT_START_THRESHOLD),
+		startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD),
+		torrentSizeLimit:           c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT),
+		downloadRatio:              c.Float64(SNAPSHOT_DOWNLOAD_RATIO),
+		counter:                    co, s3: s3,
 	}, nil
 }
 
@@ -385,9 +397,11 @@ func (s *Snapshot) Start() error {
 	fullDownloadStarted := false
 	fullSnapshotStarted := false
 	started := false
+	lastDownloadSizeWrittenAt := time.Now()
+	lastCompletedPiecesWrittenAt := time.Now()
 	go func() {
 		for range ticker.C {
-			if fullSnapshotStarted == false && s.stop && totalDownloadRatio >= s.downloadRatio {
+			if !fullSnapshotStarted && s.stop && totalDownloadRatio >= s.downloadRatio {
 				fullSnapshotStarted = true
 				log.Info("starting full snapshot")
 				t.DownloadAll()
@@ -406,20 +420,22 @@ func (s *Snapshot) Start() error {
 				}
 			}
 			s.mux.Unlock()
-			if downloadedSize > currDownloadedSize+1024*1024*10 {
+			if downloadedSize > currDownloadedSize+1024*1024*10 && !time.Now().Before(lastDownloadSizeWrittenAt.Add(s.awsStatWriteDelay)) {
 				err := s.storeDownloadedSize(cl, t, prevDownloadedSize+currDownloadedSize)
 				if err != nil {
 					log.WithError(err).Warn("failed to store downloaded size")
 				} else {
 					currDownloadedSize = downloadedSize
+					lastDownloadSizeWrittenAt = time.Now()
 				}
 			}
-			if completedNum > currCompletedNum+10 {
+			if completedNum > currCompletedNum+10 && !time.Now().Before(lastCompletedPiecesWrittenAt.Add(s.awsStatWriteDelay)) {
 				err := s.storeCompletedPieces(cl, t, cp)
 				if err != nil {
 					log.WithError(err).Warn("failed to store completed pieces")
 				} else {
 					currCompletedNum = completedNum
+					lastCompletedPiecesWrittenAt = time.Now()
 				}
 			}
 			completedRatio = float64(completedNum) / float64(t.NumPieces())
