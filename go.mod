@@ -9,7 +9,7 @@ require (
 	github.com/anacrolix/log v0.13.1
 	github.com/anacrolix/sync v0.4.0 // indirect
 	github.com/anacrolix/torrent v1.45.1-0.20220625131658-12279621e4e2
-	github.com/aws/aws-sdk-go v1.44.44
+	github.com/aws/aws-sdk-go v1.44.46
 	github.com/bakins/logrus-middleware v0.0.0-20180426214643-ce4c6f8deb07
 	github.com/bakins/test-helpers v0.0.0-20141028124846-af83df64dc31 // indirect
 	github.com/dustin/go-humanize v1.0.0
@@ -33,9 +33,11 @@ require (
 	golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d // indirect
 	golang.org/x/sys v0.0.0-20220627191245-f75cf1eec38b // indirect
 	golang.org/x/time v0.0.0-20220609170525-579cf78fd858
-	google.golang.org/genproto v0.0.0-20220627200112-0a929928cb33 // indirect
+	google.golang.org/genproto v0.0.0-20220630174209-ad1d48641aa7 // indirect
 	google.golang.org/grpc v1.47.0
 )
+
+require google.golang.org/protobuf v1.28.0
 
 require (
 	crawshaw.io/sqlite v0.3.3-0.20210127221821-98b1f83c5508 // indirect
@@ -106,13 +108,12 @@ require (
 	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/xerrors v0.0.0-20220609144429-65e65417b02f // indirect
-	google.golang.org/protobuf v1.28.0 // indirect
 	mellium.im/sasl v0.2.1 // indirect
-	modernc.org/libc v1.14.5 // indirect
+	modernc.org/libc v1.16.12 // indirect
 	modernc.org/mathutil v1.4.1 // indirect
-	modernc.org/memory v1.0.5 // indirect
-	modernc.org/sqlite v1.14.6 // indirect
-	zombiezen.com/go/sqlite v0.9.2 // indirect
+	modernc.org/memory v1.1.1 // indirect
+	modernc.org/sqlite v1.17.3 // indirect
+	zombiezen.com/go/sqlite v0.9.3 // indirect
 )
 
 // Hack to prevent the willf/bitset module from being upgraded to 1.2.0.
