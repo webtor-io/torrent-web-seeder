@@ -25,17 +25,18 @@ const (
 )
 
 type WebSeeder struct {
-	t   *Torrent
-	c   *Counter
-	bp  *BucketPool
-	err error
+	t  *Torrent
+	c  *Counter
+	bp *BucketPool
+	st *StatWeb
 }
 
-func NewWebSeeder(t *Torrent, c *Counter, bp *BucketPool) *WebSeeder {
+func NewWebSeeder(t *Torrent, c *Counter, bp *BucketPool, st *StatWeb) *WebSeeder {
 	return &WebSeeder{
 		t:  t,
 		c:  c,
 		bp: bp,
+		st: st,
 	}
 }
 
@@ -140,6 +141,10 @@ func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) {
+	if _, ok := r.URL.Query()["stats"]; ok {
+		s.serveStats(w, r, p)
+		return
+	}
 	log := log.WithField("path", r.URL.Path)
 	log = log.WithField("method", r.Method)
 	log = log.WithField("remoteAddr", r.RemoteAddr)
@@ -206,6 +211,14 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 		log.Info("file not found")
 
 		http.NotFound(w, r)
+	}
+}
+
+func (s *WebSeeder) serveStats(w http.ResponseWriter, r *http.Request, p string) {
+	err := s.st.Serve(w, r, p)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 }
 

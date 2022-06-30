@@ -66,13 +66,19 @@ func run(c *cli.Context) error {
 	defer torrentClient.Close()
 
 	// Setting Stat
-	stat := s.NewStat(c, torrent)
+	stat := s.NewStat(torrent)
+
+	// Setting StatGRPC
+	statGRPC := s.NewStatGRPC(c, stat)
+
+	// Setting StatWeb
+	statWeb := s.NewStatWeb(stat)
 
 	// Setting BucketPool
 	bp := s.NewBucketPool()
 
 	// Setting WebSeeder
-	webSeeder := s.NewWebSeeder(torrent, counter, bp)
+	webSeeder := s.NewWebSeeder(torrent, counter, bp, statWeb)
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)
@@ -83,7 +89,7 @@ func run(c *cli.Context) error {
 	defer probe.Close()
 
 	// Setting Serve
-	serve := s.NewServe(web, stat, probe, torrent, snapshot)
+	serve := s.NewServe(web, statGRPC, probe, torrent, snapshot)
 
 	// And SERVE!
 	err = serve.Serve()

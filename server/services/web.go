@@ -52,7 +52,12 @@ type Web struct {
 }
 
 func NewWeb(c *cli.Context, ws *WebSeeder) *Web {
-	return &Web{host: c.String(WEB_HOST_FLAG), port: c.Int(WEB_PORT_FLAG), ws: ws, grace: c.Int(WEB_GRACE_FLAG), inited: false}
+	return &Web{
+		host:  c.String(WEB_HOST_FLAG),
+		port:  c.Int(WEB_PORT_FLAG),
+		ws:    ws,
+		grace: c.Int(WEB_GRACE_FLAG),
+	}
 }
 
 func (s *Web) getListener() (*gracenet.GraceListener, error) {

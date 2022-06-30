@@ -14,14 +14,20 @@ import (
 
 type Serve struct {
 	w  *Web
-	st *Stat
+	st *StatGRPC
 	pr *cs.Probe
 	t  *Torrent
 	ss *Snapshot
 }
 
-func NewServe(w *Web, st *Stat, pr *cs.Probe, t *Torrent, ss *Snapshot) *Serve {
-	return &Serve{w: w, st: st, pr: pr, t: t, ss: ss}
+func NewServe(w *Web, st *StatGRPC, pr *cs.Probe, t *Torrent, ss *Snapshot) *Serve {
+	return &Serve{
+		w:  w,
+		st: st,
+		pr: pr,
+		t:  t,
+		ss: ss,
+	}
 }
 
 func (s *Serve) Serve() error {

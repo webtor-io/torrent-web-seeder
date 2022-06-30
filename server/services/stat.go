@@ -2,21 +2,12 @@ package services
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/pkg/errors"
-	"github.com/urfave/cli"
-
-	"google.golang.org/grpc"
-
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
 	"github.com/anacrolix/torrent"
@@ -25,86 +16,13 @@ import (
 )
 
 type Stat struct {
-	mux    sync.Mutex
-	ts     *Torrent
-	s      *grpc.Server
-	host   string
-	port   int
-	l      net.Listener
-	inited bool
-	err    error
-}
-
-const (
-	STAT_HOST_FLAG = "stat-host"
-	STAT_PORT_FLAG = "stat-port"
-)
-
-func RegisterStatFlags(f []cli.Flag) []cli.Flag {
-	return append(f,
-		cli.StringFlag{
-			Name:  STAT_HOST_FLAG,
-			Usage: "stat listening host",
-			Value: "",
-		},
-		cli.IntFlag{
-			Name:  STAT_PORT_FLAG,
-			Usage: "stat listening port",
-			Value: 50051,
-		},
-	)
-}
-
-func NewStat(c *cli.Context, ts *Torrent) *Stat {
-	return &Stat{ts: ts, host: c.String(STAT_HOST_FLAG), port: c.Int(STAT_PORT_FLAG), inited: false}
-}
-
-func (ss *Stat) Serve() error {
-	s, err := ss.Get()
-	if err != nil {
-		return err
-	}
-	addr := fmt.Sprintf("%s:%d", ss.host, ss.port)
-	l, err := net.Listen("tcp", addr)
-	if err != nil {
-		return errors.Wrap(err, "failed to listen to tcp connection")
-	}
-	ss.l = l
-	log.Infof("serving Stat at %v", addr)
-	return s.Serve(l)
-}
-
-func (ss *Stat) Close() {
-	if ss.l != nil {
-		ss.l.Close()
-	}
-}
-
-func (ss *Stat) get() (*grpc.Server, error) {
-	log.Info("initializing Stat")
-	s := grpc.NewServer()
-	pb.RegisterTorrentWebSeederServer(s, &grpcServer{ts: ss.ts})
-	reflection.Register(s)
-	return s, nil
-}
-
-func (s *Stat) Get() (*grpc.Server, error) {
-	s.mux.Lock()
-	defer s.mux.Unlock()
-	if s.inited {
-		return s.s, s.err
-	}
-	s.s, s.err = s.get()
-	s.inited = true
-	return s.s, s.err
-}
-
-type grpcServer struct {
 	ts *Torrent
 }
 
-func peers(t *torrent.Torrent) int {
-	return len(t.KnownSwarm())
+func NewStat(ts *Torrent) *Stat {
+	return &Stat{
+		ts: ts,
+	}
 }
 
 func fileBytesCompleted(t *torrent.Torrent, f *torrent.File) int64 {
@@ -117,7 +35,7 @@ func fileBytesCompleted(t *torrent.Torrent, f *torrent.File) int64 {
 	return res
 }
 
-func (s *grpcServer) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
+func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 	completed := t.BytesCompleted()
 	status := pb.StatReply_SEEDING
 	if completed == 0 {
@@ -150,7 +68,7 @@ func (s *grpcServer) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 	}, nil
 }
 
-func (s *grpcServer) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, error) {
+func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, error) {
 	completed := fileBytesCompleted(t, f)
 	status := pb.StatReply_SEEDING
 	if completed == 0 {
@@ -189,7 +107,7 @@ func findFile(t *torrent.Torrent, path string) *torrent.File {
 	return nil
 }
 
-func (s *grpcServer) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
+func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
 	if !s.ts.Ready() {
 		return &pb.StatReply{
 			Completed: 0,
@@ -230,14 +148,14 @@ func diff(a []*pb.Piece, b []*pb.Piece) []*pb.Piece {
 	return d
 }
 
-func (s *grpcServer) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStreamServer) error {
+func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStreamServer) error {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	errCh := make(chan error)
 	go func() {
 		var prevRep *pb.StatReply
-		for range ticker.C {
-			rep, err := s.Stat(nil, in)
+		for {
+			rep, err := s.Stat(stream.Context(), in)
 			if err != nil {
 				log.WithError(err).Error("failed to get stat")
 				errCh <- err
@@ -269,6 +187,7 @@ func (s *grpcServer) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_S
 				errCh <- nil
 				break
 			}
+			<-ticker.C
 		}
 	}()
 
@@ -296,7 +215,7 @@ func (s *grpcServer) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_S
 	}
 }
 
-func (s *grpcServer) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply, error) {
+func (s *Stat) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply, error) {
 	t, err := s.ts.Get()
 	if err != nil {
 		return nil, err

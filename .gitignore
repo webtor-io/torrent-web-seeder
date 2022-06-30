@@ -21,3 +21,4 @@ server/server
 client/client
 
 .DS_Store
+server/__debug_bin
