@@ -1,6 +1,6 @@
 module github.com/webtor-io/torrent-web-seeder
 
-go 1.18
+go 1.17
 
 require (
 	code.cloudfoundry.org/bytefmt v0.0.0-20210608160410-67692ebc98de
