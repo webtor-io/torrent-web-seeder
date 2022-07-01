@@ -14,6 +14,8 @@ import (
 func configure(app *cli.App) {
 	app.Flags = []cli.Flag{}
 	app.Flags = cs.RegisterProbeFlags([]cli.Flag{})
+	app.Flags = cs.RegisterS3ClientFlags(app.Flags)
+	app.Flags = cs.RegisterPprofFlags(app.Flags)
 	app.Flags = s.RegisterWebFlags(app.Flags)
 	app.Flags = s.RegisterTorrentClientFlags(app.Flags)
 	app.Flags = s.RegisterTorrentStoreFlags(app.Flags)
@@ -21,7 +23,6 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterMetaInfoFlags(app.Flags)
 	app.Flags = s.RegisterSnapshotFlags(app.Flags)
 	app.Flags = s.RegisterTorrentFlags(app.Flags)
-	app.Flags = cs.RegisterS3ClientFlags(app.Flags)
 	app.Action = run
 }
 
@@ -88,8 +89,12 @@ func run(c *cli.Context) error {
 	probe := cs.NewProbe(c)
 	defer probe.Close()
 
+	// Setting Pprof
+	pprof := cs.NewPprof(c)
+	defer pprof.Close()
+
 	// Setting Serve
-	serve := s.NewServe(web, statGRPC, probe, torrent, snapshot)
+	serve := s.NewServe(web, statGRPC, probe, torrent, snapshot, pprof)
 
 	// And SERVE!
 	err = serve.Serve()

@@ -16,17 +16,19 @@ type Serve struct {
 	w  *Web
 	st *StatGRPC
 	pr *cs.Probe
+	pp *cs.Pprof
 	t  *Torrent
 	ss *Snapshot
 }
 
-func NewServe(w *Web, st *StatGRPC, pr *cs.Probe, t *Torrent, ss *Snapshot) *Serve {
+func NewServe(w *Web, st *StatGRPC, pr *cs.Probe, t *Torrent, ss *Snapshot, pp *cs.Pprof) *Serve {
 	return &Serve{
 		w:  w,
 		st: st,
 		pr: pr,
 		t:  t,
 		ss: ss,
+		pp: pp,
 	}
 }
 
@@ -34,6 +36,7 @@ func (s *Serve) Serve() error {
 
 	webError := make(chan error, 1)
 	probeError := make(chan error, 1)
+	pprofError := make(chan error, 1)
 	statError := make(chan error, 1)
 	torrentError := make(chan error, 1)
 	snapshotError := make(chan error, 1)
@@ -46,6 +49,11 @@ func (s *Serve) Serve() error {
 	go func() {
 		err := s.pr.Serve()
 		probeError <- err
+	}()
+
+	go func() {
+		err := s.pp.Serve()
+		pprofError <- err
 	}()
 
 	go func() {
@@ -81,6 +89,8 @@ func (s *Serve) Serve() error {
 		return errors.Wrap(err, "got Web error")
 	case err := <-probeError:
 		return errors.Wrap(err, "got Probe error")
+	case err := <-pprofError:
+		return errors.Wrap(err, "got Pprof error")
 	case err := <-statError:
 		return errors.Wrap(err, "got Stat error")
 	case err := <-torrentError:
