@@ -61,7 +61,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 	if c.String(TORRENT_CLIENT_DOWNLOAD_RATE_FLAG) != "" {
 		drp, err := bytefmt.ToBytes(c.String(TORRENT_CLIENT_DOWNLOAD_RATE_FLAG))
 		if err != nil {
-			return nil, errors.Wrap(err, "Failed to parse download rate flag")
+			return nil, errors.Wrap(err, "failed to parse download rate flag")
 
 		}
 		dr = int64(drp)
@@ -74,18 +74,22 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 }
 
 func (s *TorrentClient) get() (*torrent.Client, error) {
-	log.Infof("Initializing TorrentClient dataDir=%v", s.dataDir)
+	log.Infof("initializing TorrentClient dataDir=%v", s.dataDir)
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.NoUpload = true
 	cfg.DisableAggressiveUpload = true
 	cfg.Seed = false
-	cfg.AcceptPeerConnections = false
+	// cfg.AcceptPeerConnections = false
+	// cfg.DisableIPv6 = true
 	cfg.DefaultStorage = storage.NewMMap(s.dataDir)
-	cfg.HeaderObfuscationPolicy = torrent.HeaderObfuscationPolicy{
-		Preferred:        true,
-		RequirePreferred: true,
-	}
-	cfg.CryptoSelector = MyCryptoSelector
+	// cfg.DisableTrackers = true
+	// cfg.DisableWebtorrent = true
+	// cfg.DisableWebseeds = true
+	// cfg.HeaderObfuscationPolicy = torrent.HeaderObfuscationPolicy{
+	// 	Preferred:        true,
+	// 	RequirePreferred: true,
+	// }
+	// cfg.CryptoSelector = MyCryptoSelector
 	cfg.PeriodicallyAnnounceTorrentsToDht = false
 	if s.proxy != "" {
 		url, err := url.Parse(s.proxy)
@@ -105,7 +109,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	}
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to create new torrent client")
+		return nil, errors.Wrap(err, "failed to create new torrent client")
 	}
 	return cl, nil
 }
