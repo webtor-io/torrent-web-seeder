@@ -12,7 +12,7 @@
             "program": "${workspaceFolder}/server",
             "env": {},
             "envFile": "${env:HOME}/.env",
-            "args": ["--input", "${env:HOME}/sintel.torrent"]
+            "args": ["--input", "${env:HOME}/another.torrent"]
         }
     ]
 }

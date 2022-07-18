@@ -1,6 +1,8 @@
 package services
 
 import (
+	"net/http"
+	"net/url"
 	"os"
 	"sync"
 
@@ -10,6 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 
+	"github.com/anacrolix/torrent/mse"
 	"github.com/anacrolix/torrent/storage"
 	"golang.org/x/time/rate"
 )
@@ -21,11 +24,13 @@ type TorrentClient struct {
 	inited  bool
 	rLimit  int64
 	dataDir string
+	proxy   string
 }
 
 const (
 	TORRENT_CLIENT_DOWNLOAD_RATE_FLAG = "download-rate"
 	TORRENT_CLIENT_DATA_DIR_FLAG      = "data-dir"
+	HTTP_PROXY                        = "http-proxy"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -35,6 +40,12 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Usage:  "download rate",
 			Value:  "",
 			EnvVar: "DOWNLOAD_RATE",
+		},
+		cli.StringFlag{
+			Name:   HTTP_PROXY,
+			Usage:  "http proxy",
+			Value:  "",
+			EnvVar: "HTTP_PROXY",
 		},
 		cli.StringFlag{
 			Name:   TORRENT_CLIENT_DATA_DIR_FLAG,
@@ -55,15 +66,34 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		}
 		dr = int64(drp)
 	}
-	return &TorrentClient{rLimit: dr, dataDir: c.String(TORRENT_CLIENT_DATA_DIR_FLAG)}, nil
+	return &TorrentClient{
+		rLimit:  dr,
+		dataDir: c.String(TORRENT_CLIENT_DATA_DIR_FLAG),
+		proxy:   c.String(HTTP_PROXY),
+	}, nil
 }
 
 func (s *TorrentClient) get() (*torrent.Client, error) {
 	log.Infof("Initializing TorrentClient dataDir=%v", s.dataDir)
 	cfg := torrent.NewDefaultClientConfig()
-	cfg.Seed = false
 	cfg.NoUpload = true
+	cfg.DisableAggressiveUpload = true
+	cfg.Seed = false
+	cfg.AcceptPeerConnections = false
 	cfg.DefaultStorage = storage.NewMMap(s.dataDir)
+	cfg.HeaderObfuscationPolicy = torrent.HeaderObfuscationPolicy{
+		Preferred:        true,
+		RequirePreferred: true,
+	}
+	cfg.CryptoSelector = MyCryptoSelector
+	cfg.PeriodicallyAnnounceTorrentsToDht = false
+	if s.proxy != "" {
+		url, err := url.Parse(s.proxy)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to parse proxy url=%v", s.proxy)
+		}
+		cfg.HTTPProxy = http.ProxyURL(url)
+	}
 	// cfg.Logger = torrentlogger.Discard
 	// cfg.DefaultRequestStrategy = torrent.RequestStrategyFuzzing()
 	// cfg.EstablishedConnsPerTorrent = 100
@@ -95,4 +125,8 @@ func (s *TorrentClient) Close() {
 	if s.cl != nil {
 		s.cl.Close()
 	}
+}
+
+func MyCryptoSelector(provided mse.CryptoMethod) mse.CryptoMethod {
+	return mse.CryptoMethodRC4
 }
