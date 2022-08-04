@@ -29,7 +29,6 @@ type TorrentClient struct {
 
 const (
 	TORRENT_CLIENT_DOWNLOAD_RATE_FLAG = "download-rate"
-	TORRENT_CLIENT_DATA_DIR_FLAG      = "data-dir"
 	HTTP_PROXY                        = "http-proxy"
 )
 
@@ -48,7 +47,7 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			EnvVar: "HTTP_PROXY",
 		},
 		cli.StringFlag{
-			Name:   TORRENT_CLIENT_DATA_DIR_FLAG,
+			Name:   DATA_DIR_FLAG,
 			Usage:  "data dir",
 			Value:  os.TempDir(),
 			EnvVar: "DATA_DIR",
@@ -68,7 +67,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 	}
 	return &TorrentClient{
 		rLimit:  dr,
-		dataDir: c.String(TORRENT_CLIENT_DATA_DIR_FLAG),
+		dataDir: c.String(DATA_DIR_FLAG),
 		proxy:   c.String(HTTP_PROXY),
 	}, nil
 }
@@ -77,11 +76,11 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	log.Infof("initializing TorrentClient dataDir=%v", s.dataDir)
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.NoUpload = true
-	cfg.DisableAggressiveUpload = true
+	// cfg.DisableAggressiveUpload = true
 	cfg.Seed = false
 	// cfg.AcceptPeerConnections = false
 	// cfg.DisableIPv6 = true
-	cfg.DefaultStorage = storage.NewMMap(s.dataDir)
+	cfg.DefaultStorage = storage.NewFileByInfoHash(s.dataDir)
 	// cfg.DisableTrackers = true
 	// cfg.DisableWebtorrent = true
 	// cfg.DisableWebseeds = true
@@ -90,7 +89,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	// 	RequirePreferred: true,
 	// }
 	// cfg.CryptoSelector = MyCryptoSelector
-	cfg.PeriodicallyAnnounceTorrentsToDht = false
+	// cfg.PeriodicallyAnnounceTorrentsToDht = false
 	if s.proxy != "" {
 		url, err := url.Parse(s.proxy)
 		if err != nil {

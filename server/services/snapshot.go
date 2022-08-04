@@ -30,17 +30,18 @@ type Snapshot struct {
 	awsBucketSpread            bool
 	awsConcurrency             int
 	awsStatWriteDelay          time.Duration
-	stop                       bool
-	start                      bool
-	stopCh                     chan (bool)
-	t                          *Torrent
+	started                    bool
+	t                          *torrent.Torrent
 	mux                        sync.Mutex
+	cMux                       sync.Mutex
 	startThreshold             float64
 	startFullDownloadThreshold float64
 	torrentSizeLimit           int64
+	writeTimeout               time.Duration
 	downloadRatio              float64
-	counter                    *Counter
+	counter                    int64
 	s3                         *cs.S3Client
+	l                          *log.Entry
 }
 
 type CompletedPieces map[[20]byte]bool
@@ -83,6 +84,7 @@ const (
 	USE_SNAPSHOT                           = "use-snapshot"
 	SNAPSHOT_START_THRESHOLD               = "snapshot-start-threshold"
 	SNAPSHOT_DOWNLOAD_RATIO                = "snapshot-download-ratio"
+	SNAPSHOT_WRITE_TIMEOUT                 = "snapshot-write-timeout"
 	SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD = "snapshot-start-full-download-threshold"
 	SNAPSHOT_TORRENT_SIZE_LIMIT            = "snapshot-torrent-size-limit"
 	DOWNLOADED_SIZE                        = "downloaded_size"
@@ -132,6 +134,11 @@ func RegisterSnapshotFlags(f []cli.Flag) []cli.Flag {
 			Value:  60,
 			EnvVar: "AWS_STAT_WRITE_DELAY",
 		},
+		cli.IntFlag{
+			Name:   SNAPSHOT_WRITE_TIMEOUT,
+			Value:  600,
+			EnvVar: "SNAPSHOT_WRITE_TIMEOUT",
+		},
 		cli.StringFlag{
 			Name:   AWS_BUCKET,
 			Usage:  "AWS Bucket",
@@ -154,7 +161,7 @@ func split(buf []byte, lim int) [][]byte {
 	return chunks
 }
 
-func NewSnapshot(c *cli.Context, t *Torrent, co *Counter, s3 *cs.S3Client) (*Snapshot, error) {
+func NewSnapshot(c *cli.Context, t *torrent.Torrent, s3 *cs.S3Client, l *log.Entry) (*Snapshot, error) {
 	if !c.Bool(USE_SNAPSHOT) {
 		return nil, nil
 	}
@@ -162,20 +169,24 @@ func NewSnapshot(c *cli.Context, t *Torrent, co *Counter, s3 *cs.S3Client) (*Sna
 		return nil, errors.Errorf("AWS Bucket can't be empty")
 	}
 	return &Snapshot{
-		awsBucket:       c.String(AWS_BUCKET),
-		awsBucketSpread: c.Bool(AWS_BUCKET_SPREAD),
-		awsConcurrency:  c.Int(AWS_CONCURRENCY), t: t,
+		awsBucket:                  c.String(AWS_BUCKET),
+		awsBucketSpread:            c.Bool(AWS_BUCKET_SPREAD),
+		awsConcurrency:             c.Int(AWS_CONCURRENCY),
 		awsStatWriteDelay:          time.Duration(c.Int(AWS_STAT_WRITE_DELAY)) * time.Second,
+		writeTimeout:               time.Duration(c.Int(SNAPSHOT_WRITE_TIMEOUT)) * time.Second,
 		startThreshold:             c.Float64(SNAPSHOT_START_THRESHOLD),
 		startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD),
 		torrentSizeLimit:           c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT),
 		downloadRatio:              c.Float64(SNAPSHOT_DOWNLOAD_RATIO),
-		counter:                    co, s3: s3,
+		t:                          t,
+		s3:                         s3,
+		l:                          l.WithField("bucket", c.String(AWS_BUCKET)),
 	}, nil
 }
 
 func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*CompletedPieces, error) {
 	key := COMPLETED_PIECES + "/" + t.InfoHash().HexString()
+	l := s.l.WithField("key", key)
 	st := CompletedPieces{}
 	r, err := cl.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.awsBucket),
@@ -189,13 +200,17 @@ func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*Complet
 	}
 	defer r.Body.Close()
 	data, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
 	st.FromBytes(data)
-	log.Infof("fetch completed pieces bucket=%v key=%v len=%v", s.awsBucket, key, st.Len())
+	l.Infof("fetch completed len=%v", st.Len())
 	return &st, nil
 }
 
 func (s *Snapshot) fetchDownloadedSize(cl *s3.S3, t *torrent.Torrent) (int64, error) {
 	key := DOWNLOADED_SIZE + "/" + t.InfoHash().HexString()
+	l := s.l.WithField("key", key)
 	r, err := cl.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.awsBucket),
 		Key:    aws.String(key),
@@ -208,14 +223,21 @@ func (s *Snapshot) fetchDownloadedSize(cl *s3.S3, t *torrent.Torrent) (int64, er
 	}
 	defer r.Body.Close()
 	data, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return 0, err
+	}
 	i, err := strconv.Atoi(string(data))
-	log.Infof("size fetch completed bucket=%v key=%v size=%v", s.awsBucket, key, i)
+	if err != nil {
+		return 0, err
+	}
+	l.Infof("size fetch completed size=%v", i)
 	return int64(i), nil
 }
 
 func (s *Snapshot) storeDownloadedSize(cl *s3.S3, t *torrent.Torrent, i int64) error {
 	key := DOWNLOADED_SIZE + "/" + t.InfoHash().HexString()
-	log.Infof("store downloaded size bucket=%v key=%v size=%v", s.awsBucket, key, i)
+	l := s.l.WithField("key", key)
+	l.Infof("store downloaded size size=%v", i)
 	b := []byte(strconv.Itoa(int(i)))
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket:     aws.String(s.awsBucket),
@@ -229,26 +251,11 @@ func (s *Snapshot) storeDownloadedSize(cl *s3.S3, t *torrent.Torrent, i int64) e
 	return nil
 }
 
-func (s *Snapshot) hasTouch(cl *s3.S3, t *torrent.Torrent) (bool, error) {
-	key := TOUCH + "/" + t.InfoHash().HexString()
-	log.Infof("check touch bucket=%v key=%v", s.awsBucket, key)
-	_, err := cl.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.awsBucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
-			return false, nil
-		}
-		return false, errors.Wrapf(err, "failed to check touch bucket=%v key=%v", s.awsBucket, key)
-	}
-	return true, nil
-}
-
 func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
 	timestamp := fmt.Sprintf("%v", time.Now().Unix())
 	key := TOUCH + "/" + t.InfoHash().HexString()
-	log.Infof("touch torrent bucket=%v key=%v timestamp=%v", s.awsBucket, key, timestamp)
+	l := s.l.WithField("key", key)
+	l.Infof("touch torrent timestamp=%v", timestamp)
 	b := []byte(timestamp)
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket:     aws.String(s.awsBucket),
@@ -262,12 +269,30 @@ func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
 	return nil
 }
 
+func (s *Snapshot) checkDone(cl *s3.S3, t *torrent.Torrent) (bool, error) {
+	key := "done/" + t.InfoHash().HexString()
+	l := s.l.WithField("key", key)
+	l.Infof("check done marker")
+	_, err := cl.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.awsBucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+			return false, nil
+		}
+		return false, errors.Wrapf(err, "failed to check done marker bucket=%v key=%v", s.awsBucket, key)
+	}
+	return true, nil
+}
+
 func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *CompletedPieces) error {
 	if st.Len() == 0 {
 		return nil
 	}
 	key := COMPLETED_PIECES + "/" + t.InfoHash().HexString()
-	log.Infof("store completed pieces bucket=%v key=%v len=%v", s.awsBucket, key, st.Len())
+	l := s.l.WithField("key", key)
+	l.Infof("store completed pieces len=%v", st.Len())
 	b := st.ToBytes()
 	_, err := cl.PutObject(&s3.PutObjectInput{
 		Bucket:     aws.String(s.awsBucket),
@@ -280,7 +305,8 @@ func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *Compl
 	}
 	if st.Len() == t.NumPieces() {
 		key := "done/" + t.InfoHash().HexString()
-		log.Infof("store done marker bucket=%v key=%v", s.awsBucket, key)
+		l := s.l.WithField("key", key)
+		l.Infof("store done marker")
 		b := []byte("")
 		_, err := cl.PutObject(&s3.PutObjectInput{
 			Bucket:     aws.String(s.awsBucket),
@@ -297,7 +323,8 @@ func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *Compl
 
 func (s *Snapshot) storeTorrent(cl *s3.S3, t *torrent.Torrent) error {
 	key := "torrents/" + t.InfoHash().HexString()
-	log.Infof("store torrent bucket=%v key=%v", s.awsBucket, key)
+	l := s.l.WithField("key", key)
+	l.Infof("store torrent")
 	data, err := bencode.Marshal(t.Metainfo())
 	if err != nil {
 		return errors.Wrap(err, "failed to bencode torrent")
@@ -314,25 +341,31 @@ func (s *Snapshot) storeTorrent(cl *s3.S3, t *torrent.Torrent) error {
 	return nil
 }
 
-func (s *Snapshot) Start() error {
-	log.Info("snapshot inited")
-	s.stopCh = make(chan (bool))
-	cl := s.s3.Get()
-	t, err := s.t.Get()
-	if err != nil {
-		return errors.Wrap(err, "failed to fetch torrent")
+func (s *Snapshot) Add(i int64) {
+	s.cMux.Lock()
+	defer s.cMux.Unlock()
+	s.counter += i
+	if !s.started {
+		s.started = true
+		go s.start()
 	}
+}
+
+func (s *Snapshot) start() error {
+	s.l.Info("snapshot inited")
+	cl := s.s3.Get()
+	t := s.t
 	if s.awsBucketSpread {
-		_, err = cl.CreateBucket(&s3.CreateBucketInput{
+		_, err := cl.CreateBucket(&s3.CreateBucketInput{
 			Bucket: aws.String(s.awsBucket),
 		})
 		if err != nil {
 			if aerr, ok := err.(awserr.Error); ok {
 				switch aerr.Code() {
 				case s3.ErrCodeBucketAlreadyExists:
-					log.WithError(err).Warn("master bucket already exists")
+					s.l.WithError(err).Warn("master bucket already exists")
 				case s3.ErrCodeBucketAlreadyOwnedByYou:
-					log.WithError(err).Warn("master bucket already owned")
+					s.l.WithError(err).Warn("master bucket already owned")
 				default:
 					return errors.Wrapf(err, "failed to create master bucket")
 				}
@@ -347,43 +380,51 @@ func (s *Snapshot) Start() error {
 	}
 
 	if s.awsBucketSpread {
-		_, err = cl.CreateBucket(&s3.CreateBucketInput{
+		_, err := cl.CreateBucket(&s3.CreateBucketInput{
 			Bucket: aws.String(pieceBucket),
 		})
 		if err != nil {
 			if aerr, ok := err.(awserr.Error); ok {
 				switch aerr.Code() {
 				case s3.ErrCodeBucketAlreadyExists:
-					log.WithError(err).Warn("Piece bucket already exists")
+					s.l.WithError(err).Warn("piece bucket already exists")
 				case s3.ErrCodeBucketAlreadyOwnedByYou:
-					log.WithError(err).Warn("Piece bucket already owned")
+					s.l.WithError(err).Warn("piece bucket already owned")
 				default:
-					return errors.Wrapf(err, "Failed to create piece bucket")
+					return errors.Wrapf(err, "failed to create piece bucket")
 				}
 			} else {
-				return errors.Wrapf(err, "Failed to create piece bucket")
+				return errors.Wrapf(err, "failed to create piece bucket")
 			}
 		}
 	}
 	if t.Length()/1024/1024/1024 > s.torrentSizeLimit {
-		log.Infof("Do not cache large torrent")
+		s.l.Infof("do not cache large torrent")
 		return nil
 	}
-	err = s.touch(cl, t)
+	err := s.touch(cl, t)
 	if err != nil {
-		return errors.Wrap(err, "Failed to touch torrent")
+		return errors.Wrap(err, "failed to touch torrent")
+	}
+	done, err := s.checkDone(cl, t)
+	if err != nil {
+		return errors.Wrap(err, "failed to check done marker")
+	}
+	if done {
+		s.l.Info("already fully snapshotted")
+		return nil
 	}
 	prevDownloadedSize, err := s.fetchDownloadedSize(cl, t)
 	if err != nil {
-		return errors.Wrap(err, "Failed to fetch download size")
+		return errors.Wrap(err, "failed to fetch download size")
 	}
 	cp, err := s.fetchCompletedPieces(cl, t)
 	if err != nil {
-		return errors.Wrap(err, "Failed to fetch completed pieces")
+		return errors.Wrap(err, "failed to fetch completed pieces")
 	}
 	err = s.storeTorrent(cl, t)
 	if err != nil {
-		return errors.Wrap(err, "Failed to store torrent")
+		return errors.Wrap(err, "failed to store torrent")
 	}
 
 	ticker := time.NewTicker(10 * time.Second)
@@ -399,18 +440,20 @@ func (s *Snapshot) Start() error {
 	started := false
 	lastDownloadSizeWrittenAt := time.Now()
 	lastCompletedPiecesWrittenAt := time.Now()
+	writtenAt := time.Now()
+	downloadedSize := s.counter
 	go func() {
 		for range ticker.C {
-			if !fullSnapshotStarted && s.stop && totalDownloadRatio >= s.downloadRatio {
+			if !fullSnapshotStarted && time.Now().After(writtenAt.Add(s.writeTimeout)) && totalDownloadRatio >= s.downloadRatio {
 				fullSnapshotStarted = true
-				log.Info("starting full snapshot")
+				s.l.Info("starting full snapshot")
 				t.DownloadAll()
-			} else if s.stop {
-				close(ch)
-				break
 			}
 			completedNum := 0
-			downloadedSize := int64(s.counter.Count())
+			if s.counter > downloadedSize {
+				downloadedSize = s.counter
+				writtenAt = time.Now()
+			}
 			s.mux.Lock()
 			for i := 0; i < t.NumPieces(); i++ {
 				ps := t.PieceState(i)
@@ -423,7 +466,7 @@ func (s *Snapshot) Start() error {
 			if downloadedSize > currDownloadedSize+1024*1024*10 && !time.Now().Before(lastDownloadSizeWrittenAt.Add(s.awsStatWriteDelay)) {
 				err := s.storeDownloadedSize(cl, t, prevDownloadedSize+currDownloadedSize)
 				if err != nil {
-					log.WithError(err).Warn("failed to store downloaded size")
+					s.l.WithError(err).Warn("failed to store downloaded size")
 				} else {
 					currDownloadedSize = downloadedSize
 					lastDownloadSizeWrittenAt = time.Now()
@@ -432,7 +475,7 @@ func (s *Snapshot) Start() error {
 			if completedNum > currCompletedNum+10 && !time.Now().Before(lastCompletedPiecesWrittenAt.Add(s.awsStatWriteDelay)) {
 				err := s.storeCompletedPieces(cl, t, cp)
 				if err != nil {
-					log.WithError(err).Warn("failed to store completed pieces")
+					s.l.WithError(err).Warn("failed to store completed pieces")
 				} else {
 					currCompletedNum = completedNum
 					lastCompletedPiecesWrittenAt = time.Now()
@@ -443,7 +486,7 @@ func (s *Snapshot) Start() error {
 			if totalDownloadRatio >= s.downloadRatio && completedRatio >= s.startThreshold {
 				if !started {
 					started = true
-					log.Infof("starting making snapshot at %v%%", s.startThreshold*100)
+					s.l.Infof("starting making snapshot at %v%%", s.startThreshold*100)
 				}
 				np := []*torrent.Piece{}
 				s.mux.Lock()
@@ -459,9 +502,9 @@ func (s *Snapshot) Start() error {
 					ch <- p
 				}
 			}
-			if !fullSnapshotStarted && fullDownloadStarted == false && completedRatio >= s.startFullDownloadThreshold {
+			if !fullSnapshotStarted && !fullDownloadStarted && completedRatio >= s.startFullDownloadThreshold {
 				fullDownloadStarted = true
-				log.Infof("starting full download at %v%%", s.startFullDownloadThreshold*100)
+				s.l.Infof("starting full download at %v%%", s.startFullDownloadThreshold*100)
 				t.DownloadAll()
 			}
 			if cp.Len() == t.NumPieces() {
@@ -470,13 +513,11 @@ func (s *Snapshot) Start() error {
 			}
 		}
 	}()
-	s.start = true
 	s.storePieces(cl, t, cp, ch, pieceBucket)
 	err = s.storeCompletedPieces(cl, t, cp)
 	if err != nil {
-		log.WithError(err).Warn("failed to store completed pieces")
+		s.l.WithError(err).Warn("failed to store completed pieces")
 	}
-	close(s.stopCh)
 	return nil
 }
 
@@ -490,14 +531,14 @@ func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPiece
 	var wg sync.WaitGroup
 	for i := 0; i < s.awsConcurrency; i++ {
 		wg.Add(1)
-		logger := log.WithField("thread", i)
+		l := s.l.WithField("thread", i)
 		go func() {
 			for p := range ch {
 				b := make([]byte, p.Info().Length())
 				size, err := p.Storage().ReadAt(b, 0)
 
 				if size != int(p.Info().Length()) && err != nil && err != io.EOF {
-					logger.WithError(err).Errorf("failed to read piece index=%v", p.Info().Index())
+					l.WithError(err).Errorf("failed to read piece index=%v", p.Info().Index())
 					continue
 				}
 				key := t.InfoHash().HexString() + "/" + p.Info().Hash().HexString()
@@ -510,7 +551,7 @@ func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPiece
 				})
 
 				if err != nil {
-					logger.WithError(err).Errorf("failed to write piece index=%v", p.Info().Index())
+					l.WithError(err).Errorf("failed to write piece index=%v", p.Info().Index())
 					continue
 				}
 
@@ -518,24 +559,11 @@ func (s *Snapshot) storePieces(cl *s3.S3, t *torrent.Torrent, cp *CompletedPiece
 				cp.Add(p)
 				s.mux.Unlock()
 
-				logger.Infof("stored piece to S3 bucket=%v key=%v index=%v", pb, key, p.Info().Index())
+				l := l.WithField("key", key)
+				l.Infof("stored piece to S3 index=%v", p.Info().Index())
 			}
 			wg.Done()
 		}()
 	}
 	wg.Wait()
-}
-
-func (s *Snapshot) Close() {
-	log.Info("snapshot closing")
-	if s.start {
-		s.stop = true
-
-		select {
-		case <-s.stopCh:
-		case <-time.After(30 * time.Minute):
-		}
-
-	}
-	log.Info("snapshot closed")
 }

@@ -1,0 +1,50 @@
+package services
+
+import (
+	"os"
+	"time"
+
+	"github.com/urfave/cli"
+	"github.com/webtor-io/lazymap"
+)
+
+type TouchMap struct {
+	lazymap.LazyMap
+	p string
+}
+
+func NewTouchMap(c *cli.Context) *TouchMap {
+	return &TouchMap{
+		p: c.String(DATA_DIR_FLAG),
+		LazyMap: lazymap.New(&lazymap.Config{
+			Expire: 30 * time.Second,
+		}),
+	}
+}
+
+func (s *TouchMap) touch(h string) error {
+	f := s.p + "/" + h + ".touch"
+	_, err := os.Stat(f)
+	if os.IsNotExist(err) {
+		file, err := os.Create(f)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+	} else {
+		currentTime := time.Now().Local()
+		err = os.Chtimes(f, currentTime, currentTime)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *TouchMap) Touch(h string) error {
+	_, err := s.LazyMap.Get(h, func() (interface{}, error) {
+		err := s.touch(h)
+		return nil, err
+	})
+	return err
+}

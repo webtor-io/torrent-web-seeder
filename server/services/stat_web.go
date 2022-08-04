@@ -26,13 +26,13 @@ func NewStatWeb(st *Stat) *StatWeb {
 	}
 }
 
-func (s *StatWeb) Serve(w http.ResponseWriter, r *http.Request, p string) error {
-	h, ok := w.(*logrusmiddleware.Handler)
+func (s *StatWeb) Serve(w http.ResponseWriter, r *http.Request, h string, p string) error {
+	ha, ok := w.(*logrusmiddleware.Handler)
 	if !ok {
 		return errors.Errorf("unable to get writer")
 	}
 
-	f, ok := h.ResponseWriter.(http.Flusher)
+	f, ok := ha.ResponseWriter.(http.Flusher)
 	if !ok {
 		return errors.Errorf("streaming unsupported")
 	}
@@ -41,7 +41,11 @@ func (s *StatWeb) Serve(w http.ResponseWriter, r *http.Request, p string) error 
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	stream := NewStatStreamServer(r.Context(), h, f)
+
+	ctx := metadata.NewIncomingContext(r.Context(), metadata.MD{
+		"info-hash": []string{h},
+	})
+	stream := NewStatStreamServer(ctx, ha, f)
 	ticker := time.NewTicker(10 * time.Second)
 	go func() {
 		for range ticker.C {

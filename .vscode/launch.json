@@ -12,7 +12,7 @@
             "program": "${workspaceFolder}/server",
             "env": {},
             "envFile": "${env:HOME}/.env",
-            "args": ["--input", "${env:HOME}/another.torrent"]
+            "args": ["--input", "${env:HOME}", "--stat-port", "50052"]
         }
     ]
 }

@@ -3,19 +3,21 @@ package services
 import (
 	"crypto/sha1"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
-	"io"
-
-	log "github.com/sirupsen/logrus"
+	"github.com/anacrolix/torrent/bencode"
 
 	"github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/bencode"
+	log "github.com/sirupsen/logrus"
 )
+
+var sha1R = regexp.MustCompile("^[0-9a-f]{5,40}$")
 
 const (
 	PIECE_PATH          = "piece/"
@@ -25,25 +27,25 @@ const (
 )
 
 type WebSeeder struct {
-	t  *Torrent
-	c  *Counter
+	tm *TorrentMap
+	sm *SnapshotMap
 	bp *BucketPool
 	st *StatWeb
 }
 
-func NewWebSeeder(t *Torrent, c *Counter, bp *BucketPool, st *StatWeb) *WebSeeder {
+func NewWebSeeder(tm *TorrentMap, st *StatWeb, bp *BucketPool, sm *SnapshotMap) *WebSeeder {
 	return &WebSeeder{
-		t:  t,
-		c:  c,
+		tm: tm,
 		bp: bp,
 		st: st,
+		sm: sm,
 	}
 }
 
-func (s *WebSeeder) renderTorrent(w http.ResponseWriter, r *http.Request) {
+func (s *WebSeeder) renderTorrent(w http.ResponseWriter, r *http.Request, h string) {
 	log.Info("serve torrent")
 
-	t, err := s.t.Get()
+	t, err := s.tm.Get(h)
 
 	if err != nil {
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
@@ -59,10 +61,10 @@ func (s *WebSeeder) renderTorrent(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, hash string) {
-	log.Infof("serve piece data for hash=%v", hash)
+func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, h string, ph string) {
+	log.Infof("serve piece data for hash=%v piece hash=%v", h, ph)
 
-	t, err := s.t.Get()
+	t, err := s.tm.Get(h)
 
 	if err != nil {
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
@@ -71,7 +73,7 @@ func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, hash
 	}
 	for i := 0; i < t.NumPieces(); i++ {
 		p := t.Piece(i)
-		if p.Info().Hash().HexString() == hash {
+		if p.Info().Hash().HexString() == ph {
 			pr := NewPieceReader(t.NewReader(), p)
 			defer pr.Close()
 			http.ServeContent(w, r, "", time.Unix(0, 0), pr)
@@ -79,19 +81,19 @@ func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, hash
 	}
 }
 
-func (s *WebSeeder) renderPiece(w http.ResponseWriter, r *http.Request, hash string) {
-	log.Infof("serve piece hash=%v", hash)
-	if hash == "" {
-		s.renderPieceIndex(w, r)
+func (s *WebSeeder) renderPiece(w http.ResponseWriter, r *http.Request, h string, ph string) {
+	log.Infof("serve piece hash=%v piece-hash=%v", h, ph)
+	if ph == "" {
+		s.renderPieceIndex(w, r, h)
 	} else {
-		s.renderPieceData(w, r, hash)
+		s.renderPieceData(w, r, h, ph)
 	}
 }
 
-func (s *WebSeeder) renderPieceIndex(w http.ResponseWriter, r *http.Request) {
+func (s *WebSeeder) renderPieceIndex(w http.ResponseWriter, r *http.Request, h string) {
 	log.Info("serve piece index")
 
-	t, err := s.t.Get()
+	t, err := s.tm.Get(h)
 
 	if err != nil {
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
@@ -121,18 +123,18 @@ func (s *WebSeeder) addA(path string, w http.ResponseWriter, r *http.Request) {
 func (s *WebSeeder) addH(h string, w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, fmt.Sprintf("<h1>%s</h1>", h))
 }
-func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
+
+func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h string) {
 	log.Info("Serve file index")
 
-	t, err := s.t.Get()
+	t, err := s.tm.Get(h)
 
 	if err != nil {
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
-	h := t.InfoHash().HexString()
 	s.addH(h, w, r)
-	s.addA("/"+h+"/", w, r)
+	s.addA("..", w, r)
 	s.addA(PIECE_PATH, w, r)
 	s.addA(SOURCE_TORRENT_PATH, w, r)
 	for _, f := range t.Files() {
@@ -140,12 +142,13 @@ func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) {
+func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, p string) {
 	if _, ok := r.URL.Query()["stats"]; ok {
-		s.serveStats(w, r, p)
+		s.serveStats(w, r, h, p)
 		return
 	}
-	log := log.WithField("path", r.URL.Path)
+	log := log.WithField("hash", h)
+	log = log.WithField("path", r.URL.Path)
 	log = log.WithField("method", r.Method)
 	log = log.WithField("remoteAddr", r.RemoteAddr)
 	found := false
@@ -156,7 +159,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 	}
 	log = log.WithField("download", download)
 
-	t, err := s.t.Get()
+	t, err := s.tm.Get(h)
 
 	if err != nil {
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
@@ -203,7 +206,12 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 			}
 			w.Header().Set("Last-Modified", time.Unix(0, 0).Format(http.TimeFormat))
 			w.Header().Set("Etag", fmt.Sprintf("\"%x\"", sha1.Sum([]byte(t.InfoHash().String()+p))))
-			http.ServeContent(s.c.NewResponseWriter(w), r, f.Path(), time.Unix(0, 0), reader)
+			w, err := s.sm.WrapWriter(w, h)
+			if err != nil {
+				http.Error(w, "failed to wrap writer", http.StatusInternalServerError)
+				return
+			}
+			http.ServeContent(w, r, f.Path(), time.Unix(0, 0), reader)
 			found = true
 		}
 	}
@@ -214,32 +222,56 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, p string) 
 	}
 }
 
-func (s *WebSeeder) serveStats(w http.ResponseWriter, r *http.Request, p string) {
-	err := s.st.Serve(w, r, p)
+func (s *WebSeeder) serveStats(w http.ResponseWriter, r *http.Request, h string, p string) {
+	err := s.st.Serve(w, r, h, p)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
 
-func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	t, err := s.t.Get()
+func (s *WebSeeder) getHash(r *http.Request) string {
+	if r.Header.Get("X-Info-Hash") != "" {
+		return r.Header.Get("X-Info-Hash")
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) > 0 {
+		p := parts[0]
+		f := sha1R.Find([]byte(p))
+		if f != nil {
+			return string(f)
+		}
+	}
+	return ""
+}
+
+func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
+	l, err := s.tm.List()
 	if err != nil {
-		log.WithError(err).Error("failed to get torrent")
-		w.WriteHeader(500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.addH("Index", w, r)
+	for _, v := range l {
+		s.addA(v+"/", w, r)
+	}
+}
 
-	p := r.URL.Path[1:]
-	p = strings.TrimPrefix(p, t.InfoHash().HexString()+"/")
-	if p == "" {
+func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.getHash(r) == "" {
 		s.renderIndex(w, r)
-	} else if p == SOURCE_TORRENT_PATH {
-		s.renderTorrent(w, r)
-	} else if strings.HasPrefix(p, PIECE_PATH) {
-		h := strings.TrimPrefix(p, PIECE_PATH)
-		s.renderPiece(w, r, h)
 	} else {
-		s.serveFile(w, r, p)
+		p := r.URL.Path[1:]
+		p = strings.TrimPrefix(p, s.getHash(r)+"/")
+		if p == "" {
+			s.renderTorrentIndex(w, r, s.getHash(r))
+		} else if p == SOURCE_TORRENT_PATH {
+			s.renderTorrent(w, r, s.getHash(r))
+		} else if strings.HasPrefix(p, PIECE_PATH) {
+			tp := strings.TrimPrefix(p, PIECE_PATH)
+			s.renderPiece(w, r, s.getHash(r), tp)
+		} else {
+			s.serveFile(w, r, s.getHash(r), p)
+		}
 	}
 }

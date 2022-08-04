@@ -101,6 +101,7 @@ require (
 	github.com/vmihailenco/bufpool v0.1.11 // indirect
 	github.com/vmihailenco/tagparser v0.1.2 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
+	github.com/webtor-io/lazymap v0.0.0-20211113172031-0d3df1e054bf // indirect
 	github.com/willf/bitset v1.1.11 // indirect
 	github.com/willf/bloom v2.0.3+incompatible // indirect
 	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d // indirect

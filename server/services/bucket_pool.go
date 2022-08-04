@@ -29,7 +29,7 @@ func (s *BucketPool) Get(sessionID string, rate string) (*ratelimit.Bucket, erro
 	key := sessionID + rate
 	r, err := bytefmt.ToBytes(rate)
 	if err != nil {
-		return nil, errors.Errorf("Failed to parse rate %v", rate)
+		return nil, errors.Errorf("failed to parse rate %v", rate)
 	}
 
 	v, _ := s.sm.LoadOrStore(key, ratelimit.NewBucketWithRate(float64(r)/8, int64(r)))

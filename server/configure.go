@@ -19,55 +19,50 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterWebFlags(app.Flags)
 	app.Flags = s.RegisterTorrentClientFlags(app.Flags)
 	app.Flags = s.RegisterTorrentStoreFlags(app.Flags)
+	app.Flags = s.RegisterFileStoreFlags(app.Flags)
 	app.Flags = s.RegisterStatFlags(app.Flags)
-	app.Flags = s.RegisterMetaInfoFlags(app.Flags)
+	app.Flags = s.RegisterCleanerFlags(app.Flags)
 	app.Flags = s.RegisterSnapshotFlags(app.Flags)
-	app.Flags = s.RegisterTorrentFlags(app.Flags)
 	app.Action = run
 }
 
 func run(c *cli.Context) error {
-	defer func() {
-		log.Info("shuting down... at last!")
-	}()
-
 	// Setting TorrentStore
 	torrentStore := s.NewTorrentStore(c)
 	defer torrentStore.Close()
-
-	// Setting MetaInfo
-	metainfo := s.NewMetaInfo(c, torrentStore)
 
 	// Setting TorrentClient
 	torrentClient, err := s.NewTorrentClient(c)
 	if err != nil {
 		return errors.Wrap(err, "Failed to init TorrentClient")
 	}
+	defer torrentClient.Close()
 
-	// Setting Torrent
-	torrent := s.NewTorrent(c, torrentClient, metainfo)
+	// Setting TorrentStoreMap
+	torrentStoreMap := s.NewTorrentStoreMap(torrentStore)
+
+	// Setting FileStoreMap
+	fileStoreMap := s.NewFileStoreMap(c)
+
+	// Setting TouchMap
+	touchMap := s.NewTouchMap(c)
+
+	// Setting TorrentMap
+	torrentMap := s.NewTorrentMap(c, torrentClient, torrentStoreMap, fileStoreMap, touchMap)
 
 	// Setting conter
-	counter := s.NewCounter()
+	// counter := s.NewCounter()
 
 	// Setting S3 Client
 	s3 := cs.NewS3Client(c, &http.Client{
 		Timeout: time.Second * 60,
 	})
 
-	// Setting Snapshot
-	snapshot, err := s.NewSnapshot(c, torrent, counter, s3)
-	if err != nil {
-		return errors.Wrap(err, "Failed to init Snapshot")
-	} else if snapshot != nil {
-		defer snapshot.Close()
-	}
-
-	// Snapshot should close first of them all
-	defer torrentClient.Close()
+	// Setting SnapshotMap
+	snapshotMap := s.NewSnapshotMap(c, torrentMap, s3)
 
 	// Setting Stat
-	stat := s.NewStat(torrent)
+	stat := s.NewStat(torrentMap)
 
 	// Setting StatGRPC
 	statGRPC := s.NewStatGRPC(c, stat)
@@ -79,7 +74,11 @@ func run(c *cli.Context) error {
 	bp := s.NewBucketPool()
 
 	// Setting WebSeeder
-	webSeeder := s.NewWebSeeder(torrent, counter, bp, statWeb)
+	webSeeder := s.NewWebSeeder(torrentMap, statWeb, bp, snapshotMap)
+
+	// Setting Cleaner
+	cleaner := s.NewCleaner(c, torrentMap)
+	defer cleaner.Close()
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)
@@ -94,7 +93,7 @@ func run(c *cli.Context) error {
 	defer pprof.Close()
 
 	// Setting Serve
-	serve := s.NewServe(web, statGRPC, probe, torrent, snapshot, pprof)
+	serve := cs.NewServe(web, probe, pprof, statGRPC, cleaner)
 
 	// And SERVE!
 	err = serve.Serve()

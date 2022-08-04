@@ -8,20 +8,22 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/anacrolix/torrent"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	pb "github.com/webtor-io/torrent-web-seeder/torrent-web-seeder"
 )
 
 type Stat struct {
-	ts *Torrent
+	tm *TorrentMap
 }
 
-func NewStat(ts *Torrent) *Stat {
+func NewStat(tm *TorrentMap) *Stat {
 	return &Stat{
-		ts: ts,
+		tm: tm,
 	}
 }
 
@@ -108,16 +110,12 @@ func findFile(t *torrent.Torrent, path string) *torrent.File {
 }
 
 func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
-	if !s.ts.Ready() {
-		return &pb.StatReply{
-			Completed: 0,
-			Total:     0,
-			Peers:     0,
-			Status:    pb.StatReply_INITIALIZATION,
-			Pieces:    []*pb.Piece{},
-		}, nil
+	md, _ := metadata.FromIncomingContext(ctx)
+	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
+		return nil, errors.Errorf("No info-hash provided")
 	}
-	t, err := s.ts.Get()
+	h := md.Get("info-hash")[0]
+	t, err := s.tm.Get(h)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +213,12 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 }
 
 func (s *Stat) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply, error) {
-	t, err := s.ts.Get()
+	md, _ := metadata.FromIncomingContext(ctx)
+	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
+		return nil, errors.Errorf("No info-hash provided")
+	}
+	h := md.Get("info-hash")[0]
+	t, err := s.tm.Get(h)
 	if err != nil {
 		return nil, err
 	}

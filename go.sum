@@ -1003,6 +1003,8 @@ github.com/webtor-io/common-services v0.0.0-20220521124118-dfcf9bfc576e h1:QyLx2
 github.com/webtor-io/common-services v0.0.0-20220521124118-dfcf9bfc576e/go.mod h1:HbYisgqYYIFr2tJIUoZGKsL2Q9SgwvAhKXBGvAcfwbg=
 github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5 h1:bBVgGd/bVcRsE3zFkccroA4FYgAhTd22Z0lM7V00kb8=
 github.com/webtor-io/gracenet v0.0.0-20200102122601-7e0e6f3c06b5/go.mod h1:W/I3wRZPVQg5ex7/PjlYIBTOaPDyZ77PdjX7SYT59N4=
+github.com/webtor-io/lazymap v0.0.0-20211113172031-0d3df1e054bf h1:DE83KaWWbKYSVhlXPHfznYHaxXG/KRs7cJ5TMLKrcyA=
+github.com/webtor-io/lazymap v0.0.0-20211113172031-0d3df1e054bf/go.mod h1:za/bioTGK3VjG3+mK7/kpx0TV8++ytZkdOQ1MJ2HTjM=
 github.com/webtor-io/torrent-store v0.0.0-20210710130004-9afe9e0d1ff5 h1:NzieEHHdmLC8rmwCvrtvW7WC81tf5aEawmJd5r2eE50=
 github.com/webtor-io/torrent-store v0.0.0-20210710130004-9afe9e0d1ff5/go.mod h1:K2RYHFlpJq73YnzqOonXTOL2Xwf8mckfWc+SdilFEmk=
 github.com/willf/bitset v1.1.3/go.mod h1:RjeCKbqT1RxIR/KWY6phxZiaY1IyutSBfGjNPySAYV4=
