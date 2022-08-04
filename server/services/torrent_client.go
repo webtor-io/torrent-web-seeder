@@ -82,7 +82,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	// cfg.AcceptPeerConnections = false
 	// cfg.DisableIPv6 = true
 	cfg.Logger = tlog.Default.WithNames("main", "client")
-	cfg.Debug = true
+	// cfg.Debug = true
 	cfg.DefaultStorage = storage.NewFileByInfoHash(s.dataDir)
 	// cfg.DisableTrackers = true
 	// cfg.DisableWebtorrent = true
