@@ -4,7 +4,6 @@ import (
 	"sort"
 
 	"github.com/anacrolix/torrent"
-	"github.com/pkg/errors"
 	"github.com/urfave/cli"
 )
 
@@ -23,16 +22,16 @@ func RegisterTorrentMapFlags(f []cli.Flag) []cli.Flag {
 }
 
 type TorrentMap struct {
-	tc     *TorrentClient
+	tcp    *TorrentClientPool
 	tsm    *TorrentStoreMap
 	fsm    *FileStoreMap
 	tm     *TouchMap
 	magnet string
 }
 
-func NewTorrentMap(c *cli.Context, tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap, tm *TouchMap) *TorrentMap {
+func NewTorrentMap(c *cli.Context, tcp *TorrentClientPool, tsm *TorrentStoreMap, fsm *FileStoreMap, tm *TouchMap) *TorrentMap {
 	return &TorrentMap{
-		tc:     tc,
+		tcp:    tcp,
 		tsm:    tsm,
 		fsm:    fsm,
 		tm:     tm,
@@ -41,23 +40,27 @@ func NewTorrentMap(c *cli.Context, tc *TorrentClient, tsm *TorrentStoreMap, fsm 
 }
 
 func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
-	cl, err := s.tc.Get()
+	tc, err := s.tcp.Get(h)
+	if err != nil {
+		return nil, err
+	}
+	cl, err := tc.Get()
 	if err != nil {
 		return nil, err
 	}
 	var t *torrent.Torrent
-	if s.magnet != "" {
-		sp, err := torrent.TorrentSpecFromMagnetUri(s.magnet)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to parse magnet")
-		}
-		if h == sp.InfoHash.HexString() {
-			t, err = cl.AddMagnet(s.magnet)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to add magnet")
-			}
-		}
-	}
+	// if s.magnet != "" {
+	// 	sp, err := torrent.TorrentSpecFromMagnetUri(s.magnet)
+	// 	if err != nil {
+	// 		return nil, errors.Wrap(err, "failed to parse magnet")
+	// 	}
+	// 	if h == sp.InfoHash.HexString() {
+	// 		t, err = cl.AddMagnet(s.magnet)
+	// 		if err != nil {
+	// 			return nil, errors.Wrap(err, "failed to add magnet")
+	// 		}
+	// 	}
+	// }
 	if t == nil {
 		mi, err := s.fsm.Get(h)
 		if err != nil {
@@ -81,21 +84,21 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 }
 
 func (s *TorrentMap) List() ([]string, error) {
-	cl, err := s.tc.Get()
-	if err != nil {
-		return nil, err
-	}
+	// cl, err := s.tc.Get()
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// if s.magnet != "" {
+	// 	sp, err := torrent.TorrentSpecFromMagnetUri(s.magnet)
+	// 	if err != nil {
+	// 		return nil, errors.Wrap(err, "failed to parse magnet")
+	// 	}
+	// 	r[sp.InfoHash.HexString()] = true
+	// }
+	// for _, t := range cl.Torrents() {
+	// 	r[t.InfoHash().HexString()] = true
+	// }
 	r := map[string]bool{}
-	if s.magnet != "" {
-		sp, err := torrent.TorrentSpecFromMagnetUri(s.magnet)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to parse magnet")
-		}
-		r[sp.InfoHash.HexString()] = true
-	}
-	for _, t := range cl.Torrents() {
-		r[t.InfoHash().HexString()] = true
-	}
 	l, err := s.fsm.List()
 	if err != nil {
 		return nil, err

@@ -23,6 +23,7 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterStatFlags(app.Flags)
 	app.Flags = s.RegisterCleanerFlags(app.Flags)
 	app.Flags = s.RegisterSnapshotFlags(app.Flags)
+	app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
 }
 
@@ -31,12 +32,12 @@ func run(c *cli.Context) error {
 	torrentStore := s.NewTorrentStore(c)
 	defer torrentStore.Close()
 
-	// Setting TorrentClient
-	torrentClient, err := s.NewTorrentClient(c)
+	// Setting TorrentClientPool
+	torrentClientPool, err := s.NewTorrentClientPool(c)
 	if err != nil {
-		return errors.Wrap(err, "Failed to init TorrentClient")
+		return errors.Wrap(err, "Failed to init TorrentClientPool")
 	}
-	defer torrentClient.Close()
+	// defer torrentClient.Close()
 
 	// Setting TorrentStoreMap
 	torrentStoreMap := s.NewTorrentStoreMap(torrentStore)
@@ -48,7 +49,7 @@ func run(c *cli.Context) error {
 	touchMap := s.NewTouchMap(c)
 
 	// Setting TorrentMap
-	torrentMap := s.NewTorrentMap(c, torrentClient, torrentStoreMap, fileStoreMap, touchMap)
+	torrentMap := s.NewTorrentMap(c, torrentClientPool, torrentStoreMap, fileStoreMap, touchMap)
 
 	// Setting conter
 	// counter := s.NewCounter()

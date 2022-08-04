@@ -26,6 +26,7 @@ type TorrentClient struct {
 	rLimit  int64
 	dataDir string
 	proxy   string
+	port    int
 }
 
 const (
@@ -56,7 +57,7 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 	)
 }
 
-func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
+func NewTorrentClient(c *cli.Context, port int) (*TorrentClient, error) {
 	dr := int64(-1)
 	if c.String(TORRENT_CLIENT_DOWNLOAD_RATE_FLAG) != "" {
 		drp, err := bytefmt.ToBytes(c.String(TORRENT_CLIENT_DOWNLOAD_RATE_FLAG))
@@ -70,6 +71,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		rLimit:  dr,
 		dataDir: c.String(DATA_DIR_FLAG),
 		proxy:   c.String(HTTP_PROXY),
+		port:    port,
 	}, nil
 }
 
@@ -84,6 +86,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.Logger = tlog.Default.WithNames("main", "client")
 	// cfg.Debug = true
 	cfg.DefaultStorage = storage.NewFileByInfoHash(s.dataDir)
+	cfg.ListenPort = s.port
 	// cfg.DisableTrackers = true
 	// cfg.DisableWebtorrent = true
 	// cfg.DisableWebseeds = true
