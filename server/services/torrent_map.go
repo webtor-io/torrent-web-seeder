@@ -28,6 +28,7 @@ type TorrentMap struct {
 	fsm    *FileStoreMap
 	tm     *TouchMap
 	magnet string
+	c      *cli.Context
 }
 
 func NewTorrentMap(c *cli.Context, tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap, tm *TouchMap) *TorrentMap {
@@ -36,12 +37,18 @@ func NewTorrentMap(c *cli.Context, tc *TorrentClient, tsm *TorrentStoreMap, fsm 
 		tsm:    tsm,
 		fsm:    fsm,
 		tm:     tm,
+		c:      c,
 		magnet: c.String(MAGNET),
 	}
 }
 
 func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
-	cl, err := s.tc.Get()
+	// cl, err := s.tc.Get()
+	tc, err := NewTorrentClient(s.c)
+	if err != nil {
+		return nil, err
+	}
+	cl, err := tc.Get()
 	if err != nil {
 		return nil, err
 	}
