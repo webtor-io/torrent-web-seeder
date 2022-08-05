@@ -21,9 +21,10 @@ const (
 func RegisterCleanerFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.StringFlag{
-			Name:  CLEANER_KEEP_FREE_FLAG,
-			Usage: "keep free",
-			Value: "50GB",
+			Name:   CLEANER_KEEP_FREE_FLAG,
+			Usage:  "keep free",
+			Value:  "50GB",
+			EnvVar: "CLEANER_KEEP_FREE",
 		},
 	)
 }
