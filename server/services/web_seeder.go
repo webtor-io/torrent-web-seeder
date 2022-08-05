@@ -193,17 +193,17 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 				}
 				return ra
 			})
-			if r.Header.Get("X-Download-Rate") != "" && r.Header.Get("X-Session-ID") != "" {
-				b, err := s.bp.Get(r.Header.Get("X-Session-ID"), r.Header.Get("X-Download-Rate"))
-				if err != nil {
-					log.WithError(err).Error("failed to get bucket")
-					http.Error(w, "failed to get bucket", http.StatusInternalServerError)
-					return
-				}
-				reader = NewThrottledReader(torReader, b)
-			} else {
-				reader = torReader
-			}
+			// if r.Header.Get("X-Download-Rate") != "" && r.Header.Get("X-Session-ID") != "" {
+			// 	b, err := s.bp.Get(r.Header.Get("X-Session-ID"), r.Header.Get("X-Download-Rate"))
+			// 	if err != nil {
+			// 		log.WithError(err).Error("failed to get bucket")
+			// 		http.Error(w, "failed to get bucket", http.StatusInternalServerError)
+			// 		return
+			// 	}
+			// 	reader = NewThrottledReader(torReader, b)
+			// } else {
+			reader = torReader
+			// }
 			w.Header().Set("Last-Modified", time.Unix(0, 0).Format(http.TimeFormat))
 			w.Header().Set("Etag", fmt.Sprintf("\"%x\"", sha1.Sum([]byte(t.InfoHash().String()+p))))
 			w, err := s.sm.WrapWriter(w, h)
