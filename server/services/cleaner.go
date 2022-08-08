@@ -91,11 +91,11 @@ func (s *Cleaner) getFreeSpace() uint64 {
 func (s *Cleaner) drop(h string) error {
 	os.RemoveAll(s.p + "/" + h)
 	os.RemoveAll(s.p + "/" + h + ".touch")
-	t, err := s.tm.Get(h)
-	if err != nil {
-		return err
-	}
-	t.Drop()
+	// t, err := s.tm.Get(h)
+	// if err != nil {
+	// 	return err
+	// }
+	// t.Drop()
 	return nil
 }
 
