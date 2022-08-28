@@ -21,7 +21,6 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterTorrentStoreFlags(app.Flags)
 	app.Flags = s.RegisterFileStoreFlags(app.Flags)
 	app.Flags = s.RegisterStatFlags(app.Flags)
-	app.Flags = s.RegisterCleanerFlags(app.Flags)
 	app.Flags = s.RegisterSnapshotFlags(app.Flags)
 	app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
@@ -77,10 +76,6 @@ func run(c *cli.Context) error {
 	// Setting WebSeeder
 	webSeeder := s.NewWebSeeder(torrentMap, statWeb, bp, snapshotMap)
 
-	// Setting Cleaner
-	cleaner := s.NewCleaner(c, torrentMap)
-	defer cleaner.Close()
-
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)
 	defer web.Close()
@@ -94,7 +89,7 @@ func run(c *cli.Context) error {
 	defer pprof.Close()
 
 	// Setting Serve
-	serve := cs.NewServe(web, probe, pprof, statGRPC, cleaner)
+	serve := cs.NewServe(web, probe, pprof, statGRPC)
 
 	// And SERVE!
 	err = serve.Serve()
