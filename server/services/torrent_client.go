@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"code.cloudfoundry.org/bytefmt"
@@ -13,25 +14,28 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 
+	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/mse"
 	"github.com/anacrolix/torrent/storage"
 	"golang.org/x/time/rate"
 )
 
 type TorrentClient struct {
-	cl      *torrent.Client
-	mux     sync.Mutex
-	err     error
-	inited  bool
-	rLimit  int64
-	dataDir string
-	proxy   string
-	port    int
+	cl            *torrent.Client
+	mux           sync.Mutex
+	err           error
+	inited        bool
+	rLimit        int64
+	dataDir       string
+	completionDir string
+	proxy         string
+	port          int
 }
 
 const (
 	TORRENT_CLIENT_DOWNLOAD_RATE_FLAG = "download-rate"
-	HTTP_PROXY                        = "http-proxy"
+	HTTP_PROXY_FLAG                   = "http-proxy"
+	COMPLETION_DIR_FLAG               = "completion-dir"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -43,7 +47,7 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			EnvVar: "DOWNLOAD_RATE",
 		},
 		cli.StringFlag{
-			Name:   HTTP_PROXY,
+			Name:   HTTP_PROXY_FLAG,
 			Usage:  "http proxy",
 			Value:  "",
 			EnvVar: "HTTP_PROXY",
@@ -53,6 +57,12 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Usage:  "data dir",
 			Value:  os.TempDir(),
 			EnvVar: "DATA_DIR",
+		},
+		cli.StringFlag{
+			Name:   COMPLETION_DIR_FLAG,
+			Usage:  "completion dir",
+			Value:  os.TempDir(),
+			EnvVar: "COMPLETION_DIR",
 		},
 	)
 }
@@ -68,10 +78,11 @@ func NewTorrentClient(c *cli.Context, port int) (*TorrentClient, error) {
 		dr = int64(drp)
 	}
 	return &TorrentClient{
-		rLimit:  dr,
-		dataDir: c.String(DATA_DIR_FLAG),
-		proxy:   c.String(HTTP_PROXY),
-		port:    port,
+		rLimit:        dr,
+		dataDir:       c.String(DATA_DIR_FLAG),
+		completionDir: c.String(COMPLETION_DIR_FLAG),
+		proxy:         c.String(HTTP_PROXY_FLAG),
+		port:          port,
 	}, nil
 }
 
@@ -85,7 +96,11 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	// cfg.DisableIPv6 = true
 	cfg.Logger = tlog.Default.WithNames("main", "client")
 	// cfg.Debug = true
-	cfg.DefaultStorage = storage.NewFileByInfoHash(s.dataDir)
+	cfg.DefaultStorage = storage.NewFileWithCustomPathMakerAndCompletion(
+		s.dataDir,
+		infoHashPathMaker,
+		pieceCompletionForDir(s.completionDir),
+	)
 	cfg.ListenPort = s.port
 	// cfg.DisableTrackers = true
 	// cfg.DisableWebtorrent = true
@@ -139,4 +154,17 @@ func (s *TorrentClient) Close() {
 
 func MyCryptoSelector(provided mse.CryptoMethod) mse.CryptoMethod {
 	return mse.CryptoMethodRC4
+}
+
+func infoHashPathMaker(baseDir string, info *metainfo.Info, infoHash metainfo.Hash) string {
+	return filepath.Join(baseDir, infoHash.HexString())
+}
+
+func pieceCompletionForDir(dir string) (ret storage.PieceCompletion) {
+	ret, err := storage.NewDefaultPieceCompletionForDir(dir)
+	if err != nil {
+		log.Printf("couldn't open piece completion db in %q: %s", dir, err)
+		ret = storage.NewMapPieceCompletion()
+	}
+	return
 }
