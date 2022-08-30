@@ -1,9 +1,8 @@
 package services
 
 import (
-	"strconv"
+	"sync"
 
-	"github.com/pkg/errors"
 	"github.com/urfave/cli"
 )
 
@@ -30,32 +29,45 @@ func RegisterTorrentClientPoolFlags(f []cli.Flag) []cli.Flag {
 }
 
 type TorrentClientPool struct {
-	clients map[int]*TorrentClient
+	m     map[string]*TorrentClient
+	mux   sync.Mutex
+	start int
+	c     *cli.Context
 }
 
-func NewTorrentClientPool(c *cli.Context) (*TorrentClientPool, error) {
-	clients := map[int]*TorrentClient{}
-	size := c.Int(TORRENT_CLIENT_POOL_SIZE_FLAG)
-	startPort := c.Int(TORRENT_CLIENT_START_PORT_FLAG)
-	for i := 0; i < size; i++ {
-		tc, err := NewTorrentClient(c, startPort+i)
-		if err != nil {
-			return nil, err
-		}
-		clients[i] = tc
-	}
+func NewTorrentClientPool(c *cli.Context) *TorrentClientPool {
 	return &TorrentClientPool{
-		clients: clients,
-	}, nil
+		start: c.Int(TORRENT_CLIENT_START_PORT_FLAG),
+		m:     map[string]*TorrentClient{},
+		c:     c,
+	}
 }
 
-func (s *TorrentClientPool) Get(h string) (*TorrentClient, error) {
-	hex := h[0:5]
-	num, err := strconv.ParseInt(hex, 16, 64)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to parse hex from infohash=%v", h)
+func (s *TorrentClientPool) Get(h string) (res *TorrentClient, err error) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	res, ok := s.m[h]
+	if ok {
+		return
 	}
-	total := int64(1048575)
-	k := int(float64(num) / float64(total) * float64(len(s.clients)))
-	return s.clients[int(k)], nil
+	var port int
+	for i := s.start; true; i++ {
+		found := false
+		for _, tc := range s.m {
+			if tc.port == i {
+				found = true
+				break
+			}
+		}
+		if !found {
+			port = i
+			break
+		}
+	}
+	res, err = NewTorrentClient(s.c, port, h)
+	if err != nil {
+		return
+	}
+	s.m[h] = res
+	return
 }

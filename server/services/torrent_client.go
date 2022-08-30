@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"code.cloudfoundry.org/bytefmt"
@@ -14,7 +13,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 
-	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/mse"
 	"github.com/anacrolix/torrent/storage"
 	"golang.org/x/time/rate"
@@ -30,6 +28,7 @@ type TorrentClient struct {
 	completionDir string
 	proxy         string
 	port          int
+	hash          string
 }
 
 const (
@@ -58,16 +57,10 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Value:  os.TempDir(),
 			EnvVar: "DATA_DIR",
 		},
-		cli.StringFlag{
-			Name:   COMPLETION_DIR_FLAG,
-			Usage:  "completion dir",
-			Value:  os.TempDir(),
-			EnvVar: "COMPLETION_DIR",
-		},
 	)
 }
 
-func NewTorrentClient(c *cli.Context, port int) (*TorrentClient, error) {
+func NewTorrentClient(c *cli.Context, port int, h string) (*TorrentClient, error) {
 	dr := int64(-1)
 	if c.String(TORRENT_CLIENT_DOWNLOAD_RATE_FLAG) != "" {
 		drp, err := bytefmt.ToBytes(c.String(TORRENT_CLIENT_DOWNLOAD_RATE_FLAG))
@@ -83,11 +76,14 @@ func NewTorrentClient(c *cli.Context, port int) (*TorrentClient, error) {
 		completionDir: c.String(COMPLETION_DIR_FLAG),
 		proxy:         c.String(HTTP_PROXY_FLAG),
 		port:          port,
+		hash:          h,
 	}, nil
 }
 
 func (s *TorrentClient) get() (*torrent.Client, error) {
-	log.Infof("initializing TorrentClient dataDir=%v", s.dataDir)
+	d := s.dataDir + "/" + s.hash
+	_ = os.Mkdir(d, os.ModePerm)
+	log.Infof("initializing TorrentClient dataDir=%v", d)
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.NoUpload = true
 	// cfg.DisableAggressiveUpload = true
@@ -96,11 +92,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	// cfg.DisableIPv6 = true
 	cfg.Logger = tlog.Default.WithNames("main", "client")
 	// cfg.Debug = true
-	cfg.DefaultStorage = storage.NewFileWithCustomPathMakerAndCompletion(
-		s.dataDir,
-		infoHashPathMaker,
-		pieceCompletionForDir(s.completionDir),
-	)
+	cfg.DefaultStorage = storage.NewMMap(d)
 	cfg.ListenPort = s.port
 	// cfg.DisableTrackers = true
 	// cfg.DisableWebtorrent = true
@@ -124,7 +116,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	// cfg.HalfOpenConnsPerTorrent = 50
 	// cfg.TorrentPeersHighWater = 1000
 	// cfg.TorrentPeersLowWater = 500
-	cfg.TotalHalfOpenConns = 1000
+	// cfg.TotalHalfOpenConns = 1000
 	if s.rLimit != -1 {
 		cfg.DownloadRateLimiter = rate.NewLimiter(rate.Limit(s.rLimit), int(s.rLimit))
 	}
@@ -154,17 +146,4 @@ func (s *TorrentClient) Close() {
 
 func MyCryptoSelector(provided mse.CryptoMethod) mse.CryptoMethod {
 	return mse.CryptoMethodRC4
-}
-
-func infoHashPathMaker(baseDir string, info *metainfo.Info, infoHash metainfo.Hash) string {
-	return filepath.Join(baseDir, infoHash.HexString())
-}
-
-func pieceCompletionForDir(dir string) (ret storage.PieceCompletion) {
-	ret, err := storage.NewDefaultPieceCompletionForDir(dir)
-	if err != nil {
-		log.Printf("couldn't open piece completion db in %q: %s", dir, err)
-		ret = storage.NewMapPieceCompletion()
-	}
-	return
 }

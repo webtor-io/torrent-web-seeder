@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 	cs "github.com/webtor-io/common-services"
@@ -32,11 +31,7 @@ func run(c *cli.Context) error {
 	defer torrentStore.Close()
 
 	// Setting TorrentClientPool
-	torrentClientPool, err := s.NewTorrentClientPool(c)
-	if err != nil {
-		return errors.Wrap(err, "Failed to init TorrentClientPool")
-	}
-	// defer torrentClient.Close()
+	torrentClientPool := s.NewTorrentClientPool(c)
 
 	// Setting TorrentStoreMap
 	torrentStoreMap := s.NewTorrentStoreMap(torrentStore)
@@ -92,7 +87,7 @@ func run(c *cli.Context) error {
 	serve := cs.NewServe(web, probe, pprof, statGRPC)
 
 	// And SERVE!
-	err = serve.Serve()
+	err := serve.Serve()
 
 	if err != nil {
 		log.WithError(err).Error("got server error")
