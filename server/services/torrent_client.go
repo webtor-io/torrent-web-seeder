@@ -83,7 +83,7 @@ func NewTorrentClient(c *cli.Context, port int, h string) (*TorrentClient, error
 func (s *TorrentClient) get() (*torrent.Client, error) {
 	d := s.dataDir + "/" + s.hash
 	_ = os.Mkdir(d, os.ModePerm)
-	log.Infof("initializing TorrentClient dataDir=%v", d)
+	log.Infof("initializing TorrentClient dataDir=%v hash=%v port=%v", d, s.hash, s.port)
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.NoUpload = true
 	// cfg.DisableAggressiveUpload = true
@@ -140,6 +140,7 @@ func (s *TorrentClient) Get() (*torrent.Client, error) {
 
 func (s *TorrentClient) Close() {
 	if s.cl != nil {
+		log.Infof("closing TorrentClient hash=%v port=%v", s.hash, s.port)
 		s.cl.Close()
 	}
 }
