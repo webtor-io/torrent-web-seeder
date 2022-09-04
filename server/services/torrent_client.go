@@ -29,10 +29,12 @@ type TorrentClient struct {
 	proxy         string
 	port          int
 	hash          string
+	ua            string
 }
 
 const (
 	TORRENT_CLIENT_DOWNLOAD_RATE_FLAG = "download-rate"
+	TORRENT_CLIENT_USER_AGENT_FLAG    = "user-agent"
 	HTTP_PROXY_FLAG                   = "http-proxy"
 	COMPLETION_DIR_FLAG               = "completion-dir"
 )
@@ -44,6 +46,12 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Usage:  "download rate",
 			Value:  "",
 			EnvVar: "DOWNLOAD_RATE",
+		},
+		cli.StringFlag{
+			Name:   TORRENT_CLIENT_USER_AGENT_FLAG,
+			Usage:  "user agent",
+			Value:  "",
+			EnvVar: "USER_AGENT",
 		},
 		cli.StringFlag{
 			Name:   HTTP_PROXY_FLAG,
@@ -77,6 +85,7 @@ func NewTorrentClient(c *cli.Context, port int, h string) (*TorrentClient, error
 		proxy:         c.String(HTTP_PROXY_FLAG),
 		port:          port,
 		hash:          h,
+		ua:            c.String(TORRENT_CLIENT_USER_AGENT_FLAG),
 	}, nil
 }
 
@@ -91,9 +100,12 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	// cfg.AcceptPeerConnections = false
 	// cfg.DisableIPv6 = true
 	cfg.Logger = tlog.Default.WithNames("main", "client")
-	// cfg.Debug = true
+	cfg.Debug = true
 	cfg.DefaultStorage = storage.NewMMap(d)
 	cfg.ListenPort = s.port
+	if s.ua != "" {
+		cfg.HTTPUserAgent = s.ua
+	}
 	// cfg.DisableTrackers = true
 	// cfg.DisableWebtorrent = true
 	// cfg.DisableWebseeds = true
