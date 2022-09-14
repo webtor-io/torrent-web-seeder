@@ -1,9 +1,14 @@
 package services
 
 import (
+	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"code.cloudfoundry.org/bytefmt"
@@ -19,24 +24,22 @@ import (
 )
 
 type TorrentClient struct {
-	cl            *torrent.Client
-	mux           sync.Mutex
-	err           error
-	inited        bool
-	rLimit        int64
-	dataDir       string
-	completionDir string
-	proxy         string
-	port          int
-	hash          string
-	ua            string
+	cl      *torrent.Client
+	mux     sync.Mutex
+	err     error
+	inited  bool
+	rLimit  int64
+	dataDir string
+	proxy   string
+	port    int
+	hash    string
+	ua      string
 }
 
 const (
 	TORRENT_CLIENT_DOWNLOAD_RATE_FLAG = "download-rate"
 	TORRENT_CLIENT_USER_AGENT_FLAG    = "user-agent"
 	HTTP_PROXY_FLAG                   = "http-proxy"
-	COMPLETION_DIR_FLAG               = "completion-dir"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -79,18 +82,71 @@ func NewTorrentClient(c *cli.Context, port int, h string) (*TorrentClient, error
 		dr = int64(drp)
 	}
 	return &TorrentClient{
-		rLimit:        dr,
-		dataDir:       c.String(DATA_DIR_FLAG),
-		completionDir: c.String(COMPLETION_DIR_FLAG),
-		proxy:         c.String(HTTP_PROXY_FLAG),
-		port:          port,
-		hash:          h,
-		ua:            c.String(TORRENT_CLIENT_USER_AGENT_FLAG),
+		rLimit:  dr,
+		dataDir: c.String(DATA_DIR_FLAG),
+		proxy:   c.String(HTTP_PROXY_FLAG),
+		port:    port,
+		hash:    h,
+		ua:      c.String(TORRENT_CLIENT_USER_AGENT_FLAG),
 	}, nil
 }
 
+func (s *TorrentClient) distributeByHash(dirs []string, hash string) (string, error) {
+	sort.Strings(dirs)
+	hex := hash[0:5]
+	num64, err := strconv.ParseInt(hex, 16, 64)
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to parse hex from infohash=%v", hash)
+	}
+	num := int(num64 * 1000)
+	total := 1048575 * 1000
+	interval := total / len(dirs)
+	for i := 0; i < len(dirs); i++ {
+		if num < (i+1)*interval {
+			return dirs[i], nil
+		}
+	}
+	return "", errors.Wrapf(err, "failed to distribute infohash=%v", hash)
+}
+
+func (s *TorrentClient) getDir() (string, error) {
+	if strings.HasSuffix(s.dataDir, "*") {
+		prefix := strings.TrimSuffix(s.dataDir, "*")
+		dir, lp := path.Split(prefix)
+		if dir == "" {
+			dir = "."
+		}
+		files, err := ioutil.ReadDir(dir)
+		if err != nil {
+			return "", err
+		}
+		dirs := []string{}
+		for _, f := range files {
+			if f.IsDir() && strings.HasPrefix(f.Name(), lp) {
+				dirs = append(dirs, f.Name())
+			}
+		}
+		if len(dirs) == 0 {
+			return prefix + "/" + s.hash, nil
+		} else if len(dirs) == 1 {
+			return dir + "/" + dirs[0] + "/" + s.hash, nil
+		} else {
+			d, err := s.distributeByHash(dirs, s.hash)
+			if err != nil {
+				return "", err
+			}
+			return dir + "/" + d + "/" + s.hash, nil
+		}
+	} else {
+		return s.dataDir + "/" + s.hash, nil
+	}
+}
+
 func (s *TorrentClient) get() (*torrent.Client, error) {
-	d := s.dataDir + "/" + s.hash
+	d, err := s.getDir()
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get directory name")
+	}
 	_ = os.Mkdir(d, os.ModePerm)
 	log.Infof("initializing TorrentClient dataDir=%v hash=%v port=%v", d, s.hash, s.port)
 	cfg := torrent.NewDefaultClientConfig()
@@ -100,7 +156,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	// cfg.AcceptPeerConnections = false
 	// cfg.DisableIPv6 = true
 	cfg.Logger = tlog.Default.WithNames("main", "client")
-	cfg.Debug = true
+	// cfg.Debug = true
 	cfg.DefaultStorage = storage.NewMMap(d)
 	cfg.ListenPort = s.port
 	if s.ua != "" {

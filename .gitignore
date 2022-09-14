@@ -14,7 +14,7 @@
 
 tmp
 
-server/data
+server/data*
 telepresence.log
 
 server/server
