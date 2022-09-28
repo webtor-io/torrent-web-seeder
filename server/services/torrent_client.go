@@ -1,6 +1,8 @@
 package services
 
 import (
+	"crypto/sha1"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -93,10 +95,10 @@ func NewTorrentClient(c *cli.Context, port int, h string) (*TorrentClient, error
 
 func (s *TorrentClient) distributeByHash(dirs []string, hash string) (string, error) {
 	sort.Strings(dirs)
-	hex := hash[0:5]
+	hex := fmt.Sprintf("%x", sha1.Sum([]byte(hash)))[0:5]
 	num64, err := strconv.ParseInt(hex, 16, 64)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to parse hex from infohash=%v", hash)
+		return "", errors.Wrapf(err, "failed to parse hex from hex=%v infohash=%v", hex, hash)
 	}
 	num := int(num64 * 1000)
 	total := 1048575 * 1000
