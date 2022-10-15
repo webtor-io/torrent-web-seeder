@@ -2,8 +2,11 @@ package services
 
 import (
 	"sort"
+	"sync"
+	"time"
 
 	"github.com/anacrolix/torrent"
+	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
 
@@ -22,29 +25,32 @@ func RegisterTorrentMapFlags(f []cli.Flag) []cli.Flag {
 }
 
 type TorrentMap struct {
-	tcp    *TorrentClientPool
+	tc     *TorrentClient
 	tsm    *TorrentStoreMap
 	fsm    *FileStoreMap
 	tm     *TouchMap
 	magnet string
+	timers map[string]*time.Timer
+	ttl    time.Duration
+	mux    sync.Mutex
 }
 
-func NewTorrentMap(c *cli.Context, tcp *TorrentClientPool, tsm *TorrentStoreMap, fsm *FileStoreMap, tm *TouchMap) *TorrentMap {
+func NewTorrentMap(c *cli.Context, tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap, tm *TouchMap) *TorrentMap {
 	return &TorrentMap{
-		tcp:    tcp,
+		tc:     tc,
 		tsm:    tsm,
 		fsm:    fsm,
 		tm:     tm,
+		timers: map[string]*time.Timer{},
 		magnet: c.String(MAGNET),
+		ttl:    time.Duration(600) * time.Second,
 	}
 }
 
 func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
-	tc, err := s.tcp.Get(h)
-	if err != nil {
-		return nil, err
-	}
-	cl, err := tc.Get()
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	cl, err := s.tc.Get()
 	if err != nil {
 		return nil, err
 	}
@@ -77,9 +83,24 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 			if err != nil {
 				return nil, err
 			}
+			ti, ok := s.timers[h]
+			if ok {
+				ti.Reset(s.ttl)
+			} else {
+				log.Infof("torrent added infohash=%v", h)
+				s.timers[h] = time.NewTimer(s.ttl)
+				go func(h string) {
+					<-s.timers[h].C
+					s.mux.Lock()
+					defer s.mux.Unlock()
+					delete(s.timers, h)
+					log.Infof("torrent dropped infohash=%v", h)
+					t.Drop()
+				}(h)
+			}
+			s.tm.Touch(h)
 		}
 	}
-	s.tm.Touch(h)
 	return t, nil
 }
 
