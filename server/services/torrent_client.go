@@ -113,11 +113,11 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	}
 	// cfg.Logger = torrentlogger.Discard
 	// cfg.DefaultRequestStrategy = torrent.RequestStrategyFuzzing()
-	// cfg.EstablishedConnsPerTorrent = 100
-	// cfg.HalfOpenConnsPerTorrent = 50
-	// cfg.TorrentPeersHighWater = 1000
-	// cfg.TorrentPeersLowWater = 500
-	// cfg.TotalHalfOpenConns = 1000
+	cfg.EstablishedConnsPerTorrent = 100
+	cfg.HalfOpenConnsPerTorrent = 50
+	cfg.TorrentPeersHighWater = 1000
+	cfg.TorrentPeersLowWater = 100
+	cfg.TotalHalfOpenConns = 5000
 	if s.rLimit != -1 {
 		cfg.DownloadRateLimiter = rate.NewLimiter(rate.Limit(s.rLimit), int(s.rLimit))
 	}
