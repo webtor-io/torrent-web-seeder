@@ -13,7 +13,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 
-	"github.com/anacrolix/torrent/mse"
 	"golang.org/x/time/rate"
 )
 
@@ -26,12 +25,14 @@ type TorrentClient struct {
 	dataDir string
 	proxy   string
 	ua      string
+	dUTP    bool
 }
 
 const (
 	TORRENT_CLIENT_DOWNLOAD_RATE_FLAG = "download-rate"
 	TORRENT_CLIENT_USER_AGENT_FLAG    = "user-agent"
 	HTTP_PROXY_FLAG                   = "http-proxy"
+	DISABLE_UTP_FLAG                  = "disable-utp"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -60,6 +61,11 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Value:  os.TempDir(),
 			EnvVar: "DATA_DIR",
 		},
+		cli.BoolFlag{
+			Name:   DISABLE_UTP_FLAG,
+			Usage:  "disables utp",
+			EnvVar: "DISABLE_UTP",
+		},
 	)
 }
 
@@ -78,6 +84,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		dataDir: c.String(DATA_DIR_FLAG),
 		proxy:   c.String(HTTP_PROXY_FLAG),
 		ua:      c.String(TORRENT_CLIENT_USER_AGENT_FLAG),
+		dUTP:    c.Bool(DISABLE_UTP_FLAG),
 	}, nil
 }
 
@@ -95,6 +102,9 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	if s.ua != "" {
 		cfg.HTTPUserAgent = s.ua
 	}
+	if s.dUTP {
+		cfg.DisableUTP = true
+	}
 	// cfg.DisableTrackers = true
 	// cfg.DisableWebtorrent = true
 	// cfg.DisableWebseeds = true
@@ -105,11 +115,11 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	// cfg.CryptoSelector = MyCryptoSelector
 	// cfg.PeriodicallyAnnounceTorrentsToDht = false
 	if s.proxy != "" {
-		url, err := url.Parse(s.proxy)
+		u, err := url.Parse(s.proxy)
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to parse proxy url=%v", s.proxy)
+			return nil, errors.Wrapf(err, "failed to parse proxy u=%v", s.proxy)
 		}
-		cfg.HTTPProxy = http.ProxyURL(url)
+		cfg.HTTPProxy = http.ProxyURL(u)
 	}
 	// cfg.Logger = torrentlogger.Discard
 	// cfg.DefaultRequestStrategy = torrent.RequestStrategyFuzzing()
@@ -144,8 +154,4 @@ func (s *TorrentClient) Close() {
 		log.Infof("closing TorrentClient")
 		s.cl.Close()
 	}
-}
-
-func MyCryptoSelector(provided mse.CryptoMethod) mse.CryptoMethod {
-	return mse.CryptoMethodRC4
 }
