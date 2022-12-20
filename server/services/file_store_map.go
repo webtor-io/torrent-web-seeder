@@ -1,7 +1,6 @@
 package services
 
 import (
-	"io/ioutil"
 	"os"
 	"strings"
 	"sync"
@@ -11,13 +10,13 @@ import (
 )
 
 const (
-	INPUT_FLAG string = "input"
+	InputFlag string = "input"
 )
 
 func RegisterFileStoreFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.StringFlag{
-			Name:   INPUT_FLAG,
+			Name:   InputFlag,
 			Usage:  "torrent file path",
 			EnvVar: "INPUT",
 		},
@@ -33,7 +32,7 @@ type FileStoreMap struct {
 
 func NewFileStoreMap(c *cli.Context) *FileStoreMap {
 	return &FileStoreMap{
-		p: c.String(INPUT_FLAG),
+		p: c.String(InputFlag),
 	}
 }
 
@@ -47,7 +46,7 @@ func (s *FileStoreMap) loadFiles() (map[string]*metainfo.MetaInfo, error) {
 		return nil, err
 	}
 	if fi.IsDir() {
-		fs, err := ioutil.ReadDir(s.p)
+		fs, err := os.ReadDir(s.p)
 		if err != nil {
 			return nil, err
 		}

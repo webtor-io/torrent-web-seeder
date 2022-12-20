@@ -29,40 +29,40 @@ type TorrentClient struct {
 }
 
 const (
-	TORRENT_CLIENT_DOWNLOAD_RATE_FLAG = "download-rate"
-	TORRENT_CLIENT_USER_AGENT_FLAG    = "user-agent"
-	HTTP_PROXY_FLAG                   = "http-proxy"
-	DISABLE_UTP_FLAG                  = "disable-utp"
+	TorrentClientDownloadRateFlag = "download-rate"
+	TorrentClientUserAgentFlag    = "user-agent"
+	HttpProxyFlag                 = "http-proxy"
+	DisableUtpFlag                = "disable-utp"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.StringFlag{
-			Name:   TORRENT_CLIENT_DOWNLOAD_RATE_FLAG,
+			Name:   TorrentClientDownloadRateFlag,
 			Usage:  "download rate",
 			Value:  "",
 			EnvVar: "DOWNLOAD_RATE",
 		},
 		cli.StringFlag{
-			Name:   TORRENT_CLIENT_USER_AGENT_FLAG,
+			Name:   TorrentClientUserAgentFlag,
 			Usage:  "user agent",
 			Value:  "",
 			EnvVar: "USER_AGENT",
 		},
 		cli.StringFlag{
-			Name:   HTTP_PROXY_FLAG,
+			Name:   HttpProxyFlag,
 			Usage:  "http proxy",
 			Value:  "",
 			EnvVar: "HTTP_PROXY",
 		},
 		cli.StringFlag{
-			Name:   DATA_DIR_FLAG,
+			Name:   DataDirFlag,
 			Usage:  "data dir",
 			Value:  os.TempDir(),
 			EnvVar: "DATA_DIR",
 		},
 		cli.BoolFlag{
-			Name:   DISABLE_UTP_FLAG,
+			Name:   DisableUtpFlag,
 			Usage:  "disables utp",
 			EnvVar: "DISABLE_UTP",
 		},
@@ -71,8 +71,8 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 
 func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 	dr := int64(-1)
-	if c.String(TORRENT_CLIENT_DOWNLOAD_RATE_FLAG) != "" {
-		drp, err := bytefmt.ToBytes(c.String(TORRENT_CLIENT_DOWNLOAD_RATE_FLAG))
+	if c.String(TorrentClientDownloadRateFlag) != "" {
+		drp, err := bytefmt.ToBytes(c.String(TorrentClientDownloadRateFlag))
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to parse download rate flag")
 
@@ -81,10 +81,10 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 	}
 	return &TorrentClient{
 		rLimit:  dr,
-		dataDir: c.String(DATA_DIR_FLAG),
-		proxy:   c.String(HTTP_PROXY_FLAG),
-		ua:      c.String(TORRENT_CLIENT_USER_AGENT_FLAG),
-		dUTP:    c.Bool(DISABLE_UTP_FLAG),
+		dataDir: c.String(DataDirFlag),
+		proxy:   c.String(HttpProxyFlag),
+		ua:      c.String(TorrentClientUserAgentFlag),
+		dUTP:    c.Bool(DisableUtpFlag),
 	}, nil
 }
 

@@ -8,8 +8,9 @@ import (
 
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	ts "github.com/webtor-io/torrent-store/torrent-store"
+	ts "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type TorrentStore struct {
@@ -23,20 +24,20 @@ type TorrentStore struct {
 }
 
 const (
-	TORRENT_STORE_HOST_FLAG = "torrent-store-host"
-	TORRENT_STORE_PORT_FLAG = "torrent-store-port"
+	TorrentStoreHostFlag = "torrent-store-host"
+	TorrentStorePortFlag = "torrent-store-port"
 )
 
 func RegisterTorrentStoreFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.StringFlag{
-			Name:   TORRENT_STORE_HOST_FLAG,
+			Name:   TorrentStoreHostFlag,
 			Usage:  "torrent store host",
 			Value:  "",
 			EnvVar: "TORRENT_STORE_SERVICE_HOST, TORRENT_STORE_HOST",
 		},
 		cli.IntFlag{
-			Name:   TORRENT_STORE_PORT_FLAG,
+			Name:   TorrentStorePortFlag,
 			Usage:  "torrent store port",
 			Value:  50051,
 			EnvVar: "TORRENT_STORE_SERVICE_PORT, TORRENT_STORE_PORT",
@@ -46,15 +47,15 @@ func RegisterTorrentStoreFlags(f []cli.Flag) []cli.Flag {
 
 func NewTorrentStore(c *cli.Context) *TorrentStore {
 	return &TorrentStore{
-		host: c.String(TORRENT_STORE_HOST_FLAG),
-		port: c.Int(TORRENT_STORE_PORT_FLAG),
+		host: c.String(TorrentStoreHostFlag),
+		port: c.Int(TorrentStorePortFlag),
 	}
 }
 
 func (s *TorrentStore) get() (ts.TorrentStoreClient, error) {
 	log.Info("initializing TorrentStoreClient")
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
-	conn, err := grpc.Dial(addr, grpc.WithInsecure())
+	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	s.conn = conn
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to dial torrent store addr=%v", addr)
@@ -75,6 +76,6 @@ func (s *TorrentStore) Get() (ts.TorrentStoreClient, error) {
 
 func (s *TorrentStore) Close() {
 	if s.conn != nil {
-		s.conn.Close()
+		_ = s.conn.Close()
 	}
 }

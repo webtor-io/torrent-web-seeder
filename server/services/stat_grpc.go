@@ -27,19 +27,19 @@ type StatGRPC struct {
 }
 
 const (
-	STAT_HOST_FLAG = "stat-host"
-	STAT_PORT_FLAG = "stat-port"
+	StatHostFlag = "stat-host"
+	StatPortFlag = "stat-port"
 )
 
 func RegisterStatFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.StringFlag{
-			Name:  STAT_HOST_FLAG,
+			Name:  StatHostFlag,
 			Usage: "stat listening host",
 			Value: "",
 		},
 		cli.IntFlag{
-			Name:  STAT_PORT_FLAG,
+			Name:  StatPortFlag,
 			Usage: "stat listening port",
 			Value: 50051,
 		},
@@ -49,8 +49,8 @@ func RegisterStatFlags(f []cli.Flag) []cli.Flag {
 func NewStatGRPC(c *cli.Context, st *Stat) *StatGRPC {
 	return &StatGRPC{
 		st:   st,
-		host: c.String(STAT_HOST_FLAG),
-		port: c.Int(STAT_PORT_FLAG),
+		host: c.String(StatHostFlag),
+		port: c.Int(StatPortFlag),
 	}
 }
 
@@ -71,7 +71,7 @@ func (ss *StatGRPC) Serve() error {
 
 func (ss *StatGRPC) Close() {
 	if ss.l != nil {
-		ss.l.Close()
+		_ = ss.l.Close()
 	}
 }
 

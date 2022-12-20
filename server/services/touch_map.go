@@ -15,7 +15,7 @@ type TouchMap struct {
 
 func NewTouchMap(c *cli.Context) *TouchMap {
 	return &TouchMap{
-		p: c.String(DATA_DIR_FLAG),
+		p: c.String(DataDirFlag),
 		LazyMap: lazymap.New(&lazymap.Config{
 			Expire: 30 * time.Second,
 		}),
@@ -30,7 +30,9 @@ func (s *TouchMap) touch(h string) error {
 		if err != nil {
 			return err
 		}
-		defer file.Close()
+		defer func(file *os.File) {
+			_ = file.Close()
+		}(file)
 	} else {
 		currentTime := time.Now().Local()
 		err = os.Chtimes(f, currentTime, currentTime)

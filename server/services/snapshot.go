@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"strconv"
 	"sync"
 	"time"
@@ -77,73 +76,75 @@ func (cp CompletedPieces) ToBytes() []byte {
 }
 
 const (
-	AWS_BUCKET                             = "aws-bucket"
-	AWS_BUCKET_SPREAD                      = "aws-bucket-spread"
-	AWS_CONCURRENCY                        = "aws-concurrency"
-	AWS_STAT_WRITE_DELAY                   = "aws-stat-write-delay"
-	USE_SNAPSHOT                           = "use-snapshot"
-	SNAPSHOT_START_THRESHOLD               = "snapshot-start-threshold"
-	SNAPSHOT_DOWNLOAD_RATIO                = "snapshot-download-ratio"
-	SNAPSHOT_WRITE_TIMEOUT                 = "snapshot-write-timeout"
-	SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD = "snapshot-start-full-download-threshold"
-	SNAPSHOT_TORRENT_SIZE_LIMIT            = "snapshot-torrent-size-limit"
-	DOWNLOADED_SIZE                        = "downloaded_size"
-	TOUCH                                  = "touch"
-	COMPLETED_PIECES                       = "completed_pieces"
+	AWSBucketFlag                          = "aws-bucket"
+	AWSBucketSpreadFlag                    = "aws-bucket-spread"
+	AWSConcurrency                         = "aws-concurrency"
+	AWSStatWriteDelayFlag                  = "aws-stat-write-delay"
+	UseSnapshotFlag                        = "use-snapshot"
+	SnapshotStartThresholdFlag             = "snapshot-start-threshold"
+	SnapshotDownloadRatioFlag              = "snapshot-download-ratio"
+	SnapshotWriteTimeoutFlag               = "snapshot-write-timeout"
+	SnapshotStartFullDownloadThresholdFlag = "snapshot-start-full-download-threshold"
+	SnapshotTorrentSizeLimitFlag           = "snapshot-torrent-size-limit"
+)
+const (
+	DownloadedSizePath  = "downloaded_size"
+	TouchPath           = "touch"
+	CompletedPiecesPath = "completed_pieces"
 )
 
 func RegisterSnapshotFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.BoolFlag{
-			Name:   USE_SNAPSHOT,
-			EnvVar: "USE_SNAPSHOT",
+			Name:   UseSnapshotFlag,
+			EnvVar: "UseSnapshotFlag",
 		},
 		cli.Float64Flag{
-			Name:   SNAPSHOT_START_THRESHOLD,
+			Name:   SnapshotStartThresholdFlag,
 			Value:  0.5,
-			EnvVar: "SNAPSHOT_START_THRESHOLD",
+			EnvVar: "SnapshotStartThresholdFlag",
 		},
 		cli.Float64Flag{
-			Name:   SNAPSHOT_DOWNLOAD_RATIO,
+			Name:   SnapshotDownloadRatioFlag,
 			Value:  2.0,
-			EnvVar: "SNAPSHOT_DOWNLOAD_RATIO",
+			EnvVar: "SnapshotDownloadRatioFlag",
 		},
 		cli.Float64Flag{
-			Name:   SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD,
+			Name:   SnapshotStartFullDownloadThresholdFlag,
 			Value:  0.75,
-			EnvVar: "SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD",
+			EnvVar: "SnapshotStartFullDownloadThresholdFlag",
 		},
 		cli.Int64Flag{
-			Name:   SNAPSHOT_TORRENT_SIZE_LIMIT,
+			Name:   SnapshotTorrentSizeLimitFlag,
 			Value:  10,
-			EnvVar: "SNAPSHOT_TORRENT_SIZE_LIMIT",
+			EnvVar: "SnapshotTorrentSizeLimitFlag",
+		},
+		cli.IntFlag{
+			Name:   SnapshotWriteTimeoutFlag,
+			Value:  600,
+			EnvVar: "SnapshotWriteTimeoutFlag",
 		},
 		cli.BoolFlag{
-			Name:   AWS_BUCKET_SPREAD,
-			EnvVar: "AWS_BUCKET_SPREAD",
+			Name:   AWSBucketSpreadFlag,
+			EnvVar: "AWSBucketSpreadFlag",
 		},
 		cli.IntFlag{
-			Name:   AWS_CONCURRENCY,
+			Name:   AWSConcurrency,
 			Usage:  "AWS Concurrency",
 			Value:  5,
-			EnvVar: "AWS_CONCURRENCY",
+			EnvVar: "AWSConcurrency",
 		},
 		cli.IntFlag{
-			Name:   AWS_STAT_WRITE_DELAY,
+			Name:   AWSStatWriteDelayFlag,
 			Usage:  "AWS Stat Write Delay (Sec)",
 			Value:  60,
-			EnvVar: "AWS_STAT_WRITE_DELAY",
-		},
-		cli.IntFlag{
-			Name:   SNAPSHOT_WRITE_TIMEOUT,
-			Value:  600,
-			EnvVar: "SNAPSHOT_WRITE_TIMEOUT",
+			EnvVar: "AWSStatWriteDelayFlag",
 		},
 		cli.StringFlag{
-			Name:   AWS_BUCKET,
+			Name:   AWSBucketFlag,
 			Usage:  "AWS Bucket",
 			Value:  "",
-			EnvVar: "AWS_BUCKET",
+			EnvVar: "AWSBucketFlag",
 		},
 	)
 }
@@ -156,36 +157,36 @@ func split(buf []byte, lim int) [][]byte {
 		chunks = append(chunks, chunk)
 	}
 	if len(buf) > 0 {
-		chunks = append(chunks, buf[:len(buf)])
+		chunks = append(chunks, buf[:])
 	}
 	return chunks
 }
 
 func NewSnapshot(c *cli.Context, t *torrent.Torrent, s3 *cs.S3Client, l *log.Entry) (*Snapshot, error) {
-	if !c.Bool(USE_SNAPSHOT) {
+	if !c.Bool(UseSnapshotFlag) {
 		return nil, nil
 	}
-	if c.String(AWS_BUCKET) == "" {
+	if c.String(AWSBucketFlag) == "" {
 		return nil, errors.Errorf("AWS Bucket can't be empty")
 	}
 	return &Snapshot{
-		awsBucket:                  c.String(AWS_BUCKET),
-		awsBucketSpread:            c.Bool(AWS_BUCKET_SPREAD),
-		awsConcurrency:             c.Int(AWS_CONCURRENCY),
-		awsStatWriteDelay:          time.Duration(c.Int(AWS_STAT_WRITE_DELAY)) * time.Second,
-		writeTimeout:               time.Duration(c.Int(SNAPSHOT_WRITE_TIMEOUT)) * time.Second,
-		startThreshold:             c.Float64(SNAPSHOT_START_THRESHOLD),
-		startFullDownloadThreshold: c.Float64(SNAPSHOT_START_FULL_DOWNLOAD_THRESHOLD),
-		torrentSizeLimit:           c.Int64(SNAPSHOT_TORRENT_SIZE_LIMIT),
-		downloadRatio:              c.Float64(SNAPSHOT_DOWNLOAD_RATIO),
+		awsBucket:                  c.String(AWSBucketFlag),
+		awsBucketSpread:            c.Bool(AWSBucketSpreadFlag),
+		awsConcurrency:             c.Int(AWSConcurrency),
+		awsStatWriteDelay:          time.Duration(c.Int(AWSStatWriteDelayFlag)) * time.Second,
+		writeTimeout:               time.Duration(c.Int(SnapshotWriteTimeoutFlag)) * time.Second,
+		startThreshold:             c.Float64(SnapshotStartThresholdFlag),
+		startFullDownloadThreshold: c.Float64(SnapshotStartFullDownloadThresholdFlag),
+		torrentSizeLimit:           c.Int64(SnapshotTorrentSizeLimitFlag),
+		downloadRatio:              c.Float64(SnapshotDownloadRatioFlag),
 		t:                          t,
 		s3:                         s3,
-		l:                          l.WithField("bucket", c.String(AWS_BUCKET)),
+		l:                          l.WithField("bucket", c.String(AWSBucketFlag)),
 	}, nil
 }
 
 func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*CompletedPieces, error) {
-	key := COMPLETED_PIECES + "/" + t.InfoHash().HexString()
+	key := CompletedPiecesPath + "/" + t.InfoHash().HexString()
 	l := s.l.WithField("key", key)
 	st := CompletedPieces{}
 	r, err := cl.GetObject(&s3.GetObjectInput{
@@ -198,8 +199,10 @@ func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*Complet
 		}
 		return nil, errors.Wrapf(err, "failed to fetch completed pieces bucket=%v key=%v", s.awsBucket, key)
 	}
-	defer r.Body.Close()
-	data, err := ioutil.ReadAll(r.Body)
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(r.Body)
+	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +212,7 @@ func (s *Snapshot) fetchCompletedPieces(cl *s3.S3, t *torrent.Torrent) (*Complet
 }
 
 func (s *Snapshot) fetchDownloadedSize(cl *s3.S3, t *torrent.Torrent) (int64, error) {
-	key := DOWNLOADED_SIZE + "/" + t.InfoHash().HexString()
+	key := DownloadedSizePath + "/" + t.InfoHash().HexString()
 	l := s.l.WithField("key", key)
 	r, err := cl.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.awsBucket),
@@ -221,8 +224,10 @@ func (s *Snapshot) fetchDownloadedSize(cl *s3.S3, t *torrent.Torrent) (int64, er
 		}
 		return 0, errors.Wrapf(err, "failed to fetch downloaded size bucket=%v key=%v", s.awsBucket, key)
 	}
-	defer r.Body.Close()
-	data, err := ioutil.ReadAll(r.Body)
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(r.Body)
+	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		return 0, err
 	}
@@ -235,7 +240,7 @@ func (s *Snapshot) fetchDownloadedSize(cl *s3.S3, t *torrent.Torrent) (int64, er
 }
 
 func (s *Snapshot) storeDownloadedSize(cl *s3.S3, t *torrent.Torrent, i int64) error {
-	key := DOWNLOADED_SIZE + "/" + t.InfoHash().HexString()
+	key := DownloadedSizePath + "/" + t.InfoHash().HexString()
 	l := s.l.WithField("key", key)
 	l.Infof("store downloaded size size=%v", i)
 	b := []byte(strconv.Itoa(int(i)))
@@ -253,7 +258,7 @@ func (s *Snapshot) storeDownloadedSize(cl *s3.S3, t *torrent.Torrent, i int64) e
 
 func (s *Snapshot) touch(cl *s3.S3, t *torrent.Torrent) error {
 	timestamp := fmt.Sprintf("%v", time.Now().Unix())
-	key := TOUCH + "/" + t.InfoHash().HexString()
+	key := TouchPath + "/" + t.InfoHash().HexString()
 	l := s.l.WithField("key", key)
 	l.Infof("touch torrent timestamp=%v", timestamp)
 	b := []byte(timestamp)
@@ -290,7 +295,7 @@ func (s *Snapshot) storeCompletedPieces(cl *s3.S3, t *torrent.Torrent, st *Compl
 	if st.Len() == 0 {
 		return nil
 	}
-	key := COMPLETED_PIECES + "/" + t.InfoHash().HexString()
+	key := CompletedPiecesPath + "/" + t.InfoHash().HexString()
 	l := s.l.WithField("key", key)
 	l.Infof("store completed pieces len=%v", st.Len())
 	b := st.ToBytes()
@@ -347,7 +352,9 @@ func (s *Snapshot) Add(i int64) {
 	s.counter += i
 	if !s.started {
 		s.started = true
-		go s.start()
+		go func() {
+			_ = s.start()
+		}()
 	}
 }
 

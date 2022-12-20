@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	BUCKET_TTL = 30 * 60
+	BucketTTL = 30 * 60
 )
 
 type BucketPool struct {
@@ -22,7 +22,7 @@ type BucketPool struct {
 }
 
 func NewBucketPool() *BucketPool {
-	return &BucketPool{expire: time.Duration(BUCKET_TTL) * time.Second}
+	return &BucketPool{expire: time.Duration(BucketTTL) * time.Second}
 }
 
 func (s *BucketPool) Get(sessionID string, rate string) (*ratelimit.Bucket, error) {

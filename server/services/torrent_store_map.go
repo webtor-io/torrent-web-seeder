@@ -9,7 +9,7 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/webtor-io/lazymap"
-	ts "github.com/webtor-io/torrent-store/torrent-store"
+	ts "github.com/webtor-io/torrent-store/proto"
 )
 
 type TorrentStoreMap struct {

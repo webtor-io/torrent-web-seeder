@@ -15,6 +15,7 @@ func configure(app *cli.App) {
 	app.Flags = cs.RegisterProbeFlags([]cli.Flag{})
 	app.Flags = cs.RegisterS3ClientFlags(app.Flags)
 	app.Flags = cs.RegisterPprofFlags(app.Flags)
+	app.Flags = cs.RegisterPromFlags(app.Flags)
 	app.Flags = s.RegisterWebFlags(app.Flags)
 	app.Flags = s.RegisterTorrentClientFlags(app.Flags)
 	app.Flags = s.RegisterTorrentStoreFlags(app.Flags)
@@ -47,7 +48,7 @@ func run(c *cli.Context) error {
 	touchMap := s.NewTouchMap(c)
 
 	// Setting TorrentMap
-	torrentMap := s.NewTorrentMap(c, torrentClient, torrentStoreMap, fileStoreMap, touchMap)
+	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap, touchMap)
 
 	// Setting conter
 	// counter := s.NewCounter()
@@ -83,12 +84,16 @@ func run(c *cli.Context) error {
 	probe := cs.NewProbe(c)
 	defer probe.Close()
 
+	// Setting Prom
+	prom := cs.NewProm(c)
+	defer prom.Close()
+
 	// Setting Pprof
 	pprof := cs.NewPprof(c)
 	defer pprof.Close()
 
 	// Setting Serve
-	serve := cs.NewServe(web, probe, pprof, statGRPC)
+	serve := cs.NewServe(web, probe, prom, pprof, statGRPC)
 
 	// And SERVE!
 	err = serve.Serve()

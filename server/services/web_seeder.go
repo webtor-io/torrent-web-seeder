@@ -20,10 +20,10 @@ import (
 var sha1R = regexp.MustCompile("^[0-9a-f]{5,40}$")
 
 const (
-	PIECE_PATH          = "piece/"
-	SOURCE_TORRENT_PATH = "source.torrent"
-	MAX_READAHEAD       = 250 * 1024 * 1024
-	MIN_READAHEAD       = 1024 * 1024
+	PiecePath         = "piece/"
+	SourceTorrentPath = "source.torrent"
+	MaxReadahead      = 250 * 1024 * 1024
+	MinReadahead      = 1024 * 1024
 )
 
 type WebSeeder struct {
@@ -42,7 +42,7 @@ func NewWebSeeder(tm *TorrentMap, st *StatWeb, bp *BucketPool, sm *SnapshotMap) 
 	}
 }
 
-func (s *WebSeeder) renderTorrent(w http.ResponseWriter, r *http.Request, h string) {
+func (s *WebSeeder) renderTorrent(w http.ResponseWriter, h string) {
 	log.Info("serve torrent")
 
 	t, err := s.tm.Get(h)
@@ -75,7 +75,9 @@ func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, h st
 		p := t.Piece(i)
 		if p.Info().Hash().HexString() == ph {
 			pr := NewPieceReader(t.NewReader(), p)
-			defer pr.Close()
+			defer func(pr *PieceReader) {
+				_ = pr.Close()
+			}(pr)
 			http.ServeContent(w, r, "", time.Unix(0, 0), pr)
 		}
 	}
@@ -100,7 +102,7 @@ func (s *WebSeeder) renderPieceIndex(w http.ResponseWriter, r *http.Request, h s
 		return
 	}
 
-	s.addH(fmt.Sprintf("%s - pieces", t.InfoHash().HexString()), w, r)
+	s.addH(fmt.Sprintf("%s - pieces", t.InfoHash().HexString()), w)
 	s.addA("../", w, r)
 	for i := 0; i < t.NumPieces(); i++ {
 		p := t.Piece(i)
@@ -118,10 +120,10 @@ func (s *WebSeeder) addA(path string, w http.ResponseWriter, r *http.Request) {
 	}
 	href := uHref.String()
 	name := uName.String()
-	fmt.Fprintln(w, fmt.Sprintf("<a href=\"%s\">%s</a><br />", href, name))
+	_, _ = fmt.Fprintln(w, fmt.Sprintf("<a href=\"%s\">%s</a><br />", href, name))
 }
-func (s *WebSeeder) addH(h string, w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, fmt.Sprintf("<h1>%s</h1>", h))
+func (s *WebSeeder) addH(h string, w http.ResponseWriter) {
+	_, _ = fmt.Fprintln(w, fmt.Sprintf("<h1>%s</h1>", h))
 }
 
 func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h string) {
@@ -133,10 +135,10 @@ func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
-	s.addH(h, w, r)
+	s.addH(h, w)
 	s.addA("..", w, r)
-	s.addA(PIECE_PATH, w, r)
-	s.addA(SOURCE_TORRENT_PATH, w, r)
+	s.addA(PiecePath, w, r)
+	s.addA(SourceTorrentPath, w, r)
 	for _, f := range t.Files() {
 		s.addA(f.Path(), w, r)
 	}
@@ -147,17 +149,17 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		s.serveStats(w, r, h, p)
 		return
 	}
-	log := log.WithField("hash", h)
-	log = log.WithField("path", r.URL.Path)
-	log = log.WithField("method", r.Method)
-	log = log.WithField("remoteAddr", r.RemoteAddr)
+	logWIthField := log.WithField("hash", h)
+	logWIthField = logWIthField.WithField("path", r.URL.Path)
+	logWIthField = logWIthField.WithField("method", r.Method)
+	logWIthField = logWIthField.WithField("remoteAddr", r.RemoteAddr)
 	found := false
 	download := true
 	keys, ok := r.URL.Query()["download"]
 	if !ok || len(keys[0]) < 1 {
 		download = false
 	}
-	log = log.WithField("download", download)
+	logWIthField = logWIthField.WithField("download", download)
 
 	t, err := s.tm.Get(h)
 
@@ -167,7 +169,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	}
 	for _, f := range t.Files() {
 		if f.Path() == p {
-			log.WithField("range", r.Header.Get("Range")).Info("serve file")
+			logWIthField.WithField("range", r.Header.Get("Range")).Info("serve file")
 			if download {
 				w.Header().Add("Content-Type", "application/octet-stream")
 				w.Header().Add("Content-Disposition", "attachment; filename=\""+filepath.Base(p)+"\"")
@@ -181,22 +183,22 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 			// torReader.SetResponsive()
 			torReader.SetReadaheadFunc(func(r torrent.ReadaheadContext) int64 {
 				p := f.Length() / 100
-				if p < MIN_READAHEAD {
-					p = MIN_READAHEAD
+				if p < MinReadahead {
+					p = MinReadahead
 				}
 				ra := (r.CurrentPos - r.ContiguousReadStartPos) * 2
 				if ra < p {
 					return p
 				}
-				if ra > MAX_READAHEAD {
-					return MAX_READAHEAD
+				if ra > MaxReadahead {
+					return MaxReadahead
 				}
 				return ra
 			})
 			// if r.Header.Get("X-Download-Rate") != "" && r.Header.Get("X-Session-ID") != "" {
 			// 	b, err := s.bp.Get(r.Header.Get("X-Session-ID"), r.Header.Get("X-Download-Rate"))
 			// 	if err != nil {
-			// 		log.WithError(err).Error("failed to get bucket")
+			// 		logWIthField.WithError(err).Error("failed to get bucket")
 			// 		http.Error(w, "failed to get bucket", http.StatusInternalServerError)
 			// 		return
 			// 	}
@@ -216,7 +218,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		}
 	}
 	if !found {
-		log.Info("file not found")
+		logWIthField.Info("file not found")
 
 		http.NotFound(w, r)
 	}
@@ -251,7 +253,7 @@ func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.addH("Index", w, r)
+	s.addH("Index", w)
 	for _, v := range l {
 		s.addA(v+"/", w, r)
 	}
@@ -265,10 +267,10 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p = strings.TrimPrefix(p, s.getHash(r)+"/")
 		if p == "" {
 			s.renderTorrentIndex(w, r, s.getHash(r))
-		} else if p == SOURCE_TORRENT_PATH {
-			s.renderTorrent(w, r, s.getHash(r))
-		} else if strings.HasPrefix(p, PIECE_PATH) {
-			tp := strings.TrimPrefix(p, PIECE_PATH)
+		} else if p == SourceTorrentPath {
+			s.renderTorrent(w, s.getHash(r))
+		} else if strings.HasPrefix(p, PiecePath) {
+			tp := strings.TrimPrefix(p, PiecePath)
 			s.renderPiece(w, r, s.getHash(r), tp)
 		} else {
 			s.serveFile(w, r, s.getHash(r), p)
