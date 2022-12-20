@@ -11,19 +11,19 @@ import (
 )
 
 const (
-	WEB_HOST_FLAG = "host"
-	WEB_PORT_FLAG = "port"
+	WebHostFlag = "host"
+	WebPortFlag = "port"
 )
 
 func RegisterWebFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.StringFlag{
-			Name:  WEB_HOST_FLAG,
+			Name:  WebHostFlag,
 			Usage: "listening host",
 			Value: "",
 		},
 		cli.IntFlag{
-			Name:  WEB_PORT_FLAG,
+			Name:  WebPortFlag,
 			Usage: "http listening port",
 			Value: 8080,
 		},
@@ -39,8 +39,8 @@ type Web struct {
 
 func NewWeb(c *cli.Context, ws *WebSeeder) *Web {
 	return &Web{
-		host: c.String(WEB_HOST_FLAG),
-		port: c.Int(WEB_PORT_FLAG),
+		host: c.String(WebHostFlag),
+		port: c.Int(WebPortFlag),
 		ws:   ws,
 	}
 }
@@ -66,6 +66,6 @@ func (s *Web) Serve() error {
 
 func (s *Web) Close() {
 	if s.ln != nil {
-		s.ln.Close()
+		_ = s.ln.Close()
 	}
 }

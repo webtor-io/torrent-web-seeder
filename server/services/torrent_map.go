@@ -1,49 +1,60 @@
 package services
 
 import (
+	"github.com/prometheus/client_golang/prometheus"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/anacrolix/torrent"
 	log "github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
 )
 
-const (
-	MAGNET = "magnet"
+//const (
+//	MagnetFlag = "magnet"
+//)
+
+//func RegisterTorrentMapFlags(f []cli.Flag) []cli.Flag {
+//	return append(f,
+//		cli.StringFlag{
+//			Name:   MagnetFlag,
+//			Usage:  "magnet",
+//			EnvVar: "MagnetFlag",
+//		},
+//	)
+//}
+
+var (
+	promActiveTorrentCount = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "torrent_web_seeder_active_torrents_count",
+		Help: "Web Seeder active torrents count",
+	})
 )
 
-func RegisterTorrentMapFlags(f []cli.Flag) []cli.Flag {
-	return append(f,
-		cli.StringFlag{
-			Name:   MAGNET,
-			Usage:  "magnet",
-			EnvVar: "MAGNET",
-		},
-	)
+func init() {
+	prometheus.MustRegister(promActiveTorrentCount)
 }
 
 type TorrentMap struct {
-	tc     *TorrentClient
-	tsm    *TorrentStoreMap
-	fsm    *FileStoreMap
-	tm     *TouchMap
-	magnet string
+	tc  *TorrentClient
+	tsm *TorrentStoreMap
+	fsm *FileStoreMap
+	tm  *TouchMap
+	//magnet string
 	timers map[string]*time.Timer
 	ttl    time.Duration
 	mux    sync.Mutex
 }
 
-func NewTorrentMap(c *cli.Context, tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap, tm *TouchMap) *TorrentMap {
+func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap, tm *TouchMap) *TorrentMap {
 	return &TorrentMap{
 		tc:     tc,
 		tsm:    tsm,
 		fsm:    fsm,
 		tm:     tm,
 		timers: map[string]*time.Timer{},
-		magnet: c.String(MAGNET),
-		ttl:    time.Duration(600) * time.Second,
+		//magnet: c.String(MagnetFlag),
+		ttl: time.Duration(600) * time.Second,
 	}
 }
 
@@ -83,6 +94,7 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 			if err != nil {
 				return nil, err
 			}
+			promActiveTorrentCount.Inc()
 			ti, ok := s.timers[h]
 			if ok {
 				ti.Reset(s.ttl)
@@ -96,9 +108,10 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 					delete(s.timers, h)
 					log.Infof("torrent dropped infohash=%v", h)
 					t.Drop()
+					promActiveTorrentCount.Dec()
 				}(h)
 			}
-			s.tm.Touch(h)
+			_ = s.tm.Touch(h)
 		}
 	}
 	return t, nil
