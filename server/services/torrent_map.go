@@ -94,6 +94,7 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 			if err != nil {
 				return nil, err
 			}
+			promActiveTorrentCount.Inc()
 			ti, ok := s.timers[h]
 			if ok {
 				ti.Reset(s.ttl)
