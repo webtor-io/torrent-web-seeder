@@ -100,16 +100,17 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 			} else {
 				log.Infof("torrent added infohash=%v", h)
 				promActiveTorrentCount.Inc()
-				s.timers[h] = time.NewTimer(s.ttl)
-				go func(h string) {
-					<-s.timers[h].C
+				ti := time.NewTimer(s.ttl)
+				s.timers[h] = ti
+				go func(h string, ti *time.Timer) {
+					<-ti.C
 					s.mux.Lock()
 					defer s.mux.Unlock()
 					delete(s.timers, h)
 					log.Infof("torrent dropped infohash=%v", h)
 					t.Drop()
 					promActiveTorrentCount.Dec()
-				}(h)
+				}(h, ti)
 			}
 			_ = s.tm.Touch(h)
 		}
