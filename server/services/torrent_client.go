@@ -17,15 +17,16 @@ import (
 )
 
 type TorrentClient struct {
-	cl      *torrent.Client
-	mux     sync.Mutex
-	err     error
-	inited  bool
-	rLimit  int64
-	dataDir string
-	proxy   string
-	ua      string
-	dUTP    bool
+	cl          *torrent.Client
+	mux         sync.Mutex
+	err         error
+	inited      bool
+	rLimit      int64
+	dataDir     string
+	proxy       string
+	ua          string
+	dUTP        bool
+	dWebTorrent bool
 }
 
 const (
@@ -33,6 +34,7 @@ const (
 	TorrentClientUserAgentFlag    = "user-agent"
 	HttpProxyFlag                 = "http-proxy"
 	DisableUtpFlag                = "disable-utp"
+	DisableWebTorrentFlag         = "disable-webtorrent"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -66,6 +68,11 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Usage:  "disables utp",
 			EnvVar: "DISABLE_UTP",
 		},
+		cli.BoolFlag{
+			Name:   DisableWebTorrentFlag,
+			Usage:  "disables WebTorrent",
+			EnvVar: "DISABLE_WEBTORRENT",
+		},
 	)
 }
 
@@ -80,11 +87,12 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		dr = int64(drp)
 	}
 	return &TorrentClient{
-		rLimit:  dr,
-		dataDir: c.String(DataDirFlag),
-		proxy:   c.String(HttpProxyFlag),
-		ua:      c.String(TorrentClientUserAgentFlag),
-		dUTP:    c.Bool(DisableUtpFlag),
+		rLimit:      dr,
+		dataDir:     c.String(DataDirFlag),
+		proxy:       c.String(HttpProxyFlag),
+		ua:          c.String(TorrentClientUserAgentFlag),
+		dUTP:        c.Bool(DisableUtpFlag),
+		dWebTorrent: c.Bool(DisableWebTorrentFlag),
 	}, nil
 }
 
@@ -104,6 +112,9 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	}
 	if s.dUTP {
 		cfg.DisableUTP = true
+	}
+	if s.dWebTorrent {
+		cfg.DisableWebtorrent = true
 	}
 	// cfg.DisableTrackers = true
 	// cfg.DisableWebtorrent = true

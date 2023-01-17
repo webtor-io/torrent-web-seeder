@@ -27,7 +27,7 @@ func NewStat(tm *TorrentMap) *Stat {
 	}
 }
 
-func fileBytesCompleted(t *torrent.Torrent, f *torrent.File) int64 {
+func fileBytesCompleted(f *torrent.File) int64 {
 	var res int64
 	for _, p := range f.State() {
 		if p.Complete {
@@ -39,11 +39,11 @@ func fileBytesCompleted(t *torrent.Torrent, f *torrent.File) int64 {
 
 func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 	completed := t.BytesCompleted()
-	status := pb.StatReply_SEEDING
+	rStatus := pb.StatReply_SEEDING
 	if completed == 0 {
-		status = pb.StatReply_WAITING_FOR_PEERS
+		rStatus = pb.StatReply_WAITING_FOR_PEERS
 	}
-	pieces := []*pb.Piece{}
+	var pieces []*pb.Piece
 	for i := 0; i < t.NumPieces(); i++ {
 		p := t.Piece(i)
 		ps := p.State()
@@ -63,7 +63,7 @@ func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 		Completed: completed,
 		Total:     t.Info().TotalLength(),
 		Peers:     int32(peers),
-		Status:    status,
+		Status:    rStatus,
 		Seeders:   int32(seeders),
 		Leechers:  int32(leechers),
 		Pieces:    pieces,
@@ -71,12 +71,12 @@ func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 }
 
 func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, error) {
-	completed := fileBytesCompleted(t, f)
-	status := pb.StatReply_SEEDING
+	completed := fileBytesCompleted(f)
+	rStatus := pb.StatReply_SEEDING
 	if completed == 0 {
-		status = pb.StatReply_WAITING_FOR_PEERS
+		rStatus = pb.StatReply_WAITING_FOR_PEERS
 	}
-	pieces := []*pb.Piece{}
+	var pieces []*pb.Piece
 	for i, p := range f.State() {
 		pr := pb.Piece_NONE
 		if p.Priority == torrent.PiecePriorityNormal {
@@ -93,7 +93,7 @@ func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, err
 		Completed: completed,
 		Total:     f.FileInfo().Length,
 		Peers:     int32(peers),
-		Status:    status,
+		Status:    rStatus,
 		Seeders:   int32(seeders),
 		Leechers:  int32(leechers),
 		Pieces:    pieces,
@@ -130,7 +130,7 @@ func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, err
 }
 
 func diff(a []*pb.Piece, b []*pb.Piece) []*pb.Piece {
-	d := []*pb.Piece{}
+	var d []*pb.Piece
 	for _, aa := range a {
 		found := false
 		for _, bb := range b {
@@ -147,6 +147,15 @@ func diff(a []*pb.Piece, b []*pb.Piece) []*pb.Piece {
 }
 
 func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStreamServer) error {
+	md, _ := metadata.FromIncomingContext(stream.Context())
+	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
+		return errors.Errorf("no info-hash provided")
+	}
+	h := md.Get("info-hash")[0]
+	t, err := s.tm.Get(h)
+	if err != nil {
+		return err
+	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	errCh := make(chan error)
@@ -191,8 +200,13 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	select {
+	case <-t.Closed():
+		_ = stream.Send(&pb.StatReply{
+			Status: pb.StatReply_TERMINATED,
+		})
+		return nil
 	case <-sigs:
-		stream.Send(&pb.StatReply{
+		_ = stream.Send(&pb.StatReply{
 			Status: pb.StatReply_TERMINATED,
 		})
 		return nil
@@ -212,10 +226,10 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 	}
 }
 
-func (s *Stat) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply, error) {
+func (s *Stat) Files(ctx context.Context, _ *pb.FilesRequest) (*pb.FilesReply, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
-		return nil, errors.Errorf("No info-hash provided")
+		return nil, errors.Errorf("no info-hash provided")
 	}
 	h := md.Get("info-hash")[0]
 	t, err := s.tm.Get(h)
