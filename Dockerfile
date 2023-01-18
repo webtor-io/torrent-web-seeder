@@ -33,8 +33,8 @@ COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 ENV DATA_DIR /data
 
-# tell we are exposing our service on ports 50051 8080 8081 8082
-EXPOSE 50051 8080 8081 8082
+# tell we are exposing our services
+EXPOSE 50051 8080 8081 8082 8083
 
 # run it!
 CMD ["./server"]
