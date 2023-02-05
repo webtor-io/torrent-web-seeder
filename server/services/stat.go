@@ -161,7 +161,7 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 	errCh := make(chan error)
 	go func() {
 		var prevRep *pb.StatReply
-		for ; true; <-ticker.C {
+		for range ticker.C {
 			rep, err := s.Stat(stream.Context(), in)
 			if err != nil {
 				log.WithError(err).Error("failed to get stat")
