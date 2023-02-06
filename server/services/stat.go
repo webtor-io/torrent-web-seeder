@@ -157,42 +157,53 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 		return err
 	}
 	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
 	errCh := make(chan error)
+	done := make(chan bool)
+	defer func() {
+		ticker.Stop()
+		done <- true
+	}()
 	go func() {
 		var prevRep *pb.StatReply
-		for range ticker.C {
+		for {
 			rep, err := s.Stat(stream.Context(), in)
 			if err != nil {
 				log.WithError(err).Error("failed to get stat")
 				errCh <- err
+				return
 			}
-			if prevRep != nil &&
-				rep.GetCompleted() == prevRep.GetCompleted() &&
-				rep.GetPeers() == prevRep.GetPeers() {
+			if prevRep == nil ||
+				rep.GetCompleted() != prevRep.GetCompleted() ||
+				rep.GetPeers() != prevRep.GetPeers() {
+				var diffPieces []*pb.Piece
+				if prevRep == nil {
+					diffPieces = rep.GetPieces()
+				} else {
+					diffPieces = diff(rep.GetPieces(), prevRep.GetPieces())
+				}
+				prevRep = rep
+				diffRep := &pb.StatReply{
+					Completed: rep.GetCompleted(),
+					Peers:     rep.GetPeers(),
+					Status:    rep.GetStatus(),
+					Total:     rep.GetTotal(),
+					Pieces:    diffPieces,
+				}
+				if err := stream.Send(diffRep); err != nil {
+					log.WithError(err).Error("failed to send stat")
+					errCh <- err
+					return
+				}
+				if rep.GetTotal() == rep.GetCompleted() && rep.GetStatus() != pb.StatReply_INITIALIZATION && rep.GetStatus() != pb.StatReply_RESTORING {
+					errCh <- nil
+					return
+				}
+			}
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
 				continue
-			}
-			var diffPieces []*pb.Piece
-			if prevRep == nil {
-				diffPieces = rep.GetPieces()
-			} else {
-				diffPieces = diff(rep.GetPieces(), prevRep.GetPieces())
-			}
-			prevRep = rep
-			diffRep := &pb.StatReply{
-				Completed: rep.GetCompleted(),
-				Peers:     rep.GetPeers(),
-				Status:    rep.GetStatus(),
-				Total:     rep.GetTotal(),
-				Pieces:    diffPieces,
-			}
-			if err := stream.Send(diffRep); err != nil {
-				log.WithError(err).Error("failed to send stat")
-				errCh <- err
-			}
-			if rep.GetTotal() == rep.GetCompleted() && rep.GetStatus() != pb.StatReply_INITIALIZATION && rep.GetStatus() != pb.StatReply_RESTORING {
-				errCh <- nil
-				break
 			}
 		}
 	}()
