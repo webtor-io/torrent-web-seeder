@@ -112,7 +112,10 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 					promActiveTorrentCount.Dec()
 				}(h, ti)
 			}
-			_ = s.tm.Touch(h)
+			err = s.tm.Touch(h)
+			if err != nil {
+				log.WithError(err).Warnf("failed to touch infohash=%v", h)
+			}
 		}
 	}
 	return t, nil
