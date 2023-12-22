@@ -23,8 +23,12 @@ func NewTouchMap(c *cli.Context) *TouchMap {
 }
 
 func (s *TouchMap) touch(h string) error {
-	f := s.p + "/" + h + ".touch"
-	_, err := os.Stat(f)
+	dir, err := GetDir(s.p, h)
+	if err != nil {
+		return err
+	}
+	f := dir + ".touch"
+	_, err = os.Stat(f)
 	if os.IsNotExist(err) {
 		file, err := os.Create(f)
 		if err != nil {
