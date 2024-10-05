@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"github.com/anacrolix/missinggo/v2"
 	"github.com/edsrzf/mmap-go"
@@ -25,7 +26,7 @@ func NewMMap(baseDir string) *mmapClientImpl {
 	}
 }
 
-func (s *mmapClientImpl) OpenTorrent(info *metainfo.Info, infoHash metainfo.Hash) (_ storage.TorrentImpl, err error) {
+func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, infoHash metainfo.Hash) (_ storage.TorrentImpl, err error) {
 	dir, err := GetDir(s.baseDir, infoHash.HexString())
 	if err != nil {
 		return

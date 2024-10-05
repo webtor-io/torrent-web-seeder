@@ -1,9 +1,6 @@
 package main
 
 import (
-	"net/http"
-	"time"
-
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 	cs "github.com/webtor-io/common-services"
@@ -13,7 +10,6 @@ import (
 func configure(app *cli.App) {
 	app.Flags = []cli.Flag{}
 	app.Flags = cs.RegisterProbeFlags([]cli.Flag{})
-	app.Flags = cs.RegisterS3ClientFlags(app.Flags)
 	app.Flags = cs.RegisterPprofFlags(app.Flags)
 	app.Flags = cs.RegisterPromFlags(app.Flags)
 	app.Flags = s.RegisterWebFlags(app.Flags)
@@ -21,7 +17,6 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterTorrentStoreFlags(app.Flags)
 	app.Flags = s.RegisterFileStoreFlags(app.Flags)
 	app.Flags = s.RegisterStatFlags(app.Flags)
-	app.Flags = s.RegisterSnapshotFlags(app.Flags)
 	// app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
 }
@@ -50,17 +45,6 @@ func run(c *cli.Context) error {
 	// Setting TorrentMap
 	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap, touchMap)
 
-	// Setting conter
-	// counter := s.NewCounter()
-
-	// Setting S3 Client
-	s3 := cs.NewS3Client(c, &http.Client{
-		Timeout: time.Second * 60,
-	})
-
-	// Setting SnapshotMap
-	snapshotMap := s.NewSnapshotMap(c, torrentMap, s3)
-
 	// Setting Stat
 	stat := s.NewStat(torrentMap)
 
@@ -70,11 +54,8 @@ func run(c *cli.Context) error {
 	// Setting StatWeb
 	statWeb := s.NewStatWeb(stat)
 
-	// Setting BucketPool
-	bp := s.NewBucketPool()
-
 	// Setting WebSeeder
-	webSeeder := s.NewWebSeeder(torrentMap, statWeb, bp, snapshotMap)
+	webSeeder := s.NewWebSeeder(torrentMap, statWeb)
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)

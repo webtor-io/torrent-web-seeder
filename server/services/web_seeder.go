@@ -28,17 +28,13 @@ const (
 
 type WebSeeder struct {
 	tm *TorrentMap
-	sm *SnapshotMap
-	bp *BucketPool
 	st *StatWeb
 }
 
-func NewWebSeeder(tm *TorrentMap, st *StatWeb, bp *BucketPool, sm *SnapshotMap) *WebSeeder {
+func NewWebSeeder(tm *TorrentMap, st *StatWeb) *WebSeeder {
 	return &WebSeeder{
 		tm: tm,
-		bp: bp,
 		st: st,
-		sm: sm,
 	}
 }
 
@@ -61,55 +57,6 @@ func (s *WebSeeder) renderTorrent(w http.ResponseWriter, h string) {
 	}
 }
 
-func (s *WebSeeder) renderPieceData(w http.ResponseWriter, r *http.Request, h string, ph string) {
-	log.Infof("serve piece data for hash=%v piece hash=%v", h, ph)
-
-	t, err := s.tm.Get(h)
-
-	if err != nil {
-		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
-		w.WriteHeader(500)
-		return
-	}
-	for i := 0; i < t.NumPieces(); i++ {
-		p := t.Piece(i)
-		if p.Info().Hash().HexString() == ph {
-			pr := NewPieceReader(t.NewReader(), p)
-			defer func(pr *PieceReader) {
-				_ = pr.Close()
-			}(pr)
-			http.ServeContent(w, r, "", time.Unix(0, 0), pr)
-		}
-	}
-}
-
-func (s *WebSeeder) renderPiece(w http.ResponseWriter, r *http.Request, h string, ph string) {
-	log.Infof("serve piece hash=%v piece-hash=%v", h, ph)
-	if ph == "" {
-		s.renderPieceIndex(w, r, h)
-	} else {
-		s.renderPieceData(w, r, h, ph)
-	}
-}
-
-func (s *WebSeeder) renderPieceIndex(w http.ResponseWriter, r *http.Request, h string) {
-	log.Info("serve piece index")
-
-	t, err := s.tm.Get(h)
-
-	if err != nil {
-		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
-		return
-	}
-
-	s.addH(fmt.Sprintf("%s - pieces", t.InfoHash().HexString()), w)
-	s.addA("../", w, r)
-	for i := 0; i < t.NumPieces(); i++ {
-		p := t.Piece(i)
-		h := p.Info().Hash().HexString()
-		s.addA(h, w, r)
-	}
-}
 func (s *WebSeeder) addA(path string, w http.ResponseWriter, r *http.Request) {
 	uHref := url.URL{
 		Path:     path,
@@ -195,24 +142,9 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 				}
 				return ra
 			})
-			// if r.Header.Get("X-Download-Rate") != "" && r.Header.Get("X-Session-ID") != "" {
-			// 	b, err := s.bp.Get(r.Header.Get("X-Session-ID"), r.Header.Get("X-Download-Rate"))
-			// 	if err != nil {
-			// 		logWIthField.WithError(err).Error("failed to get bucket")
-			// 		http.Error(w, "failed to get bucket", http.StatusInternalServerError)
-			// 		return
-			// 	}
-			// 	reader = NewThrottledReader(torReader, b)
-			// } else {
 			reader = torReader
-			// }
 			w.Header().Set("Last-Modified", time.Unix(0, 0).Format(http.TimeFormat))
 			w.Header().Set("Etag", fmt.Sprintf("\"%x\"", sha1.Sum([]byte(t.InfoHash().String()+p))))
-			w, err := s.sm.WrapWriter(w, h)
-			if err != nil {
-				http.Error(w, "failed to wrap writer", http.StatusInternalServerError)
-				return
-			}
 			http.ServeContent(w, r, f.Path(), time.Unix(0, 0), reader)
 			found = true
 		}
@@ -269,9 +201,6 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.renderTorrentIndex(w, r, s.getHash(r))
 		} else if p == SourceTorrentPath {
 			s.renderTorrent(w, s.getHash(r))
-		} else if strings.HasPrefix(p, PiecePath) {
-			tp := strings.TrimPrefix(p, PiecePath)
-			s.renderPiece(w, r, s.getHash(r), tp)
 		} else {
 			s.serveFile(w, r, s.getHash(r), p)
 		}
