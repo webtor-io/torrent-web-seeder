@@ -37,9 +37,7 @@ func GetDir(location string, hash string) (string, error) {
 	if strings.HasSuffix(location, "*") {
 		prefix := strings.TrimSuffix(location, "*")
 		dir, lp := path.Split(prefix)
-		if dir == "" {
-			dir = "."
-		}
+
 		files, err := os.ReadDir(dir)
 		if err != nil {
 			return "", err
@@ -51,15 +49,15 @@ func GetDir(location string, hash string) (string, error) {
 			}
 		}
 		if len(dirs) == 0 {
-			return prefix + "/" + hash, nil
+			return prefix + string(os.PathSeparator) + hash, nil
 		} else if len(dirs) == 1 {
-			return dir + "/" + dirs[0] + "/" + hash, nil
+			return dir + dirs[0] + string(os.PathSeparator) + hash, nil
 		} else {
 			d, err := DistributeByHash(dirs, hash)
 			if err != nil {
 				return "", err
 			}
-			return dir + "/" + d + "/" + hash, nil
+			return dir + d + string(os.PathSeparator) + hash, nil
 		}
 	} else {
 		return location + "/" + hash, nil
