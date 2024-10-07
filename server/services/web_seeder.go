@@ -44,6 +44,7 @@ func (s *WebSeeder) renderTorrent(w http.ResponseWriter, h string) {
 	t, err := s.tm.Get(h)
 
 	if err != nil {
+		log.Error(err)
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
@@ -79,6 +80,7 @@ func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h
 	t, err := s.tm.Get(h)
 
 	if err != nil {
+		log.Error(err)
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
@@ -111,6 +113,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	t, err := s.tm.Get(h)
 
 	if err != nil {
+		log.Error(err)
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
@@ -159,6 +162,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 func (s *WebSeeder) serveStats(w http.ResponseWriter, r *http.Request, h string, p string) {
 	err := s.st.Serve(w, r, h, p)
 	if err != nil {
+		log.Error(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -182,6 +186,7 @@ func (s *WebSeeder) getHash(r *http.Request) string {
 func (s *WebSeeder) renderIndex(w http.ResponseWriter, r *http.Request) {
 	l, err := s.tm.List()
 	if err != nil {
+		log.Error(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
