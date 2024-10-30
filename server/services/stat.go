@@ -229,6 +229,9 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 			log.WithField("path", in.GetPath()).Info("sending stats completed")
 		}
 		return err
+	case <-time.After(30 * time.Minute):
+		log.WithField("path", in.GetPath()).Info("sending stats timeout")
+		return nil
 	case err := <-errCh:
 		if err != nil {
 			return status.Errorf(codes.Internal, "got error=%v", err)

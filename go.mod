@@ -8,7 +8,6 @@ require (
 	github.com/anacrolix/chansync v0.6.0 // indirect
 	github.com/anacrolix/log v0.16.0
 	github.com/anacrolix/sync v0.5.2 // indirect
-	github.com/aws/aws-sdk-go v1.44.163
 	github.com/bakins/logrus-middleware v0.0.0-20180426214643-ce4c6f8deb07
 	github.com/bakins/test-helpers v0.0.0-20141028124846-af83df64dc31 // indirect
 	github.com/dustin/go-humanize v1.0.1
@@ -55,6 +54,7 @@ require (
 	github.com/anacrolix/stm v0.5.0 // indirect
 	github.com/anacrolix/upnp v0.1.4 // indirect
 	github.com/anacrolix/utp v0.2.0 // indirect
+	github.com/aws/aws-sdk-go v1.44.163 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/benbjohnson/immutable v0.4.3 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect

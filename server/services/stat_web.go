@@ -48,8 +48,13 @@ func (s *StatWeb) Serve(w http.ResponseWriter, r *http.Request, h string, p stri
 	stream := NewStatStreamServer(ctx, ha, f)
 	ticker := time.NewTicker(10 * time.Second)
 	go func() {
-		for range ticker.C {
-			stream.Ping()
+		for {
+			select {
+			case <-ticker.C:
+				stream.Ping()
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	err := s.st.StatStream(&pb.StatRequest{Path: p}, stream)
