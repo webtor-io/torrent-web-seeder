@@ -35,7 +35,7 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 	t := &mmapTorrentStorage{
 		infoHash: infoHash,
 		span:     span,
-		pc:       pieceCompletionForDir(dir),
+		pc:       pieceCompletionForDir(dir, info, infoHash),
 	}
 	return storage.TorrentImpl{Piece: t.Piece, Close: t.Close, Flush: t.Flush}, err
 }
@@ -227,8 +227,8 @@ func (m mmapWithFile) Bytes() []byte {
 	return m.mmap
 }
 
-func pieceCompletionForDir(dir string) (ret storage.PieceCompletion) {
-	ret, err := storage.NewDefaultPieceCompletionForDir(dir)
+func pieceCompletionForDir(dir string, info *metainfo.Info, hash metainfo.Hash) (ret storage.PieceCompletion) {
+	ret, err := NewPieceCompletion(dir, info, hash)
 	if err != nil {
 		log.Printf("couldn't open piece completion db in %q: %s", dir, err)
 		ret = storage.NewMapPieceCompletion()

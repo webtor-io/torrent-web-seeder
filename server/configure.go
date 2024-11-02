@@ -43,7 +43,7 @@ func run(c *cli.Context) error {
 	touchMap := s.NewTouchMap(c)
 
 	// Setting TorrentMap
-	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap, touchMap)
+	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap)
 
 	// Setting Stat
 	stat := s.NewStat(torrentMap)
@@ -54,8 +54,11 @@ func run(c *cli.Context) error {
 	// Setting StatWeb
 	statWeb := s.NewStatWeb(stat)
 
+	// Setting FileCacheMap
+	fileCacheMap := s.NewFileCacheMap(c)
+
 	// Setting WebSeeder
-	webSeeder := s.NewWebSeeder(torrentMap, statWeb)
+	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, touchMap, statWeb)
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)

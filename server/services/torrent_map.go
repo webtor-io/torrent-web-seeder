@@ -39,19 +39,17 @@ type TorrentMap struct {
 	tc  *TorrentClient
 	tsm *TorrentStoreMap
 	fsm *FileStoreMap
-	tm  *TouchMap
 	//magnet string
 	timers map[string]*time.Timer
 	ttl    time.Duration
 	mux    sync.Mutex
 }
 
-func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap, tm *TouchMap) *TorrentMap {
+func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap) *TorrentMap {
 	return &TorrentMap{
 		tc:     tc,
 		tsm:    tsm,
 		fsm:    fsm,
-		tm:     tm,
 		timers: map[string]*time.Timer{},
 		//magnet: c.String(MagnetFlag),
 		ttl: time.Duration(600) * time.Second,
@@ -111,10 +109,6 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 					t.Drop()
 					promActiveTorrentCount.Dec()
 				}(h, ti)
-			}
-			err = s.tm.Touch(h)
-			if err != nil {
-				log.WithError(err).Warnf("failed to touch infohash=%v", h)
 			}
 		}
 	}

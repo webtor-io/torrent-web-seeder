@@ -2,6 +2,8 @@ package services
 
 import (
 	"os"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -37,22 +39,30 @@ func NewFileStoreMap(c *cli.Context) *FileStoreMap {
 }
 
 func (s *FileStoreMap) loadFiles() (map[string]*metainfo.MetaInfo, error) {
+	path := s.p
+	usr, _ := user.Current()
+	dir := usr.HomeDir
+	if path == "~" {
+		path = dir
+	} else if strings.HasPrefix(path, "~/") {
+		path = filepath.Join(dir, path[2:])
+	}
 	m := map[string]*metainfo.MetaInfo{}
-	if s.p == "" {
+	if path == "" {
 		return m, nil
 	}
-	fi, err := os.Stat(s.p)
+	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 	if fi.IsDir() {
-		fs, err := os.ReadDir(s.p)
+		fs, err := os.ReadDir(path)
 		if err != nil {
 			return nil, err
 		}
 		for _, f := range fs {
 			if !f.IsDir() && strings.HasSuffix(f.Name(), ".torrent") {
-				mi, err := metainfo.LoadFromFile(s.p + "/" + f.Name())
+				mi, err := metainfo.LoadFromFile(path + "/" + f.Name())
 				if err != nil {
 					return nil, err
 				}
@@ -60,7 +70,7 @@ func (s *FileStoreMap) loadFiles() (map[string]*metainfo.MetaInfo, error) {
 			}
 		}
 	} else {
-		mi, err := metainfo.LoadFromFile(s.p)
+		mi, err := metainfo.LoadFromFile(path)
 		if err != nil {
 			return nil, err
 		}

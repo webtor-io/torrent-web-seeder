@@ -20,21 +20,24 @@ import (
 var sha1R = regexp.MustCompile("^[0-9a-f]{5,40}$")
 
 const (
-	PiecePath         = "piece/"
 	SourceTorrentPath = "source.torrent"
 	MaxReadahead      = 250 * 1024 * 1024
 	MinReadahead      = 1024 * 1024
 )
 
 type WebSeeder struct {
-	tm *TorrentMap
-	st *StatWeb
+	tm  *TorrentMap
+	st  *StatWeb
+	fcm *FileCacheMap
+	tom *TouchMap
 }
 
-func NewWebSeeder(tm *TorrentMap, st *StatWeb) *WebSeeder {
+func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tom *TouchMap, st *StatWeb) *WebSeeder {
 	return &WebSeeder{
-		tm: tm,
-		st: st,
+		tm:  tm,
+		st:  st,
+		fcm: fcm,
+		tom: tom,
 	}
 }
 
@@ -86,7 +89,6 @@ func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h
 	}
 	s.addH(h, w)
 	s.addA("..", w, r)
-	s.addA(PiecePath, w, r)
 	s.addA(SourceTorrentPath, w, r)
 	for _, f := range t.Files() {
 		s.addA(f.Path(), w, r)
@@ -94,6 +96,32 @@ func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h
 }
 
 func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, p string) {
+	err := s.tom.Touch(h)
+	if err != nil {
+		log.Error(err)
+	}
+	cp, err := s.fcm.Get(h, p)
+	if err != nil {
+		log.Error(err)
+		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
+		return
+	}
+	if cp != "" {
+		if _, ok := r.URL.Query()["stats"]; ok {
+			http.NotFound(w, r)
+			return
+		}
+		if _, ok := r.URL.Query()["done"]; ok {
+			return
+		}
+		w.Header().Set("Etag", fmt.Sprintf("\"%x\"", sha1.Sum([]byte(h+p))))
+		http.ServeFile(w, r, cp)
+		return
+	}
+	if _, ok := r.URL.Query()["done"]; ok {
+		http.NotFound(w, r)
+		return
+	}
 	if _, ok := r.URL.Query()["stats"]; ok {
 		s.serveStats(w, r, h, p)
 		return
