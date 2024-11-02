@@ -1,18 +1,15 @@
-FROM alpine:latest as certs
+FROM alpine:latest AS certs
 
 # getting certs
 RUN apk update && apk upgrade && apk add --no-cache ca-certificates
 
-FROM golang:latest as build
+FROM golang:latest AS build
 
 # set work dir
 WORKDIR /app
 
 # copy the source files
 COPY . .
-
-# disable crosscompiling
-ENV CGO_ENABLED=0
 
 # compile linux only
 ENV GOOS=linux
@@ -28,7 +25,7 @@ COPY --from=build /app/server/server .
 # copy certs
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-ENV DATA_DIR /data
+ENV DATA_DIR=/data
 
 # tell we are exposing our services
 EXPOSE 50051 8080 8081 8082 8083

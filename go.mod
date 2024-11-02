@@ -36,6 +36,7 @@ require (
 	github.com/anacrolix/missinggo/v2 v2.7.4
 	github.com/anacrolix/torrent v1.57.1
 	github.com/edsrzf/mmap-go v1.1.0
+	github.com/go-llsqlite/adapter v0.1.0
 	github.com/prometheus/client_golang v1.14.0
 	github.com/webtor-io/lazymap v0.0.0-20221030185154-1799721becef
 	google.golang.org/protobuf v1.30.0
@@ -64,7 +65,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/go-llsqlite/adapter v0.1.0 // indirect
 	github.com/go-llsqlite/crawshaw v0.5.5 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
