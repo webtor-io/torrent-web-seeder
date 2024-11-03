@@ -57,6 +57,9 @@ func (s *completions) GetCompletedFiles() []string {
 			endPiece := (offset + int(f.Length)) / int(s.info.PieceLength)
 			offset += int(f.Length)
 			for i := startPiece; i <= endPiece; i++ {
+				if i >= len(s.pieces) {
+					break
+				}
 				if !s.pieces[i] {
 					completed = false
 					break
