@@ -30,6 +30,8 @@ func (s *completions) Complete(index int) {
 }
 
 func (s *completions) GetCompletedFiles() []string {
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	var files []string
 	if len(s.info.Files) == 0 {
 		completed := true
