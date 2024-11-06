@@ -81,11 +81,6 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			EnvVar: "NO_UPLOAD",
 		},
 		cli.BoolFlag{
-			Name:   NoUploadFlag,
-			Usage:  "no upload",
-			EnvVar: "NO_UPLOAD",
-		},
-		cli.BoolFlag{
 			Name:   SeedFlag,
 			Usage:  "seed",
 			EnvVar: "SEED",
