@@ -91,9 +91,9 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			EnvVar: "DISABLE_WEBTORRENT",
 		},
 		cli.BoolFlag{
-			Name:   DisableWebTorrentFlag,
-			Usage:  "disables WebTorrent",
-			EnvVar: "DISABLE_WEBTORRENT",
+			Name:   DisableUtpFlag,
+			Usage:  "disables utp",
+			EnvVar: "DISABLE_UTP",
 		},
 		cli.IntFlag{
 			Name:   EstablishedConnsPerTorrentFlag,
