@@ -17,24 +17,36 @@ import (
 )
 
 type TorrentClient struct {
-	cl          *torrent.Client
-	mux         sync.Mutex
-	err         error
-	inited      bool
-	rLimit      int64
-	dataDir     string
-	proxy       string
-	ua          string
-	dUTP        bool
-	dWebTorrent bool
+	cl                         *torrent.Client
+	mux                        sync.Mutex
+	err                        error
+	inited                     bool
+	rLimit                     int64
+	dataDir                    string
+	proxy                      string
+	ua                         string
+	noUpload                   bool
+	seed                       bool
+	dUTP                       bool
+	dWebTorrent                bool
+	establishedConnsPerTorrent int
+	halfOpenConnsPerTorrent    int
+	torrentPeersHighWater      int
+	torrentPeersLowWater       int
 }
 
 const (
-	TorrentClientDownloadRateFlag = "download-rate"
-	TorrentClientUserAgentFlag    = "user-agent"
-	HttpProxyFlag                 = "http-proxy"
-	DisableUtpFlag                = "disable-utp"
-	DisableWebTorrentFlag         = "disable-webtorrent"
+	TorrentClientDownloadRateFlag  = "download-rate"
+	TorrentClientUserAgentFlag     = "user-agent"
+	HttpProxyFlag                  = "http-proxy"
+	NoUploadFlag                   = "no-upload"
+	SeedFlag                       = "seed"
+	DisableUtpFlag                 = "disable-utp"
+	DisableWebTorrentFlag          = "disable-webtorrent"
+	EstablishedConnsPerTorrentFlag = "established-conns-per-torrent"
+	HalfOpenConnsPerTorrentFlag    = "half-open-conns-per-torrent"
+	TorrentPeersHighWaterFlag      = "torrent-peers-high-water"
+	TorrentPeersLowWaterFlag       = "torrent-peers-low-water"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -64,14 +76,49 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			EnvVar: "DATA_DIR",
 		},
 		cli.BoolFlag{
-			Name:   DisableUtpFlag,
-			Usage:  "disables utp",
-			EnvVar: "DISABLE_UTP",
+			Name:   NoUploadFlag,
+			Usage:  "no upload",
+			EnvVar: "NO_UPLOAD",
+		},
+		cli.BoolFlag{
+			Name:   NoUploadFlag,
+			Usage:  "no upload",
+			EnvVar: "NO_UPLOAD",
+		},
+		cli.BoolFlag{
+			Name:   SeedFlag,
+			Usage:  "seed",
+			EnvVar: "SEED",
 		},
 		cli.BoolFlag{
 			Name:   DisableWebTorrentFlag,
 			Usage:  "disables WebTorrent",
 			EnvVar: "DISABLE_WEBTORRENT",
+		},
+		cli.BoolFlag{
+			Name:   DisableWebTorrentFlag,
+			Usage:  "disables WebTorrent",
+			EnvVar: "DISABLE_WEBTORRENT",
+		},
+		cli.IntFlag{
+			Name:   EstablishedConnsPerTorrentFlag,
+			Usage:  "established conns per torrent",
+			EnvVar: "ESTABLISHED_CONNS_PER_TORRENT",
+		},
+		cli.IntFlag{
+			Name:   HalfOpenConnsPerTorrentFlag,
+			Usage:  "half-open conns per torrent",
+			EnvVar: "HALF_OPEN_CONNS_PER_TORRENT",
+		},
+		cli.IntFlag{
+			Name:   TorrentPeersHighWaterFlag,
+			Usage:  "torrent peers high water",
+			EnvVar: "TORRENT_PEERS_HIGH_WATER",
+		},
+		cli.IntFlag{
+			Name:   TorrentPeersLowWaterFlag,
+			Usage:  "torrent peers low water",
+			EnvVar: "TORRENT_PEERS_LOW_WATER",
 		},
 	)
 }
@@ -87,22 +134,24 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		dr = int64(drp)
 	}
 	return &TorrentClient{
-		rLimit:      dr,
-		dataDir:     c.String(DataDirFlag),
-		proxy:       c.String(HttpProxyFlag),
-		ua:          c.String(TorrentClientUserAgentFlag),
-		dUTP:        c.Bool(DisableUtpFlag),
-		dWebTorrent: c.Bool(DisableWebTorrentFlag),
+		rLimit:                     dr,
+		dataDir:                    c.String(DataDirFlag),
+		proxy:                      c.String(HttpProxyFlag),
+		ua:                         c.String(TorrentClientUserAgentFlag),
+		dUTP:                       c.Bool(DisableUtpFlag),
+		dWebTorrent:                c.Bool(DisableWebTorrentFlag),
+		establishedConnsPerTorrent: c.Int(EstablishedConnsPerTorrentFlag),
+		halfOpenConnsPerTorrent:    c.Int(HalfOpenConnsPerTorrentFlag),
+		torrentPeersHighWater:      c.Int(TorrentPeersHighWaterFlag),
+		torrentPeersLowWater:       c.Int(TorrentPeersLowWaterFlag),
+		noUpload:                   c.Bool(NoUploadFlag),
+		seed:                       c.Bool(SeedFlag),
 	}, nil
 }
 
 func (s *TorrentClient) get() (*torrent.Client, error) {
 	log.Infof("initializing TorrentClient dataDir=%v", s.dataDir)
 	cfg := torrent.NewDefaultClientConfig()
-	cfg.NoUpload = true
-	// cfg.DisableAggressiveUpload = true
-	cfg.Seed = false
-	// cfg.AcceptPeerConnections = false
 	// cfg.DisableIPv6 = true
 	cfg.Logger = tlog.Default.WithNames("main", "client")
 	// cfg.Debug = true
@@ -110,21 +159,10 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	if s.ua != "" {
 		cfg.HTTPUserAgent = s.ua
 	}
-	if s.dUTP {
-		cfg.DisableUTP = true
-	}
-	if s.dWebTorrent {
-		cfg.DisableWebtorrent = true
-	}
-	// cfg.DisableTrackers = true
-	// cfg.DisableWebtorrent = true
-	// cfg.DisableWebseeds = true
-	// cfg.HeaderObfuscationPolicy = torrent.HeaderObfuscationPolicy{
-	// 	Preferred:        true,
-	// 	RequirePreferred: true,
-	// }
-	// cfg.CryptoSelector = MyCryptoSelector
-	// cfg.PeriodicallyAnnounceTorrentsToDht = false
+	cfg.NoUpload = s.noUpload
+	cfg.Seed = s.seed
+	cfg.DisableUTP = s.dUTP
+	cfg.DisableWebtorrent = s.dWebTorrent
 	if s.proxy != "" {
 		u, err := url.Parse(s.proxy)
 		if err != nil {
@@ -132,13 +170,18 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 		}
 		cfg.HTTPProxy = http.ProxyURL(u)
 	}
-	// cfg.Logger = torrentlogger.Discard
-	// cfg.DefaultRequestStrategy = torrent.RequestStrategyFuzzing()
-	cfg.EstablishedConnsPerTorrent = 100
-	cfg.HalfOpenConnsPerTorrent = 50
-	cfg.TorrentPeersHighWater = 1000
-	cfg.TorrentPeersLowWater = 100
-	cfg.TotalHalfOpenConns = 5000
+	if s.establishedConnsPerTorrent != 0 {
+		cfg.EstablishedConnsPerTorrent = s.establishedConnsPerTorrent
+	}
+	if s.halfOpenConnsPerTorrent != 0 {
+		cfg.HalfOpenConnsPerTorrent = s.halfOpenConnsPerTorrent
+	}
+	if s.torrentPeersHighWater != 0 {
+		cfg.TorrentPeersHighWater = s.torrentPeersHighWater
+	}
+	if s.torrentPeersLowWater != 0 {
+		cfg.TorrentPeersLowWater = s.torrentPeersLowWater
+	}
 	if s.rLimit != -1 {
 		cfg.DownloadRateLimiter = rate.NewLimiter(rate.Limit(s.rLimit), int(s.rLimit))
 	}
