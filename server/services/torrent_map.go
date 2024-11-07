@@ -36,10 +36,9 @@ func init() {
 }
 
 type TorrentMap struct {
-	tc  *TorrentClient
-	tsm *TorrentStoreMap
-	fsm *FileStoreMap
-	//magnet string
+	tc     *TorrentClient
+	tsm    *TorrentStoreMap
+	fsm    *FileStoreMap
 	timers map[string]*time.Timer
 	ttl    time.Duration
 	mux    sync.Mutex
@@ -51,8 +50,16 @@ func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap) *
 		tsm:    tsm,
 		fsm:    fsm,
 		timers: map[string]*time.Timer{},
-		//magnet: c.String(MagnetFlag),
-		ttl: time.Duration(600) * time.Second,
+		ttl:    time.Duration(600) * time.Second,
+	}
+}
+
+func (s *TorrentMap) Touch(h string) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	ti, ok := s.timers[h]
+	if ok {
+		ti.Reset(s.ttl)
 	}
 }
 
@@ -64,72 +71,46 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 		return nil, err
 	}
 	var t *torrent.Torrent
-	// if s.magnet != "" {
-	// 	sp, err := torrent.TorrentSpecFromMagnetUri(s.magnet)
-	// 	if err != nil {
-	// 		return nil, errors.Wrap(err, "failed to parse magnet")
-	// 	}
-	// 	if h == sp.InfoHash.HexString() {
-	// 		t, err = cl.AddMagnet(s.magnet)
-	// 		if err != nil {
-	// 			return nil, errors.Wrap(err, "failed to add magnet")
-	// 		}
-	// 	}
-	// }
-	if t == nil {
-		mi, err := s.fsm.Get(h)
+	mi, err := s.fsm.Get(h)
+	if err != nil {
+		return nil, err
+	}
+	if mi == nil {
+		mi, err = s.tsm.Get(h)
 		if err != nil {
 			return nil, err
 		}
-		if mi == nil {
-			mi, err = s.tsm.Get(h)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if mi != nil {
-			t, err = cl.AddTorrent(mi)
-			if err != nil {
-				return nil, err
-			}
-			ti, ok := s.timers[h]
-			if ok {
-				ti.Reset(s.ttl)
-			} else {
-				log.Infof("torrent added infohash=%v", h)
-				promActiveTorrentCount.Inc()
-				ti := time.NewTimer(s.ttl)
-				s.timers[h] = ti
-				go func(h string, ti *time.Timer) {
-					<-ti.C
-					s.mux.Lock()
-					defer s.mux.Unlock()
-					delete(s.timers, h)
-					log.Infof("torrent dropped infohash=%v", h)
-					t.Drop()
-					promActiveTorrentCount.Dec()
-				}(h, ti)
-			}
-		}
+	}
+	if mi == nil {
+		return nil, nil
+
+	}
+	t, err = cl.AddTorrent(mi)
+	if err != nil {
+		return nil, err
+	}
+	ti, ok := s.timers[h]
+	if ok {
+		ti.Reset(s.ttl)
+	} else {
+		log.Infof("torrent added infohash=%v", h)
+		promActiveTorrentCount.Inc()
+		ti := time.NewTimer(s.ttl)
+		s.timers[h] = ti
+		go func(h string, ti *time.Timer) {
+			<-ti.C
+			s.mux.Lock()
+			defer s.mux.Unlock()
+			delete(s.timers, h)
+			log.Infof("torrent dropped infohash=%v", h)
+			t.Drop()
+			promActiveTorrentCount.Dec()
+		}(h, ti)
 	}
 	return t, nil
 }
 
 func (s *TorrentMap) List() ([]string, error) {
-	// cl, err := s.tc.Get()
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// if s.magnet != "" {
-	// 	sp, err := torrent.TorrentSpecFromMagnetUri(s.magnet)
-	// 	if err != nil {
-	// 		return nil, errors.Wrap(err, "failed to parse magnet")
-	// 	}
-	// 	r[sp.InfoHash.HexString()] = true
-	// }
-	// for _, t := range cl.Torrents() {
-	// 	r[t.InfoHash().HexString()] = true
-	// }
 	r := map[string]bool{}
 	l, err := s.fsm.List()
 	if err != nil {

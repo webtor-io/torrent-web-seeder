@@ -176,6 +176,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 			reader = torReader
 			w.Header().Set("Last-Modified", time.Unix(0, 0).Format(http.TimeFormat))
 			w.Header().Set("Etag", fmt.Sprintf("\"%x\"", sha1.Sum([]byte(t.InfoHash().String()+p))))
+			w = NewTouchWrtier(w, s.tm, h)
 			http.ServeContent(w, r, f.Path(), time.Unix(0, 0), reader)
 			found = true
 		}

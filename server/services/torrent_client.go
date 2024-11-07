@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"time"
 
 	"code.cloudfoundry.org/bytefmt"
 	tlog "github.com/anacrolix/log"
@@ -184,6 +185,24 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create new torrent client")
 	}
+	log.Infof("TorrentClient started")
+	ticker := time.NewTicker(60 * time.Second)
+	go func() {
+		for {
+			<-ticker.C
+			if len(cl.Torrents()) != 0 {
+				continue
+			}
+			s.mux.Lock()
+			defer s.mux.Unlock()
+			s.cl.Close()
+			s.cl = nil
+			s.inited = false
+			ticker.Stop()
+			log.Infof("closing TorrentClient")
+			return
+		}
+	}()
 	return cl, nil
 }
 
