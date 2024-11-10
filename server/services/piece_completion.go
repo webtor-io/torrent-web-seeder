@@ -52,10 +52,10 @@ func (s *completions) GetCompletedFiles() []string {
 	for _, f := range s.info.Files {
 		path := s.info.Name + "/" + strings.Join(f.Path, "/")
 		completed := true
+		startPiece := offset / int(s.info.PieceLength)
+		endPiece := (offset + int(f.Length)) / int(s.info.PieceLength)
+		offset += int(f.Length)
 		if !s.completed && !s.completedFiles[path] {
-			startPiece := offset / int(s.info.PieceLength)
-			endPiece := (offset + int(f.Length)) / int(s.info.PieceLength)
-			offset += int(f.Length)
 			for i := startPiece; i <= endPiece; i++ {
 				if i >= len(s.pieces) {
 					break
