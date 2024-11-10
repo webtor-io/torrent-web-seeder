@@ -13,7 +13,6 @@ import (
 
 	"github.com/anacrolix/torrent/bencode"
 
-	"github.com/anacrolix/torrent"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -21,8 +20,8 @@ var sha1R = regexp.MustCompile("^[0-9a-f]{5,40}$")
 
 const (
 	SourceTorrentPath = "source.torrent"
-	MaxReadahead      = 250 * 1024 * 1024
-	MinReadahead      = 1024 * 1024
+	//MaxReadahead      = 250 * 1024 * 1024
+	//MinReadahead      = 1024 * 1024
 )
 
 type WebSeeder struct {
@@ -158,21 +157,21 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 			}
 			var reader io.ReadSeeker
 			torReader := f.NewReader()
-			// torReader.SetResponsive()
-			torReader.SetReadaheadFunc(func(r torrent.ReadaheadContext) int64 {
-				p := f.Length() / 100
-				if p < MinReadahead {
-					p = MinReadahead
-				}
-				ra := (r.CurrentPos - r.ContiguousReadStartPos) * 2
-				if ra < p {
-					return p
-				}
-				if ra > MaxReadahead {
-					return MaxReadahead
-				}
-				return ra
-			})
+			torReader.SetResponsive()
+			//torReader.SetReadaheadFunc(func(r torrent.ReadaheadContext) int64 {
+			//	p := f.Length() / 100
+			//	if p < MinReadahead {
+			//		p = MinReadahead
+			//	}
+			//	ra := (r.CurrentPos - r.ContiguousReadStartPos) * 2
+			//	if ra < p {
+			//		return p
+			//	}
+			//	if ra > MaxReadahead {
+			//		return MaxReadahead
+			//	}
+			//	return ra
+			//})
 			reader = torReader
 			w.Header().Set("Last-Modified", time.Unix(0, 0).Format(http.TimeFormat))
 			w.Header().Set("Etag", fmt.Sprintf("\"%x\"", sha1.Sum([]byte(t.InfoHash().String()+p))))
