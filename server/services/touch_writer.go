@@ -13,7 +13,7 @@ type TouchWriter struct {
 	h  string
 }
 
-func NewTouchWrtier(w http.ResponseWriter, tm *TorrentMap, h string) *TouchWriter {
+func NewTouchWriter(w http.ResponseWriter, tm *TorrentMap, h string) *TouchWriter {
 	return &TouchWriter{
 		ResponseWriter: w,
 		tm:             tm,
