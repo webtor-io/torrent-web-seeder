@@ -88,8 +88,8 @@ func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h
 	s.addH(h, w)
 	s.addA("..", w, r)
 	s.addA(SourceTorrentPath, w, r)
-	for _, f := range t.Files() {
-		s.addA(f.Path(), w, r)
+	for _, f := range t.Info().UpvertedFiles() {
+		s.addA(strings.Join(append([]string{t.Info().Name}, f.Path...), "/"), w, r)
 	}
 }
 
