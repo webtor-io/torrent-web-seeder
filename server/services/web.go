@@ -19,14 +19,16 @@ const (
 func RegisterWebFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.StringFlag{
-			Name:  WebHostFlag,
-			Usage: "listening host",
-			Value: "",
+			Name:   WebHostFlag,
+			Usage:  "listening host",
+			Value:  "",
+			EnvVar: "WEB_HOST",
 		},
 		cli.IntFlag{
-			Name:  WebPortFlag,
-			Usage: "http listening port",
-			Value: 8080,
+			Name:   WebPortFlag,
+			Usage:  "http listening port",
+			Value:  8080,
+			EnvVar: "WEB_PORT",
 		},
 	)
 }
