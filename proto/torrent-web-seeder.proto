@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+option go_package = "./";
+
 service TorrentWebSeeder {
   // Get file stat
   rpc Stat (StatRequest) returns (StatReply) {}

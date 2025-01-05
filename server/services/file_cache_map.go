@@ -11,14 +11,14 @@ import (
 )
 
 type FileCacheMap struct {
-	lazymap.LazyMap
+	lazymap.LazyMap[string]
 	p string
 }
 
 func NewFileCacheMap(c *cli.Context) *FileCacheMap {
 	return &FileCacheMap{
 		p: c.String(DataDirFlag),
-		LazyMap: lazymap.New(&lazymap.Config{
+		LazyMap: lazymap.New[string](&lazymap.Config{
 			Expire: 60 * time.Second,
 		}),
 	}
@@ -60,8 +60,7 @@ func (s *FileCacheMap) get(h string, path string) (string, error) {
 
 func (s *FileCacheMap) Get(h string, path string) (string, error) {
 	key := h + path
-	p, err := s.LazyMap.Get(key, func() (interface{}, error) {
+	return s.LazyMap.Get(key, func() (string, error) {
 		return s.get(h, path)
 	})
-	return p.(string), err
 }

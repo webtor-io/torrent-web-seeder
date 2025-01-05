@@ -94,7 +94,7 @@ func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h
 }
 
 func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, p string) {
-	err := s.tom.Touch(h)
+	_, err := s.tom.Touch(h)
 	if err != nil {
 		log.Error(err)
 	}

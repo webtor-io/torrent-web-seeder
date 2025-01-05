@@ -14,10 +14,11 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	pb "github.com/webtor-io/torrent-web-seeder/torrent-web-seeder"
+	pb "github.com/webtor-io/torrent-web-seeder/proto"
 )
 
 type Stat struct {
+	pb.UnimplementedTorrentWebSeederServer
 	tm *TorrentMap
 }
 

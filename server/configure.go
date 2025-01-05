@@ -22,6 +22,7 @@ func configure(app *cli.App) {
 }
 
 func run(c *cli.Context) error {
+	var services []cs.Servable
 	// Setting TorrentStore
 	torrentStore := s.NewTorrentStore(c)
 	defer torrentStore.Close()
@@ -50,6 +51,9 @@ func run(c *cli.Context) error {
 
 	// Setting StatGRPC
 	statGRPC := s.NewStatGRPC(c, stat)
+	if statGRPC != nil {
+		services = append(services, statGRPC)
+	}
 
 	// Setting StatWeb
 	statWeb := s.NewStatWeb(stat)
@@ -62,22 +66,32 @@ func run(c *cli.Context) error {
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)
+	services = append(services, web)
 	defer web.Close()
 
 	// Setting Probe
 	probe := cs.NewProbe(c)
-	defer probe.Close()
+	if probe != nil {
+		services = append(services, probe)
+		defer probe.Close()
+	}
 
 	// Setting Prom
 	prom := cs.NewProm(c)
-	defer prom.Close()
+	if prom != nil {
+		services = append(services, prom)
+		defer prom.Close()
+	}
 
 	// Setting Pprof
 	pprof := cs.NewPprof(c)
-	defer pprof.Close()
+	if pprof != nil {
+		services = append(services, pprof)
+		defer pprof.Close()
+	}
 
 	// Setting Serve
-	serve := cs.NewServe(web, probe, prom, pprof, statGRPC)
+	serve := cs.NewServe(services...)
 
 	// And SERVE!
 	err = serve.Serve()

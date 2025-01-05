@@ -13,7 +13,7 @@ import (
 	logrusmiddleware "github.com/bakins/logrus-middleware"
 	"github.com/pkg/errors"
 
-	pb "github.com/webtor-io/torrent-web-seeder/torrent-web-seeder"
+	pb "github.com/webtor-io/torrent-web-seeder/proto"
 )
 
 type StatWeb struct {

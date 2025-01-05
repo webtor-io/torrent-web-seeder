@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	log "github.com/sirupsen/logrus"
-	pb "github.com/webtor-io/torrent-web-seeder/torrent-web-seeder"
+	pb "github.com/webtor-io/torrent-web-seeder/proto"
 )
 
 type StatGRPC struct {
@@ -29,24 +29,35 @@ type StatGRPC struct {
 const (
 	StatHostFlag = "stat-host"
 	StatPortFlag = "stat-port"
+	StatUseFlag  = "use-stat"
 )
 
 func RegisterStatFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.StringFlag{
-			Name:  StatHostFlag,
-			Usage: "stat listening host",
-			Value: "",
+			Name:   StatHostFlag,
+			Usage:  "stat listening host",
+			Value:  "",
+			EnvVar: "STAT_HOST",
 		},
 		cli.IntFlag{
-			Name:  StatPortFlag,
-			Usage: "stat listening port",
-			Value: 50051,
+			Name:   StatPortFlag,
+			Usage:  "stat listening port",
+			Value:  50051,
+			EnvVar: "STAT_PORT",
+		},
+		cli.BoolTFlag{
+			Name:   StatUseFlag,
+			Usage:  "enable stat service",
+			EnvVar: "USE_STAT",
 		},
 	)
 }
 
 func NewStatGRPC(c *cli.Context, st *Stat) *StatGRPC {
+	if !c.BoolT(StatHostFlag) {
+		return nil
+	}
 	return &StatGRPC{
 		st:   st,
 		host: c.String(StatHostFlag),

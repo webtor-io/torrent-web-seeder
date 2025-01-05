@@ -13,14 +13,14 @@ import (
 )
 
 type TorrentStoreMap struct {
-	lazymap.LazyMap
+	lazymap.LazyMap[*metainfo.MetaInfo]
 	ts *TorrentStore
 }
 
 func NewTorrentStoreMap(ts *TorrentStore) *TorrentStoreMap {
 	return &TorrentStoreMap{
 		ts: ts,
-		LazyMap: lazymap.New(&lazymap.Config{
+		LazyMap: lazymap.New[*metainfo.MetaInfo](&lazymap.Config{
 			Capacity: 1000,
 		}),
 	}
@@ -47,11 +47,7 @@ func (s *TorrentStoreMap) get(h string) (*metainfo.MetaInfo, error) {
 }
 
 func (s *TorrentStoreMap) Get(h string) (*metainfo.MetaInfo, error) {
-	mi, err := s.LazyMap.Get(h, func() (interface{}, error) {
+	return s.LazyMap.Get(h, func() (*metainfo.MetaInfo, error) {
 		return s.get(h)
 	})
-	if err != nil {
-		return nil, err
-	}
-	return mi.(*metainfo.MetaInfo), nil
 }
