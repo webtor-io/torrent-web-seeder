@@ -3,7 +3,7 @@ module github.com/webtor-io/torrent-web-seeder
 go 1.23.0
 
 require (
-	code.cloudfoundry.org/bytefmt v0.24.0
+	code.cloudfoundry.org/bytefmt v0.25.0
 	github.com/RoaringBitmap/roaring v1.9.4 // indirect
 	github.com/anacrolix/chansync v0.6.0 // indirect
 	github.com/anacrolix/log v0.16.0
@@ -23,9 +23,9 @@ require (
 	github.com/urfave/cli v1.22.16
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/webtor-io/common-services v0.0.0-20250105173005-fe4606378dff
-	github.com/webtor-io/torrent-store v0.0.0-20241225201251-f69217d210d6
+	github.com/webtor-io/torrent-store v0.0.0-20250109201910-d25c7e2c6c96
 	go.etcd.io/bbolt v1.3.11 // indirect
-	golang.org/x/crypto v0.31.0 // indirect
+	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/time v0.9.0
 	google.golang.org/genproto v0.0.0-20250102185135-69823020774d // indirect
@@ -39,7 +39,7 @@ require (
 	github.com/go-llsqlite/adapter v0.1.0
 	github.com/prometheus/client_golang v1.20.5
 	github.com/webtor-io/lazymap v0.0.0-20241211155941-e81d935cfa1d
-	google.golang.org/protobuf v1.36.1
+	google.golang.org/protobuf v1.36.2
 )
 
 require (
@@ -133,15 +133,15 @@ require (
 	go.opentelemetry.io/otel v1.33.0 // indirect
 	go.opentelemetry.io/otel/metric v1.33.0 // indirect
 	go.opentelemetry.io/otel/trace v1.33.0 // indirect
-	golang.org/x/exp v0.0.0-20250103183323-7d7fa50e5329 // indirect
-	golang.org/x/net v0.33.0 // indirect
+	golang.org/x/exp v0.0.0-20250106191152-7588d65b2ba8 // indirect
+	golang.org/x/net v0.34.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250102185135-69823020774d // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250106144421-5f5ef82da422 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	lukechampine.com/blake3 v1.3.0 // indirect
 	mellium.im/sasl v0.3.2 // indirect
-	modernc.org/libc v1.61.6 // indirect
+	modernc.org/libc v1.61.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.8.1 // indirect
 	modernc.org/sqlite v1.34.4 // indirect
