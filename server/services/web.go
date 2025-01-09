@@ -73,7 +73,7 @@ func (s *Web) Serve() error {
 	if err != nil {
 		return nil
 	}
-	s.ln = NewBlockListener(ln, []net.IP{net.ParseIP("127.0.0.1")})
+	s.ln = ln
 
 	mux := http.NewServeMux()
 	logger := log.New()
