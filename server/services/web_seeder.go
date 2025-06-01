@@ -112,7 +112,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 
 	w, reader, err := s.getReader(w, h, p)
 	if err != nil {
-		log.Error(err)
+		log.WithError(err).Error("failed to get reader")
 		http.Error(w, "failed to get reader", http.StatusInternalServerError)
 		return
 	}
