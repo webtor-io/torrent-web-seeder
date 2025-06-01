@@ -4,6 +4,7 @@ import (
 	sqlite "github.com/go-llsqlite/adapter"
 	"github.com/go-llsqlite/adapter/sqlitex"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/urfave/cli"
@@ -50,6 +51,9 @@ func (s *FileCacheMap) get(h string, path string) (string, error) {
 		},
 		path)
 	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return "", nil
+		}
 		return "", err
 	}
 	if complete {
