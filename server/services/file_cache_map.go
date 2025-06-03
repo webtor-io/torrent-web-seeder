@@ -1,9 +1,12 @@
 package services
 
 import (
+	"crypto/sha1"
+	"fmt"
 	sqlite "github.com/go-llsqlite/adapter"
 	"github.com/go-llsqlite/adapter/sqlitex"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -57,7 +60,17 @@ func (s *FileCacheMap) get(h string, path string) (string, error) {
 		return "", err
 	}
 	if complete {
-		return dir + "/" + path, nil
+		hash := sha1.Sum([]byte(path))
+		hexHash := fmt.Sprintf("%x", hash)
+		subPath := hexHash[:2]
+		fullPath := filepath.Join(dir, "content", subPath, hexHash)
+		if _, err := os.Stat(fullPath); err == nil {
+			return fullPath, nil
+		} else if os.IsNotExist(err) {
+			return "", nil
+		} else {
+			return "", err
+		}
 	}
 	return "", nil
 }

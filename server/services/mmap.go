@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/sha1"
 	"fmt"
 	"github.com/anacrolix/missinggo/v2"
 	"github.com/edsrzf/mmap-go"
@@ -119,7 +120,10 @@ func mMapTorrent(md *metainfo.Info, location string) (mms *mmap_span.MMapSpan, e
 		if err != nil {
 			return
 		}
-		fileName := filepath.Join(location, safeName)
+		hash := sha1.Sum([]byte(safeName))
+		hexHash := fmt.Sprintf("%x", hash)
+		subPath := hexHash[:2]
+		fileName := filepath.Join(location, "content", subPath, hexHash)
 		var mm FileMapping
 		mm, err = mmapFile(fileName, miFile.Length)
 		if err != nil {
@@ -148,7 +152,7 @@ func mmapFile(name string, size int64) (_ FileMapping, err error) {
 	}
 	defer func() {
 		if err != nil {
-			file.Close()
+			_ = file.Close()
 		}
 	}()
 	var fi os.FileInfo
@@ -185,15 +189,6 @@ func mmapFile(name string, size int64) (_ FileMapping, err error) {
 		}
 		return
 	}()
-}
-
-// Combines a mmapped region and file into a storage Mmap abstraction, which handles closing the
-// mmap file handle.
-func WrapFileMapping(region mmap.MMap, file *os.File) FileMapping {
-	return mmapWithFile{
-		f:    file,
-		mmap: region,
-	}
 }
 
 type FileMapping = mmap_span.Mmap
