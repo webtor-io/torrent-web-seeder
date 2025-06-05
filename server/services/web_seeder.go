@@ -112,8 +112,16 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 
 	w, reader, err := s.getReader(w, h, p)
 	if err != nil {
-		log.WithError(err).Error("failed to get reader")
-		http.Error(w, "failed to get reader", http.StatusInternalServerError)
+		if strings.Contains(err.Error(), "PermissionDenied") {
+			logWIthField.WithError(err).Warn("permission denied")
+			http.Error(w, "permission denied", http.StatusForbidden)
+		} else if strings.Contains(err.Error(), "NotFound") {
+			logWIthField.WithError(err).Warn("not found")
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			logWIthField.WithError(err).Error("failed to get reader")
+			http.Error(w, "failed to get reader", http.StatusInternalServerError)
+		}
 		return
 	}
 	if reader == nil {

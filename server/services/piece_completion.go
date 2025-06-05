@@ -93,12 +93,12 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash) (re
 	}
 	err = sqlitex.ExecScript(db, `create table if not exists piece_completion("index", complete, unique("index"))`)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return
 	}
 	err = sqlitex.ExecScript(db, `create table if not exists file_completion("path", unique("path"))`)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return
 	}
 	pieces := make([]bool, info.NumPieces())
@@ -117,7 +117,7 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash) (re
 		},
 	)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return
 	}
 	completions := &completions{
