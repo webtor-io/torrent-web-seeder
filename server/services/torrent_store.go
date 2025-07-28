@@ -24,8 +24,9 @@ type TorrentStore struct {
 }
 
 const (
-	TorrentStoreHostFlag = "torrent-store-host"
-	TorrentStorePortFlag = "torrent-store-port"
+	TorrentStoreHostFlag   = "torrent-store-host"
+	TorrentStorePortFlag   = "torrent-store-port"
+	torrentStoreMaxMsgSize = 1024 * 1024 * 50
 )
 
 func RegisterTorrentStoreFlags(f []cli.Flag) []cli.Flag {
@@ -55,7 +56,13 @@ func NewTorrentStore(c *cli.Context) *TorrentStore {
 func (s *TorrentStore) get() (ts.TorrentStoreClient, error) {
 	log.Info("initializing TorrentStoreClient")
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(torrentStoreMaxMsgSize),
+			grpc.MaxCallSendMsgSize(torrentStoreMaxMsgSize),
+		),
+	)
 	s.conn = conn
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to dial torrent store addr=%v", addr)
