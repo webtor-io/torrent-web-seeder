@@ -3,25 +3,26 @@ package services
 import (
 	"context"
 	"crypto/sha1"
+	"errors"
 	"fmt"
-	"github.com/anacrolix/missinggo/v2"
-	"github.com/edsrzf/mmap-go"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 
+	"github.com/anacrolix/missinggo/v2"
+	"github.com/edsrzf/mmap-go"
+
 	"github.com/anacrolix/torrent/metainfo"
-	"github.com/anacrolix/torrent/mmap_span"
+	mmapSpan "github.com/anacrolix/torrent/mmap-span"
 	"github.com/anacrolix/torrent/storage"
-	"github.com/pkg/errors"
 )
 
 type mmapClientImpl struct {
 	baseDir string
 }
 
-func NewMMap(baseDir string) *mmapClientImpl {
+func NewMMap(baseDir string) storage.ClientImplCloser {
 	return &mmapClientImpl{
 		baseDir: baseDir,
 	}
@@ -38,7 +39,7 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 		span:     span,
 		pc:       pieceCompletionForDir(dir, info, infoHash),
 	}
-	return storage.TorrentImpl{Piece: t.Piece, Close: t.Close, Flush: t.Flush}, err
+	return storage.TorrentImpl{Piece: t.Piece, Close: t.Close}, err
 }
 
 func (s *mmapClientImpl) Close() error {
@@ -47,50 +48,44 @@ func (s *mmapClientImpl) Close() error {
 
 type mmapTorrentStorage struct {
 	infoHash metainfo.Hash
-	span     *mmap_span.MMapSpan
+	span     *mmapSpan.MMapSpan
 	pc       storage.PieceCompletion
 }
 
 func (ts *mmapTorrentStorage) Piece(p metainfo.Piece) storage.PieceImpl {
 	return mmapStoragePiece{
-		pc:       ts.pc,
+		t:        ts,
 		p:        p,
-		ih:       ts.infoHash,
 		ReaderAt: io.NewSectionReader(ts.span, p.Offset(), p.Length()),
 		WriterAt: missinggo.NewSectionWriter(ts.span, p.Offset(), p.Length()),
 	}
 }
 
 func (ts *mmapTorrentStorage) Close() error {
-	ts.pc.Close()
-	errs := ts.span.Close()
-	if len(errs) > 0 {
-		return errs[0]
-	}
-	return nil
-}
-func (ts *mmapTorrentStorage) Flush() error {
-	errs := ts.span.Flush()
-	if len(errs) > 0 {
-		return errs[0]
-	}
-	return nil
+	return ts.span.Close()
 }
 
 type mmapStoragePiece struct {
-	pc storage.PieceCompletionGetSetter
-	p  metainfo.Piece
-	ih metainfo.Hash
+	t *mmapTorrentStorage
+	p metainfo.Piece
 	io.ReaderAt
 	io.WriterAt
 }
 
+var _ storage.Flusher = mmapStoragePiece{}
+
+func (me mmapStoragePiece) Flush() error {
+	// TODO: Flush just the regions of the files we care about. At least this is no worse than it
+	// was previously.
+	return me.t.span.Flush()
+}
+
 func (me mmapStoragePiece) pieceKey() metainfo.PieceKey {
-	return metainfo.PieceKey{me.ih, me.p.Index()}
+	return metainfo.PieceKey{me.t.infoHash, me.p.Index()}
 }
 
 func (sp mmapStoragePiece) Completion() storage.Completion {
-	c, err := sp.pc.Get(sp.pieceKey())
+	c, err := sp.t.pc.Get(sp.pieceKey())
 	if err != nil {
 		panic(err)
 	}
@@ -98,25 +93,25 @@ func (sp mmapStoragePiece) Completion() storage.Completion {
 }
 
 func (sp mmapStoragePiece) MarkComplete() error {
-	sp.pc.Set(sp.pieceKey(), true)
-	return nil
+	return sp.t.pc.Set(sp.pieceKey(), true)
 }
 
 func (sp mmapStoragePiece) MarkNotComplete() error {
-	sp.pc.Set(sp.pieceKey(), false)
-	return nil
+	return sp.t.pc.Set(sp.pieceKey(), false)
 }
 
-func mMapTorrent(md *metainfo.Info, location string) (mms *mmap_span.MMapSpan, err error) {
-	mms = &mmap_span.MMapSpan{}
+func mMapTorrent(md *metainfo.Info, location string) (mms *mmapSpan.MMapSpan, err error) {
+	var mMaps []FileMapping
 	defer func() {
 		if err != nil {
-			mms.Close()
+			for _, mm := range mMaps {
+				err = errors.Join(err, mm.Unmap())
+			}
 		}
 	}()
 	for _, miFile := range md.UpvertedFiles() {
 		var safeName string
-		safeName, err = storage.ToSafeFilePath(append([]string{md.Name}, miFile.Path...)...)
+		safeName, err = storage.ToSafeFilePath(append([]string{md.BestName()}, miFile.BestPath()...)...)
 		if err != nil {
 			return
 		}
@@ -127,15 +122,12 @@ func mMapTorrent(md *metainfo.Info, location string) (mms *mmap_span.MMapSpan, e
 		var mm FileMapping
 		mm, err = mmapFile(fileName, miFile.Length)
 		if err != nil {
-			err = fmt.Errorf("file %q: %s", miFile.DisplayPath(md), err)
+			err = fmt.Errorf("file %q: %w", miFile.DisplayPath(md), err)
 			return
 		}
-		if mm != nil {
-			mms.Append(mm)
-		}
+		mMaps = append(mMaps, mm)
 	}
-	mms.InitIndex()
-	return
+	return mmapSpan.New(mMaps, md.FileSegmentsIndex()), nil
 }
 
 func mmapFile(name string, size int64) (_ FileMapping, err error) {
@@ -146,7 +138,7 @@ func mmapFile(name string, size int64) (_ FileMapping, err error) {
 		return
 	}
 	var file *os.File
-	file, err = os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o666)
+	file, err = os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return
 	}
@@ -191,7 +183,16 @@ func mmapFile(name string, size int64) (_ FileMapping, err error) {
 	}()
 }
 
-type FileMapping = mmap_span.Mmap
+// Combines a mmapped region and file into a storage Mmap abstraction, which handles closing the
+// mmap file handle.
+func WrapFileMapping(region mmap.MMap, file *os.File) FileMapping {
+	return mmapWithFile{
+		f:    file,
+		mmap: region,
+	}
+}
+
+type FileMapping = mmapSpan.Mmap
 
 // Handles closing the mmap's file handle (needed for Windows). Could be implemented differently by
 // OS.
