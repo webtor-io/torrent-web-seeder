@@ -72,8 +72,6 @@ type mmapStoragePiece struct {
 	io.WriterAt
 }
 
-var _ storage.Flusher = mmapStoragePiece{}
-
 func (me mmapStoragePiece) Flush() error {
 	// TODO: Flush just the regions of the files we care about. At least this is no worse than it
 	// was previously.
