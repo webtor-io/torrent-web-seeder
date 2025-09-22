@@ -100,6 +100,8 @@ github.com/anacrolix/torrent v1.59.1 h1:Z8wyvYc42EIm5OR7TsnKoFp6t4T7y1OIUoBgwsid
 github.com/anacrolix/torrent v1.59.1/go.mod h1:4yT/cQCiAk4/hL3kZawq/dUUgND8FWIcolYlfnQ4P9M=
 github.com/anacrolix/torrent v1.59.2-0.20250903105451-d922d78d2e61 h1:86zuTAMse1rzLq6hSGHad8gdZ0I4JRhFUuvZggvByMQ=
 github.com/anacrolix/torrent v1.59.2-0.20250903105451-d922d78d2e61/go.mod h1:6hGL5nOAk4j0zrPqyZ7GKYIkRPgehXFE9N8N6rAatQI=
+github.com/anacrolix/torrent v1.59.2-0.20250922075737-156da1b60830 h1:nE1mqXz937/t61KRifIWf0+2PMhHd3d7hq82Ct8qG7Q=
+github.com/anacrolix/torrent v1.59.2-0.20250922075737-156da1b60830/go.mod h1:6hGL5nOAk4j0zrPqyZ7GKYIkRPgehXFE9N8N6rAatQI=
 github.com/anacrolix/upnp v0.1.4 h1:+2t2KA6QOhm/49zeNyeVwDu1ZYS9dB9wfxyVvh/wk7U=
 github.com/anacrolix/upnp v0.1.4/go.mod h1:Qyhbqo69gwNWvEk1xNTXsS5j7hMHef9hdr984+9fIic=
 github.com/anacrolix/utp v0.2.0 h1:65Cdmr6q9WSw2KsM+rtJFu7rqDzLl2bdysf4KlNPcFI=
@@ -792,6 +794,8 @@ modernc.org/libc v1.66.7 h1:rjhZ8OSCybKWxS1CJr0hikpEi6Vg+944Ouyrd+bQsoY=
 modernc.org/libc v1.66.7/go.mod h1:ln6tbWX0NH+mzApEoDRvilBvAWFt1HX7AUA4VDdVDPM=
 modernc.org/libc v1.66.8 h1:/awsvTnyN/sNjvJm6S3lb7KZw5WV4ly/sBEG7ZUzmIE=
 modernc.org/libc v1.66.8/go.mod h1:aVdcY7udcawRqauu0HukYYxtBSizV+R80n/6aQe9D5k=
+modernc.org/libc v1.66.9 h1:YkHp7E1EWrN2iyNav7JE/nHasmshPvlGkon1VxGqOw0=
+modernc.org/libc v1.66.9/go.mod h1:aVdcY7udcawRqauu0HukYYxtBSizV+R80n/6aQe9D5k=
 modernc.org/mathutil v1.7.1 h1:GCZVGXdaN8gTqB1Mf/usp1Y/hSqgI2vAGGP4jZMCxOU=
 modernc.org/mathutil v1.7.1/go.mod h1:4p5IwJITfppl0G4sUEDtCr4DthTaT47/N3aT6MhfgJg=
 modernc.org/memory v1.11.0 h1:o4QC8aMQzmcwCK3t3Ux/ZHmwFPzE6hf2Y5LbkRs+hbI=

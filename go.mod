@@ -31,7 +31,7 @@ require (
 
 require (
 	github.com/anacrolix/missinggo/v2 v2.10.0
-	github.com/anacrolix/torrent v1.59.2-0.20250903105451-d922d78d2e61
+	github.com/anacrolix/torrent v1.59.2-0.20250922075737-156da1b60830
 	github.com/edsrzf/mmap-go v1.2.0
 	github.com/go-llsqlite/adapter v0.2.0
 	github.com/prometheus/client_golang v1.23.2
@@ -126,7 +126,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250908214217-97024824d090 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mellium.im/sasl v0.3.2 // indirect
-	modernc.org/libc v1.66.8 // indirect
+	modernc.org/libc v1.66.9 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.39.0 // indirect
