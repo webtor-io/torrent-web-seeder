@@ -3,7 +3,7 @@ module github.com/webtor-io/torrent-web-seeder
 go 1.25.0
 
 require (
-	code.cloudfoundry.org/bytefmt v0.51.0
+	code.cloudfoundry.org/bytefmt v0.53.0
 	github.com/RoaringBitmap/roaring v1.9.4 // indirect
 	github.com/anacrolix/chansync v0.7.0 // indirect
 	github.com/anacrolix/log v0.17.0
@@ -31,12 +31,12 @@ require (
 
 require (
 	github.com/anacrolix/missinggo/v2 v2.10.0
-	github.com/anacrolix/torrent v1.59.2-0.20250922075737-156da1b60830
+	github.com/anacrolix/torrent v1.59.2-0.20250925080637-414bd5781457
 	github.com/edsrzf/mmap-go v1.2.0
 	github.com/go-llsqlite/adapter v0.2.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108
-	google.golang.org/protobuf v1.36.9
+	google.golang.org/protobuf v1.36.10
 )
 
 require (
@@ -86,7 +86,7 @@ require (
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v3 v3.0.7 // indirect
 	github.com/pion/ice/v4 v4.0.10 // indirect
-	github.com/pion/interceptor v0.1.40 // indirect
+	github.com/pion/interceptor v0.1.41 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.0.7 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
@@ -94,9 +94,9 @@ require (
 	github.com/pion/rtp v1.8.22 // indirect
 	github.com/pion/sctp v1.8.39 // indirect
 	github.com/pion/sdp/v3 v3.0.16 // indirect
-	github.com/pion/srtp/v3 v3.0.7 // indirect
+	github.com/pion/srtp/v3 v3.0.8 // indirect
 	github.com/pion/stun/v3 v3.0.0 // indirect
-	github.com/pion/transport/v3 v3.0.7 // indirect
+	github.com/pion/transport/v3 v3.0.8 // indirect
 	github.com/pion/turn/v4 v4.1.1 // indirect
 	github.com/pion/webrtc/v4 v4.1.4 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -119,14 +119,14 @@ require (
 	go.opentelemetry.io/otel/metric v1.38.0 // indirect
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	golang.org/x/exp v0.0.0-20250911091902-df9299821621 // indirect
+	golang.org/x/exp v0.0.0-20251002181428-27f1f14c8bb9 // indirect
 	golang.org/x/net v0.44.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250908214217-97024824d090 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251002232023-7c0ddcbb5797 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mellium.im/sasl v0.3.2 // indirect
-	modernc.org/libc v1.66.9 // indirect
+	modernc.org/libc v1.66.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.39.0 // indirect

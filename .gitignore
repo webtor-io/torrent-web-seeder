@@ -15,6 +15,7 @@
 tmp
 
 server/data*
+server/webtor
 
 server/server
 client/client

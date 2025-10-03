@@ -3,12 +3,13 @@ package services
 import (
 	"crypto/sha1"
 	"fmt"
-	"github.com/pkg/errors"
 	"os"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/pkg/errors"
 )
 
 const (
@@ -42,14 +43,19 @@ func GetDir(location string, hash string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		dirs := []string{}
+		var dirs []string
 		for _, f := range files {
 			if f.IsDir() && strings.HasPrefix(f.Name(), lp) {
 				dirs = append(dirs, f.Name())
 			}
 		}
 		if len(dirs) == 0 {
-			return prefix + string(os.PathSeparator) + hash, nil
+			p := prefix + "1"
+			err := os.MkdirAll(p, 0755)
+			if err != nil {
+				return "", err
+			}
+			return p + string(os.PathSeparator) + hash, nil
 		} else if len(dirs) == 1 {
 			return dir + dirs[0] + string(os.PathSeparator) + hash, nil
 		} else {
