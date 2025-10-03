@@ -3,6 +3,7 @@ package services
 import (
 	"crypto/sha1"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"sort"
@@ -45,7 +46,7 @@ func GetDir(location string, hash string) (string, error) {
 		}
 		var dirs []string
 		for _, f := range files {
-			if f.IsDir() && strings.HasPrefix(f.Name(), lp) {
+			if (f.IsDir() || f.Type() == fs.ModeSymlink) && strings.HasPrefix(f.Name(), lp) {
 				dirs = append(dirs, f.Name())
 			}
 		}
