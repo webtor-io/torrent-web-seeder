@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
 
 	log "github.com/sirupsen/logrus"
@@ -178,6 +180,7 @@ func (s *WebSeeder) getTorrentReader(w http.ResponseWriter, h string, p string) 
 		if f.Path() == p {
 			torReader := f.NewReader()
 			torReader.SetResponsive()
+			torReader.SetReadaheadFunc(NewReadaheadFunc(t, f))
 			return NewTouchWriter(w, s.tm, h), torReader, nil
 		}
 	}
@@ -263,5 +266,28 @@ func (s *WebSeeder) serveDone(w http.ResponseWriter, r *http.Request, h string, 
 		return
 	} else {
 		http.NotFound(w, r)
+	}
+}
+
+func NewReadaheadFunc(_ *torrent.Torrent, f *torrent.File) torrent.ReadaheadFunc {
+	base := float64(10 * 1024 * 1024)
+	minimal := base
+	fileSize := float64(f.Length())
+	scale := 0.1
+	m := float64(3)
+	if fileSize*scale > base {
+		c := math.Log10(fileSize/base) * m
+		minimal = minimal * c
+	}
+	return func(ctx torrent.ReadaheadContext) int64 {
+		var boost float64
+		d := float64(ctx.CurrentPos - ctx.ContiguousReadStartPos)
+		if d <= base {
+			boost = d
+		} else {
+			boost = base * math.Log10(d/base/scale)
+		}
+		readahead := int64(minimal + boost)
+		return readahead
 	}
 }

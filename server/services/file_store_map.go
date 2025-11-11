@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/anacrolix/torrent/metainfo"
+	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
 
@@ -64,7 +65,8 @@ func (s *FileStoreMap) loadFiles() (map[string]*metainfo.MetaInfo, error) {
 			if !f.IsDir() && strings.HasSuffix(f.Name(), ".torrent") {
 				mi, err := metainfo.LoadFromFile(path + "/" + f.Name())
 				if err != nil {
-					return nil, err
+					log.WithError(err).Error("failed to load torrent")
+					continue
 				}
 				m[mi.HashInfoBytes().HexString()] = mi
 			}
