@@ -1,10 +1,12 @@
 package services
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
+	"context"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/anacrolix/torrent"
 	log "github.com/sirupsen/logrus"
@@ -42,15 +44,17 @@ type TorrentMap struct {
 	timers map[string]*time.Timer
 	ttl    time.Duration
 	mux    sync.Mutex
+	v      *Vault
 }
 
-func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap) *TorrentMap {
+func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap, vault *Vault) *TorrentMap {
 	return &TorrentMap{
 		tc:     tc,
 		tsm:    tsm,
 		fsm:    fsm,
 		timers: map[string]*time.Timer{},
 		ttl:    time.Duration(600) * time.Second,
+		v:      vault,
 	}
 }
 
@@ -63,7 +67,7 @@ func (s *TorrentMap) Touch(h string) {
 	}
 }
 
-func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
+func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	cl, err := s.tc.Get()
@@ -88,6 +92,15 @@ func (s *TorrentMap) Get(h string) (*torrent.Torrent, error) {
 	t, err = cl.AddTorrent(mi)
 	if err != nil {
 		return nil, err
+	}
+	if s.v != nil {
+		wsURL, err := s.v.GetWebseedURL(ctx, h)
+		if err != nil {
+			log.WithError(err).Errorf("failed to get webseed url for %s", h)
+		} else {
+			log.Infof("adding webseed %s for %s", wsURL, h)
+			t.AddWebSeeds([]string{wsURL})
+		}
 	}
 	ti, ok := s.timers[h]
 	if ok {

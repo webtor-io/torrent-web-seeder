@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 	cs "github.com/webtor-io/common-services"
@@ -17,6 +19,7 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterTorrentStoreFlags(app.Flags)
 	app.Flags = s.RegisterFileStoreFlags(app.Flags)
 	app.Flags = s.RegisterStatFlags(app.Flags)
+	app.Flags = s.RegisterVaultFlags(app.Flags)
 	// app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
 }
@@ -34,6 +37,12 @@ func run(c *cli.Context) error {
 	}
 	defer torrentClient.Close()
 
+	// Setting HTTPClient
+	cl := http.DefaultClient
+
+	// Setting Vault
+	vault := s.NewVault(c, cl)
+
 	// Setting TorrentStoreMap
 	torrentStoreMap := s.NewTorrentStoreMap(torrentStore)
 
@@ -44,7 +53,7 @@ func run(c *cli.Context) error {
 	touchMap := s.NewTouchMap(c)
 
 	// Setting TorrentMap
-	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap)
+	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap, vault)
 
 	// Setting Stat
 	stat := s.NewStat(torrentMap)

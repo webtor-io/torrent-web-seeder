@@ -34,6 +34,7 @@ type TorrentClient struct {
 	halfOpenConnsPerTorrent    int
 	torrentPeersHighWater      int
 	torrentPeersLowWater       int
+	debug                      bool
 }
 
 const (
@@ -48,6 +49,7 @@ const (
 	HalfOpenConnsPerTorrentFlag    = "half-open-conns-per-torrent"
 	TorrentPeersHighWaterFlag      = "torrent-peers-high-water"
 	TorrentPeersLowWaterFlag       = "torrent-peers-low-water"
+	Debug                          = "debug"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -116,6 +118,11 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Usage:  "torrent peers low water",
 			EnvVar: "TORRENT_PEERS_LOW_WATER",
 		},
+		cli.BoolFlag{
+			Name:   Debug,
+			Usage:  "debug",
+			EnvVar: "DEBUG",
+		},
 	)
 }
 
@@ -142,6 +149,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		torrentPeersLowWater:       c.Int(TorrentPeersLowWaterFlag),
 		noUpload:                   c.Bool(NoUploadFlag),
 		seed:                       c.Bool(SeedFlag),
+		debug:                      c.Bool(Debug),
 	}, nil
 }
 
@@ -150,7 +158,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg := torrent.NewDefaultClientConfig()
 	// cfg.DisableIPv6 = true
 	cfg.Logger = tlog.Default.WithNames("main", "client")
-	// cfg.Debug = true
+	cfg.Debug = s.debug
 	cfg.DefaultStorage = NewMMap(s.dataDir)
 	if s.ua != "" {
 		cfg.HTTPUserAgent = s.ua

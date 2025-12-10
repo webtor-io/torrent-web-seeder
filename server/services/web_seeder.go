@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/sha1"
 	"fmt"
 	"io"
@@ -41,10 +42,10 @@ func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tom *TouchMap, st *StatWeb)
 	}
 }
 
-func (s *WebSeeder) renderTorrent(w http.ResponseWriter, h string) {
+func (s *WebSeeder) renderTorrent(ctx context.Context, w http.ResponseWriter, h string) {
 	log.Info("serve torrent")
 
-	t, err := s.tm.Get(h)
+	t, err := s.tm.Get(ctx, h)
 
 	if err != nil {
 		log.Error(err)
@@ -80,7 +81,7 @@ func (s *WebSeeder) addH(h string, w http.ResponseWriter) {
 func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h string) {
 	log.Info("Serve file index")
 
-	t, err := s.tm.Get(h)
+	t, err := s.tm.Get(r.Context(), h)
 
 	if err != nil {
 		log.Error(err)
@@ -112,7 +113,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		"range":      r.Header.Get("Range"),
 	})
 
-	w, reader, err := s.getReader(w, h, p)
+	w, reader, err := s.getReader(r.Context(), w, h, p)
 	if err != nil {
 		if strings.Contains(err.Error(), "PermissionDenied") {
 			logWIthField.WithError(err).Warn("permission denied")
@@ -149,7 +150,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	http.ServeContent(w, r, p, time.Unix(0, 0), reader)
 }
 
-func (s *WebSeeder) getReader(w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
+func (s *WebSeeder) getReader(ctx context.Context, w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
 	cp, err := s.fcm.Get(h, p)
 	if err != nil {
 		return nil, nil, err
@@ -159,7 +160,7 @@ func (s *WebSeeder) getReader(w http.ResponseWriter, h string, p string) (http.R
 		return s.openCachedFile(w, cp)
 	}
 
-	return s.getTorrentReader(w, h, p)
+	return s.getTorrentReader(ctx, w, h, p)
 }
 
 func (s *WebSeeder) openCachedFile(w http.ResponseWriter, cp string) (http.ResponseWriter, io.ReadSeekCloser, error) {
@@ -170,8 +171,8 @@ func (s *WebSeeder) openCachedFile(w http.ResponseWriter, cp string) (http.Respo
 	return w, file, nil
 }
 
-func (s *WebSeeder) getTorrentReader(w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
-	t, err := s.tm.Get(h)
+func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
+	t, err := s.tm.Get(ctx, h)
 	if err != nil {
 		return w, nil, err
 	}
@@ -244,7 +245,7 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p == "" {
 			s.renderTorrentIndex(w, r, h)
 		} else if p == SourceTorrentPath {
-			s.renderTorrent(w, s.getHash(r))
+			s.renderTorrent(r.Context(), w, s.getHash(r))
 		} else if _, ok := r.URL.Query()["stats"]; ok {
 			s.serveStats(w, r, h, p)
 		} else if _, ok := r.URL.Query()["done"]; ok {

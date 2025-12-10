@@ -116,7 +116,7 @@ func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, err
 		return nil, errors.Errorf("No info-hash provided")
 	}
 	h := md.Get("info-hash")[0]
-	t, err := s.tm.Get(h)
+	t, err := s.tm.Get(ctx, h)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 		return errors.Errorf("no info-hash provided")
 	}
 	h := md.Get("info-hash")[0]
-	t, err := s.tm.Get(h)
+	t, err := s.tm.Get(stream.Context(), h)
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func (s *Stat) Files(ctx context.Context, _ *pb.FilesRequest) (*pb.FilesReply, e
 		return nil, errors.Errorf("no info-hash provided")
 	}
 	h := md.Get("info-hash")[0]
-	t, err := s.tm.Get(h)
+	t, err := s.tm.Get(ctx, h)
 	if err != nil {
 		return nil, err
 	}
