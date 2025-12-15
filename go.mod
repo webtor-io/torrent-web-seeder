@@ -31,7 +31,7 @@ require (
 
 require (
 	github.com/anacrolix/missinggo/v2 v2.10.0
-	github.com/anacrolix/torrent v1.60.1-0.20251211072636-e5b675eaffd2
+	github.com/anacrolix/torrent v1.60.1-0.20250925080637-414bd5781457
 	github.com/edsrzf/mmap-go v1.2.0
 	github.com/go-llsqlite/adapter v0.2.0
 	github.com/prometheus/client_golang v1.23.2
@@ -40,6 +40,7 @@ require (
 )
 
 require (
+	github.com/ajwerner/btree v0.0.0-20211221152037-f427b3e689c0 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
 	github.com/anacrolix/dht/v2 v2.23.0 // indirect
