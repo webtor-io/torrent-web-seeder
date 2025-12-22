@@ -97,6 +97,8 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 		wsURL, err := s.v.GetWebseedURL(ctx, h)
 		if err != nil {
 			log.WithError(err).Errorf("failed to get webseed url for %s", h)
+		} else if wsURL == "" {
+			log.Warnf("no webseed url for %s", h)
 		} else {
 			log.Infof("adding webseed %s for %s", wsURL, h)
 			t.AddWebSeeds([]string{wsURL})
