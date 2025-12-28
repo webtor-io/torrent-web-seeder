@@ -35,6 +35,7 @@ type TorrentClient struct {
 	torrentPeersHighWater      int
 	torrentPeersLowWater       int
 	debug                      bool
+	maxUnverifiedBytes         int64
 }
 
 const (
@@ -50,6 +51,7 @@ const (
 	TorrentPeersHighWaterFlag      = "torrent-peers-high-water"
 	TorrentPeersLowWaterFlag       = "torrent-peers-low-water"
 	Debug                          = "debug"
+	MaxUnverifiedBytes             = "max-unverified-bytes"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -123,6 +125,12 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Usage:  "debug",
 			EnvVar: "DEBUG",
 		},
+		cli.StringFlag{
+			Name:   MaxUnverifiedBytes,
+			Usage:  "max unverified bytes",
+			Value:  "",
+			EnvVar: "MAX_UNVERIFIED_BYTES",
+		},
 	)
 }
 
@@ -135,6 +143,14 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 
 		}
 		dr = int64(drp)
+	}
+	ub := int64(-1)
+	if c.String(MaxUnverifiedBytes) != "" {
+		uub, err := bytefmt.ToBytes(c.String(MaxUnverifiedBytes))
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to parse max unverified bytes flag")
+		}
+		ub = int64(uub)
 	}
 	return &TorrentClient{
 		rLimit:                     dr,
@@ -149,6 +165,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		torrentPeersLowWater:       c.Int(TorrentPeersLowWaterFlag),
 		noUpload:                   c.Bool(NoUploadFlag),
 		seed:                       c.Bool(SeedFlag),
+		maxUnverifiedBytes:         ub,
 		debug:                      c.Bool(Debug),
 	}, nil
 }
@@ -188,6 +205,9 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	}
 	if s.rLimit != -1 {
 		cfg.DownloadRateLimiter = rate.NewLimiter(rate.Limit(s.rLimit), int(s.rLimit))
+	}
+	if s.maxUnverifiedBytes != -1 {
+		cfg.MaxUnverifiedBytes = s.maxUnverifiedBytes
 	}
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
