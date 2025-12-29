@@ -37,7 +37,7 @@ var (
 	promTimeToFirstPeerMs = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "torrent_web_seeder_time_to_first_peer_ms",
 		Help:    "Time to first peer in milliseconds",
-		Buckets: prometheus.ExponentialBuckets(100, 2, 10),
+		Buckets: prometheus.ExponentialBuckets(50, 1.5, 20),
 	})
 	promHandshakeSuccess = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "torrent_web_seeder_handshake_success_total",
