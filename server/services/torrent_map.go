@@ -95,7 +95,7 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 	}
 	startTime := time.Now()
 	go func() {
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(time.Millisecond * 100)
 		defer ticker.Stop()
 		for {
 			select {
