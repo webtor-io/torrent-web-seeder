@@ -37,6 +37,12 @@ type TorrentClient struct {
 	debug                      bool
 	maxUnverifiedBytes         int64
 	totalHalfOpenConns         int
+	minDialTimeout             time.Duration
+	nominalDialTimeout         time.Duration
+	handshakeTimeout           time.Duration
+	keepAliveTimeout           time.Duration
+	pieceHashersPerTorrent     int
+	dialRateLimit              int
 }
 
 const (
@@ -54,6 +60,12 @@ const (
 	Debug                          = "debug"
 	MaxUnverifiedBytesFlag         = "max-unverified-bytes"
 	TotalHalfOpenConnsFlag         = "total-half-open-conns"
+	MinDialTimeoutFlag             = "min-dial-timeout"
+	NominalDialTimeoutFlag         = "nominal-dial-timeout"
+	HandshakeTimeoutFlag           = "handshake-timeout"
+	KeepAliveTimeoutFlag           = "keep-alive-timeout"
+	PieceHashersPerTorrentFlag     = "piece-hashers-per-torrent"
+	DialRateLimitFlag              = "dial-rate-limit"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -138,6 +150,36 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Usage:  "total half open conns",
 			EnvVar: "TOTAL_HALF_OPEN_CONNS",
 		},
+		cli.DurationFlag{
+			Name:   MinDialTimeoutFlag,
+			Usage:  "min dial timeout",
+			EnvVar: "MIN_DIAL_TIMEOUT",
+		},
+		cli.DurationFlag{
+			Name:   NominalDialTimeoutFlag,
+			Usage:  "nominal dial timeout",
+			EnvVar: "NOMINAL_DIAL_TIMEOUT",
+		},
+		cli.DurationFlag{
+			Name:   HandshakeTimeoutFlag,
+			Usage:  "handshake timeout",
+			EnvVar: "HANDSHAKE_TIMEOUT",
+		},
+		cli.DurationFlag{
+			Name:   KeepAliveTimeoutFlag,
+			Usage:  "keep alive timeout",
+			EnvVar: "KEEP_ALIVE_TIMEOUT",
+		},
+		cli.IntFlag{
+			Name:   PieceHashersPerTorrentFlag,
+			Usage:  "piece hashers per torrent",
+			EnvVar: "PIECE_HASHERS_PER_TORRENT",
+		},
+		cli.IntFlag{
+			Name:   DialRateLimitFlag,
+			Usage:  "dial rate limit",
+			EnvVar: "DIAL_RATE_LIMIT",
+		},
 	)
 }
 
@@ -175,6 +217,12 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		seed:                       c.Bool(SeedFlag),
 		maxUnverifiedBytes:         ub,
 		debug:                      c.Bool(Debug),
+		minDialTimeout:             c.Duration(MinDialTimeoutFlag),
+		nominalDialTimeout:         c.Duration(NominalDialTimeoutFlag),
+		handshakeTimeout:           c.Duration(HandshakeTimeoutFlag),
+		keepAliveTimeout:           c.Duration(KeepAliveTimeoutFlag),
+		pieceHashersPerTorrent:     c.Int(PieceHashersPerTorrentFlag),
+		dialRateLimit:              c.Int(DialRateLimitFlag),
 	}, nil
 }
 
@@ -219,6 +267,24 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	}
 	if s.maxUnverifiedBytes != -1 {
 		cfg.MaxUnverifiedBytes = s.maxUnverifiedBytes
+	}
+	if s.dialRateLimit != 0 {
+		cfg.DialRateLimiter = rate.NewLimiter(rate.Limit(s.dialRateLimit), s.dialRateLimit)
+	}
+	if s.nominalDialTimeout != 0 {
+		cfg.NominalDialTimeout = s.nominalDialTimeout
+	}
+	if s.minDialTimeout != 0 {
+		cfg.MinDialTimeout = s.minDialTimeout
+	}
+	if s.handshakeTimeout != 0 {
+		cfg.HandshakesTimeout = s.handshakeTimeout
+	}
+	if s.keepAliveTimeout != 0 {
+		cfg.KeepAliveTimeout = s.keepAliveTimeout
+	}
+	if s.pieceHashersPerTorrent != 0 {
+		cfg.PieceHashersPerTorrent = s.pieceHashersPerTorrent
 	}
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
