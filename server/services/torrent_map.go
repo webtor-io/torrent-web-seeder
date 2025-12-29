@@ -93,6 +93,24 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 	if err != nil {
 		return nil, err
 	}
+	startTime := time.Now()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.Closed():
+				return
+			case <-ticker.C:
+				if t.Stats().ActivePeers > 0 {
+					promTimeToFirstPeerMs.Observe(float64(time.Since(startTime).Milliseconds()))
+					return
+				}
+			}
+		}
+	}()
 	if s.v != nil {
 		wsURL, err := s.v.GetWebseedURL(ctx, h)
 		if err != nil {

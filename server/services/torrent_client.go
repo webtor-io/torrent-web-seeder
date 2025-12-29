@@ -1,9 +1,12 @@
 package services
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,11 +14,97 @@ import (
 	tlog "github.com/anacrolix/log"
 	"github.com/anacrolix/torrent"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 
 	"golang.org/x/time/rate"
 )
+
+var (
+	promDialAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "torrent_web_seeder_dial_attempts_total",
+		Help: "Total number of dial attempts",
+	}, []string{"type"})
+	promDialFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "torrent_web_seeder_dial_failures_total",
+		Help: "Total number of dial failures",
+	}, []string{"type", "err"})
+	promDialSuccess = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "torrent_web_seeder_dial_success_total",
+		Help: "Total number of dial successes",
+	}, []string{"type"})
+	promTimeToFirstPeerMs = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "torrent_web_seeder_time_to_first_peer_ms",
+		Help:    "Time to first peer in milliseconds",
+		Buckets: prometheus.ExponentialBuckets(100, 2, 10),
+	})
+	promHandshakeSuccess = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "torrent_web_seeder_handshake_success_total",
+		Help: "Total number of successful handshakes",
+	})
+	promEstablishedConns = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "torrent_web_seeder_established_connections",
+		Help: "Total number of established connections",
+	})
+	promHalfOpenConns = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "torrent_web_seeder_half_open_connections",
+		Help: "Total number of half-open connections",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(promDialAttempts)
+	prometheus.MustRegister(promDialFailures)
+	prometheus.MustRegister(promDialSuccess)
+	prometheus.MustRegister(promTimeToFirstPeerMs)
+	prometheus.MustRegister(promHandshakeSuccess)
+	prometheus.MustRegister(promEstablishedConns)
+	prometheus.MustRegister(promHalfOpenConns)
+}
+
+type metricsDialer struct {
+	network string
+	dialer  torrent.Dialer
+}
+
+func (m *metricsDialer) Dial(ctx context.Context, addr string) (net.Conn, error) {
+	promDialAttempts.WithLabelValues("peer").Inc()
+	conn, err := m.dialer.Dial(ctx, addr)
+	if err != nil {
+		promDialFailures.WithLabelValues("peer", categorizeError(err)).Inc()
+	} else {
+		promDialSuccess.WithLabelValues("peer").Inc()
+	}
+	return conn, err
+}
+
+func categorizeError(err error) string {
+	if err == nil {
+		return "none"
+	}
+	if os.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) || (errors.Unwrap(err) != nil && errors.Is(errors.Unwrap(err), context.DeadlineExceeded)) {
+		return "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	errStr := err.Error()
+	if strings.Contains(errStr, "connection refused") {
+		return "connection_refused"
+	}
+	if strings.Contains(errStr, "connection reset by peer") {
+		return "connection_reset"
+	}
+	if strings.Contains(errStr, "no such host") {
+		return "no_such_host"
+	}
+	return "other"
+}
+
+func (m *metricsDialer) DialerNetwork() string {
+	return m.network
+}
 
 type TorrentClient struct {
 	cl                         *torrent.Client
@@ -286,26 +375,73 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	if s.pieceHashersPerTorrent != 0 {
 		cfg.PieceHashersPerTorrent = s.pieceHashersPerTorrent
 	}
+	cfg.Callbacks.CompletedHandshake = func(pc *torrent.PeerConn, ih torrent.InfoHash) {
+		promHandshakeSuccess.Inc()
+	}
+	cfg.HTTPDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		promDialAttempts.WithLabelValues("http").Inc()
+		d := net.Dialer{}
+		conn, err := d.DialContext(ctx, network, addr)
+		if err != nil {
+			promDialFailures.WithLabelValues("http", categorizeError(err)).Inc()
+		} else {
+			promDialSuccess.WithLabelValues("http").Inc()
+		}
+		return conn, err
+	}
+	cfg.TrackerDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		promDialAttempts.WithLabelValues("tracker").Inc()
+		d := net.Dialer{}
+		conn, err := d.DialContext(ctx, network, addr)
+		if err != nil {
+			promDialFailures.WithLabelValues("tracker", categorizeError(err)).Inc()
+		} else {
+			promDialSuccess.WithLabelValues("tracker").Inc()
+		}
+		return conn, err
+	}
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create new torrent client")
 	}
+	cl.AddDialer(&metricsDialer{
+		network: "tcp",
+		dialer:  torrent.NetworkDialer{Network: "tcp", Dialer: *torrent.DefaultNetDialer},
+	})
+	cl.AddDialer(&metricsDialer{
+		network: "udp",
+		dialer:  torrent.NetworkDialer{Network: "udp", Dialer: *torrent.DefaultNetDialer},
+	})
 	log.Infof("TorrentClient started")
 	ticker := time.NewTicker(60 * time.Second)
+	metricsTicker := time.NewTicker(time.Second)
 	go func() {
+		defer metricsTicker.Stop()
+		defer ticker.Stop()
 		for {
-			<-ticker.C
-			if len(cl.Torrents()) != 0 {
-				continue
+			select {
+			case <-cl.Closed():
+				return
+			case <-metricsTicker.C:
+				stats := cl.Stats()
+				promEstablishedConns.Set(float64(stats.ActivePeers))
+				promHalfOpenConns.Set(float64(stats.ActiveHalfOpenAttempts))
+			case <-ticker.C:
+				if len(cl.Torrents()) != 0 {
+					continue
+				}
+				s.mux.Lock()
+				if s.cl != cl {
+					s.mux.Unlock()
+					return
+				}
+				s.cl.Close()
+				s.cl = nil
+				s.inited = false
+				s.mux.Unlock()
+				log.Infof("closing TorrentClient")
+				return
 			}
-			s.mux.Lock()
-			defer s.mux.Unlock()
-			s.cl.Close()
-			s.cl = nil
-			s.inited = false
-			ticker.Stop()
-			log.Infof("closing TorrentClient")
-			return
 		}
 	}()
 	return cl, nil
