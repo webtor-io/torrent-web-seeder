@@ -31,10 +31,49 @@ var (
 		Name: "torrent_web_seeder_active_torrents_count",
 		Help: "Web Seeder active torrents count",
 	})
+	promTimeToFirstPeerMs = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "torrent_web_seeder_time_to_first_peer_ms",
+		Help:    "Time to first peer in milliseconds",
+		Buckets: prometheus.ExponentialBuckets(50, 1.5, 20),
+	})
+	promTimeTo10PeersMs = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "torrent_web_seeder_time_to_10_peers_ms",
+		Help:    "Time to 10 peers in milliseconds",
+		Buckets: prometheus.ExponentialBuckets(50, 1.5, 20),
+	})
+	promTimeTo30PeersMs = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "torrent_web_seeder_time_to_30_peers_ms",
+		Help:    "Time to 30 peers in milliseconds",
+		Buckets: prometheus.ExponentialBuckets(50, 1.5, 20),
+	})
+	promTimeToFirstByteMs = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "torrent_web_seeder_time_to_first_byte_ms",
+		Help:    "Time to first byte in milliseconds",
+		Buckets: prometheus.ExponentialBuckets(50, 1.5, 20),
+	})
+	promStallDiscoverySeconds = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "torrent_web_seeder_stall_discovery_seconds_total",
+		Help: "Total number of seconds when there was no data transferred and no active peers",
+	})
+	promStallIdleSeconds = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "torrent_web_seeder_stall_idle_seconds_total",
+		Help: "Total number of seconds when there was no data transferred and at least one active peer, but no data received yet",
+	})
+	promStallDownloadSeconds = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "torrent_web_seeder_stall_download_seconds_total",
+		Help: "Total number of seconds when there was no data transferred and data was already received",
+	})
 )
 
 func init() {
 	prometheus.MustRegister(promActiveTorrentCount)
+	prometheus.MustRegister(promTimeToFirstPeerMs)
+	prometheus.MustRegister(promTimeTo10PeersMs)
+	prometheus.MustRegister(promTimeTo30PeersMs)
+	prometheus.MustRegister(promTimeToFirstByteMs)
+	prometheus.MustRegister(promStallDiscoverySeconds)
+	prometheus.MustRegister(promStallIdleSeconds)
+	prometheus.MustRegister(promStallDownloadSeconds)
 }
 
 type TorrentMap struct {
@@ -95,8 +134,14 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 	}
 	startTime := time.Now()
 	go func() {
-		ticker := time.NewTicker(time.Millisecond * 50)
+		const tickDuration = time.Millisecond * 50
+		ticker := time.NewTicker(tickDuration)
 		defer ticker.Stop()
+		firstPeerRecorded := false
+		tenPeersRecorded := false
+		thirtyPeersRecorded := false
+		firstByteRecorded := false
+		var lastBytesRead int64
 		for {
 			select {
 			case <-ctx.Done():
@@ -104,9 +149,41 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 			case <-t.Closed():
 				return
 			case <-ticker.C:
-				if t.Stats().ActivePeers > 0 {
+				stats := t.Stats()
+				activePeers := stats.ActivePeers
+				bytesRead := stats.ConnStats.BytesRead.Int64()
+				if bytesRead == lastBytesRead {
+					if activePeers == 0 {
+						promStallDiscoverySeconds.Add(tickDuration.Seconds())
+					} else if !firstByteRecorded {
+						promStallIdleSeconds.Add(tickDuration.Seconds())
+					} else {
+						promStallDownloadSeconds.Add(tickDuration.Seconds())
+					}
+				}
+				lastBytesRead = bytesRead
+				if !firstPeerRecorded && activePeers > 0 {
 					promTimeToFirstPeerMs.Observe(float64(time.Since(startTime).Milliseconds()))
-					return
+					firstPeerRecorded = true
+				}
+				if !tenPeersRecorded && activePeers >= 10 {
+					promTimeTo10PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
+					tenPeersRecorded = true
+				}
+				if !thirtyPeersRecorded && activePeers >= 30 {
+					promTimeTo30PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
+					thirtyPeersRecorded = true
+				}
+				if !firstByteRecorded && stats.ConnStats.BytesReadUsefulData.Int64() > 0 {
+					promTimeToFirstByteMs.Observe(float64(time.Since(startTime).Milliseconds()))
+					firstByteRecorded = true
+				}
+				if firstPeerRecorded && tenPeersRecorded && thirtyPeersRecorded && firstByteRecorded {
+					// We continue the loop to keep tracking stall seconds even after all time-to-X metrics are recorded.
+					// However, the original logic returned here.
+					// If we return, we stop tracking stall seconds for this torrent.
+					// But usually TorrentMap.Get is called when a torrent is requested.
+					// If we want to track stalls for the lifetime of the torrent, we should probably not return.
 				}
 			}
 		}

@@ -34,11 +34,6 @@ var (
 		Name: "torrent_web_seeder_dial_success_total",
 		Help: "Total number of dial successes",
 	}, []string{"type"})
-	promTimeToFirstPeerMs = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "torrent_web_seeder_time_to_first_peer_ms",
-		Help:    "Time to first peer in milliseconds",
-		Buckets: prometheus.ExponentialBuckets(50, 1.5, 20),
-	})
 	promHandshakeSuccess = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "torrent_web_seeder_handshake_success_total",
 		Help: "Total number of successful handshakes",
@@ -57,7 +52,6 @@ func init() {
 	prometheus.MustRegister(promDialAttempts)
 	prometheus.MustRegister(promDialFailures)
 	prometheus.MustRegister(promDialSuccess)
-	prometheus.MustRegister(promTimeToFirstPeerMs)
 	prometheus.MustRegister(promHandshakeSuccess)
 	prometheus.MustRegister(promEstablishedConns)
 	prometheus.MustRegister(promHalfOpenConns)
