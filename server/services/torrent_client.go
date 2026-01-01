@@ -46,10 +46,6 @@ var (
 		Name: "torrent_web_seeder_half_open_connections",
 		Help: "Total number of half-open connections",
 	})
-	promUnverifiedBytes = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "torrent_web_seeder_unverified_bytes",
-		Help: "Total number of unverified bytes",
-	})
 )
 
 func init() {
@@ -59,7 +55,6 @@ func init() {
 	prometheus.MustRegister(promHandshakeSuccess)
 	prometheus.MustRegister(promEstablishedConns)
 	prometheus.MustRegister(promHalfOpenConns)
-	prometheus.MustRegister(promUnverifiedBytes)
 }
 
 type metricsDialer struct {
@@ -425,18 +420,6 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 				stats := cl.Stats()
 				promEstablishedConns.Set(float64(stats.ActivePeers))
 				promHalfOpenConns.Set(float64(stats.ActiveHalfOpenAttempts))
-				var totalUnverifiedBytes int64
-				for _, t := range cl.Torrents() {
-					if t.Info() == nil {
-						continue
-					}
-					for _, run := range t.PieceStateRuns() {
-						if run.Hashing || run.QueuedForHash || run.Marking {
-							totalUnverifiedBytes += int64(run.Length) * t.Info().PieceLength
-						}
-					}
-				}
-				promUnverifiedBytes.Set(float64(totalUnverifiedBytes))
 			case <-ticker.C:
 				if len(cl.Torrents()) != 0 {
 					continue
