@@ -71,7 +71,7 @@ func run(c *cli.Context) error {
 	fileCacheMap := s.NewFileCacheMap(c)
 
 	// Setting WebSeeder
-	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, touchMap, statWeb)
+	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, touchMap, statWeb, vault, cl)
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)

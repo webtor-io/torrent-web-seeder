@@ -31,14 +31,18 @@ type WebSeeder struct {
 	st  *StatWeb
 	fcm *FileCacheMap
 	tom *TouchMap
+	v   *Vault
+	cl  *http.Client
 }
 
-func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tom *TouchMap, st *StatWeb) *WebSeeder {
+func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tom *TouchMap, st *StatWeb, v *Vault, cl *http.Client) *WebSeeder {
 	return &WebSeeder{
 		tm:  tm,
 		st:  st,
 		fcm: fcm,
 		tom: tom,
+		v:   v,
+		cl:  cl,
 	}
 }
 
@@ -160,7 +164,36 @@ func (s *WebSeeder) getReader(ctx context.Context, w http.ResponseWriter, h stri
 		return s.openCachedFile(w, cp)
 	}
 
+	if s.v != nil {
+		w, reader, err := s.getVaultReader(ctx, w, h, p)
+		if err != nil {
+			log.WithError(err).Warnf("failed to get vault reader for %s/%s, falling back to torrent", h, p)
+		} else if reader != nil {
+			return w, reader, nil
+		}
+	}
+
 	return s.getTorrentReader(ctx, w, h, p)
+}
+
+func (s *WebSeeder) getVaultReader(ctx context.Context, w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
+	wsURL, err := s.v.GetWebseedURL(ctx, h)
+	if err != nil {
+		return w, nil, err
+	}
+	if wsURL == "" {
+		return w, nil, nil
+	}
+	fileURL := wsURL + p
+	reader, err := newHTTPReadSeekCloser(ctx, s.cl, fileURL)
+	if err != nil {
+		return w, nil, err
+	}
+	if reader == nil {
+		return w, nil, nil
+	}
+	log.Infof("serving %s/%s from vault", h, p)
+	return w, reader, nil
 }
 
 func (s *WebSeeder) openCachedFile(w http.ResponseWriter, cp string) (http.ResponseWriter, io.ReadSeekCloser, error) {
@@ -198,6 +231,15 @@ func (s *WebSeeder) serveStats(w http.ResponseWriter, r *http.Request, h string,
 	if cp != "" {
 		http.NotFound(w, r)
 		return
+	}
+	if s.v != nil {
+		wsURL, err := s.v.GetWebseedURL(r.Context(), h)
+		if err != nil {
+			log.WithError(err).Warnf("failed to check vault for %s", h)
+		} else if wsURL != "" {
+			http.NotFound(w, r)
+			return
+		}
 	}
 	err = s.st.Serve(w, r, h, p)
 	if err != nil {
@@ -265,9 +307,16 @@ func (s *WebSeeder) serveDone(w http.ResponseWriter, r *http.Request, h string, 
 	}
 	if cp != "" {
 		return
-	} else {
-		http.NotFound(w, r)
 	}
+	if s.v != nil {
+		wsURL, err := s.v.GetWebseedURL(r.Context(), h)
+		if err != nil {
+			log.WithError(err).Warnf("failed to check vault for %s", h)
+		} else if wsURL != "" {
+			return
+		}
+	}
+	http.NotFound(w, r)
 }
 
 func NewReadaheadFunc(_ *torrent.Torrent, f *torrent.File) torrent.ReadaheadFunc {
