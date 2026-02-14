@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 
+	"code.cloudfoundry.org/bytefmt"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 	cs "github.com/webtor-io/common-services"
@@ -20,6 +22,7 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterFileStoreFlags(app.Flags)
 	app.Flags = s.RegisterStatFlags(app.Flags)
 	app.Flags = s.RegisterVaultFlags(app.Flags)
+	app.Flags = s.RegisterWebSeederFlags(app.Flags)
 	// app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
 }
@@ -71,7 +74,11 @@ func run(c *cli.Context) error {
 	fileCacheMap := s.NewFileCacheMap(c)
 
 	// Setting WebSeeder
-	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, touchMap, statWeb, vault, cl)
+	maxReadahead, err := bytefmt.ToBytes(c.String(s.MaxReadaheadFlag))
+	if err != nil {
+		return errors.Wrap(err, "failed to parse max readahead flag")
+	}
+	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, touchMap, statWeb, vault, cl, int64(maxReadahead))
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)

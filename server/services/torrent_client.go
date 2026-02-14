@@ -251,7 +251,7 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 		cli.DurationFlag{
 			Name:   KeepAliveTimeoutFlag,
 			Usage:  "keep alive timeout",
-			EnvVar: "KEEP_ALIVE_TIMEOUT",
+			EnvVar: "KEEPALIVE_TIMEOUT",
 		},
 		cli.IntFlag{
 			Name:   PieceHashersPerTorrentFlag,

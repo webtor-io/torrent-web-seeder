@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,31 +17,46 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/urfave/cli"
 )
 
 var sha1R = regexp.MustCompile("^[0-9a-f]{5,40}$")
 
 const (
 	SourceTorrentPath = "source.torrent"
+	MaxReadaheadFlag  = "max-readahead"
 )
 
-type WebSeeder struct {
-	tm  *TorrentMap
-	st  *StatWeb
-	fcm *FileCacheMap
-	tom *TouchMap
-	v   *Vault
-	cl  *http.Client
+func RegisterWebSeederFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:   MaxReadaheadFlag,
+			Usage:  "max readahead",
+			Value:  "20MB",
+			EnvVar: "MAX_READAHEAD",
+		},
+	)
 }
 
-func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tom *TouchMap, st *StatWeb, v *Vault, cl *http.Client) *WebSeeder {
+type WebSeeder struct {
+	tm           *TorrentMap
+	st           *StatWeb
+	fcm          *FileCacheMap
+	tom          *TouchMap
+	v            *Vault
+	cl           *http.Client
+	maxReadahead int64
+}
+
+func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tom *TouchMap, st *StatWeb, v *Vault, cl *http.Client, maxReadahead int64) *WebSeeder {
 	return &WebSeeder{
-		tm:  tm,
-		st:  st,
-		fcm: fcm,
-		tom: tom,
-		v:   v,
-		cl:  cl,
+		tm:           tm,
+		st:           st,
+		fcm:          fcm,
+		tom:          tom,
+		v:            v,
+		cl:           cl,
+		maxReadahead: maxReadahead,
 	}
 }
 
@@ -214,7 +228,7 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 		if f.Path() == p {
 			torReader := f.NewReader()
 			torReader.SetResponsive()
-			torReader.SetReadaheadFunc(NewReadaheadFunc(t, f))
+			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
 			return NewTouchWriter(w, s.tm, h), torReader, nil
 		}
 	}
@@ -319,25 +333,8 @@ func (s *WebSeeder) serveDone(w http.ResponseWriter, r *http.Request, h string, 
 	http.NotFound(w, r)
 }
 
-func NewReadaheadFunc(_ *torrent.Torrent, f *torrent.File) torrent.ReadaheadFunc {
-	base := float64(10 * 1024 * 1024)
-	minimal := base
-	fileSize := float64(f.Length())
-	scale := 0.1
-	m := float64(3)
-	if fileSize*scale > base {
-		c := math.Log10(fileSize/base) * m
-		minimal = minimal * c
-	}
-	return func(ctx torrent.ReadaheadContext) int64 {
-		var boost float64
-		d := float64(ctx.CurrentPos - ctx.ContiguousReadStartPos)
-		if d <= base {
-			boost = d
-		} else {
-			boost = base * math.Log10(d/base/scale)
-		}
-		readahead := int64(minimal + boost)
-		return readahead
+func NewReadaheadFunc(maxReadahead int64) torrent.ReadaheadFunc {
+	return func(_ torrent.ReadaheadContext) int64 {
+		return maxReadahead
 	}
 }
