@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"time"
 
 	"code.cloudfoundry.org/bytefmt"
 	"github.com/pkg/errors"
@@ -41,7 +42,14 @@ func run(c *cli.Context) error {
 	defer torrentClient.Close()
 
 	// Setting HTTPClient
-	cl := http.DefaultClient
+	cl := &http.Client{
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 100,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  true,
+		},
+	}
 
 	// Setting Vault
 	vault := s.NewVault(c, cl)

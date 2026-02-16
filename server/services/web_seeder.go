@@ -122,7 +122,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 
 	_, download := r.URL.Query()["download"]
 
-	logWIthField := log.WithFields(log.Fields{
+	logWithField := log.WithFields(log.Fields{
 		"hash":       h,
 		"path":       r.URL.Path,
 		"method":     r.Method,
@@ -131,91 +131,170 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		"range":      r.Header.Get("Range"),
 	})
 
-	w, reader, err := s.getReader(r.Context(), w, h, p)
-	if err != nil {
-		if strings.Contains(err.Error(), "PermissionDenied") {
-			logWIthField.WithError(err).Warn("permission denied")
-			http.Error(w, "permission denied", http.StatusForbidden)
-		} else if strings.Contains(err.Error(), "NotFound") {
-			logWIthField.WithError(err).Warn("not found")
-			http.Error(w, "not found", http.StatusNotFound)
-		} else {
-			logWIthField.WithError(err).Error("failed to get reader")
-			http.Error(w, "failed to get reader", http.StatusInternalServerError)
-		}
-		return
-	}
-	if reader == nil {
-		logWIthField.Info("file not found")
-		http.NotFound(w, r)
-		return
-	}
-	defer func(reader io.ReadSeekCloser) {
-		_ = reader.Close()
-	}(reader)
-
-	logWIthField.Info("serve file")
+	// Set common headers
 	if download {
-		w.Header().Add("Content-Type", "application/octet-stream")
-		w.Header().Add("Content-Disposition", "attachment; filename=\""+filepath.Base(p)+"\"")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(p)+"\"")
 	}
 	if r.Header.Get("Origin") != "" {
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 	}
-	w.Header().Set("Last-Modified", time.Unix(0, 0).Format(http.TimeFormat))
-	w.Header().Set("Etag", fmt.Sprintf("\"%x\"", sha1.Sum([]byte(h+p))))
-	http.ServeContent(w, r, p, time.Unix(0, 0), reader)
-}
 
-func (s *WebSeeder) getReader(ctx context.Context, w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
-	cp, err := s.fcm.Get(h, p)
-	if err != nil {
-		return nil, nil, err
+	etag := fmt.Sprintf("\"%x\"", sha1.Sum([]byte(h+p)))
+	lastMod := time.Unix(0, 0)
+
+	// Handle conditional requests
+	if match := r.Header.Get("If-None-Match"); match != "" {
+		if match == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 	}
-
-	if cp != "" {
-		return s.openCachedFile(w, cp)
-	}
-
-	if s.v != nil {
-		w, reader, err := s.getVaultReader(ctx, w, h, p)
-		if err != nil {
-			log.WithError(err).Warnf("failed to get vault reader for %s/%s, falling back to torrent", h, p)
-		} else if reader != nil {
-			return w, reader, nil
+	if ims := r.Header.Get("If-Modified-Since"); ims != "" {
+		if t, err := http.ParseTime(ims); err == nil && !lastMod.After(t) {
+			w.WriteHeader(http.StatusNotModified)
+			return
 		}
 	}
 
-	return s.getTorrentReader(ctx, w, h, p)
-}
+	// Try file cache first
+	cp, err := s.fcm.Get(h, p)
+	if err != nil {
+		logWithField.WithError(err).Error("failed to check file cache")
+		http.Error(w, "failed to check file cache", http.StatusInternalServerError)
+		return
+	}
+	if cp != "" {
+		logWithField.Info("serve file from cache")
+		w.Header().Set("Last-Modified", lastMod.Format(http.TimeFormat))
+		w.Header().Set("Etag", etag)
+		file, err := os.Open(cp)
+		if err != nil {
+			logWithField.WithError(err).Error("failed to open cached file")
+			http.Error(w, "failed to open cached file", http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+		http.ServeContent(w, r, p, lastMod, file)
+		return
+	}
 
-func (s *WebSeeder) getVaultReader(ctx context.Context, w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
-	wsURL, err := s.v.GetWebseedURL(ctx, h)
-	if err != nil {
-		return w, nil, err
+	// Try vault proxy
+	if s.v != nil {
+		served, err := s.proxyFromVault(w, r, h, p, etag, lastMod)
+		if err != nil {
+			logWithField.WithError(err).Warn("vault proxy failed, falling back to torrent")
+		}
+		if served {
+			return
+		}
 	}
-	if wsURL == "" {
-		return w, nil, nil
-	}
-	fileURL := wsURL + p
-	reader, err := newHTTPReadSeekCloser(ctx, s.cl, fileURL)
+
+	// Fallback to torrent
+	logWithField.Info("serve file from torrent")
+	tw, reader, err := s.getTorrentReader(r.Context(), w, h, p)
 	if err != nil {
-		return w, nil, err
+		if strings.Contains(err.Error(), "PermissionDenied") {
+			logWithField.WithError(err).Warn("permission denied")
+			http.Error(w, "permission denied", http.StatusForbidden)
+		} else if strings.Contains(err.Error(), "NotFound") {
+			logWithField.WithError(err).Warn("not found")
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			logWithField.WithError(err).Error("failed to get torrent reader")
+			http.Error(w, "failed to get reader", http.StatusInternalServerError)
+		}
+		return
 	}
 	if reader == nil {
-		return w, nil, nil
+		logWithField.Info("file not found")
+		http.NotFound(w, r)
+		return
 	}
-	log.Infof("serving %s/%s from vault", h, p)
-	return w, reader, nil
+	defer reader.Close()
+
+	tw.Header().Set("Last-Modified", lastMod.Format(http.TimeFormat))
+	tw.Header().Set("Etag", etag)
+	http.ServeContent(tw, r, p, lastMod, reader)
 }
 
-func (s *WebSeeder) openCachedFile(w http.ResponseWriter, cp string) (http.ResponseWriter, io.ReadSeekCloser, error) {
-	file, err := os.Open(cp)
+func (s *WebSeeder) proxyFromVault(w http.ResponseWriter, r *http.Request, h string, p string, etag string, lastMod time.Time) (bool, error) {
+	wsURL, err := s.v.GetWebseedURL(r.Context(), h)
 	if err != nil {
-		return w, nil, err
+		return false, err
 	}
-	return w, file, nil
+	if wsURL == "" {
+		return false, nil
+	}
+
+	fileURL := wsURL + p
+
+	method := r.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), method, fileURL, nil)
+	if err != nil {
+		return false, err
+	}
+
+	// Forward Range header
+	if rng := r.Header.Get("Range"); rng != "" {
+		req.Header.Set("Range", rng)
+	}
+
+	resp, err := s.cl.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return false, fmt.Errorf("unexpected vault status %d for %s", resp.StatusCode, fileURL)
+	}
+
+	log.Debugf("serving %s/%s from vault (proxy)", h, p)
+
+	// Set our own headers
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Last-Modified", lastMod.Format(http.TimeFormat))
+	w.Header().Set("Etag", etag)
+
+	// Proxy Content-Type from vault only if not already set (e.g. by ?download)
+	if w.Header().Get("Content-Type") == "" {
+		if ct := resp.Header.Get("Content-Type"); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		w.Header().Set("Content-Length", cl)
+	}
+	if cr := resp.Header.Get("Content-Range"); cr != "" {
+		w.Header().Set("Content-Range", cr)
+	}
+
+	w.WriteHeader(resp.StatusCode)
+
+	if r.Method == http.MethodHead {
+		return true, nil
+	}
+
+	written, err := io.Copy(w, resp.Body)
+	if err != nil {
+		// Client likely disconnected — log but don't return error since headers are already sent
+		log.WithError(err).WithFields(log.Fields{
+			"hash":    h,
+			"path":    p,
+			"written": written,
+		}).Warn("vault proxy copy interrupted")
+	}
+
+	return true, nil
 }
 
 func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
@@ -235,25 +314,37 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 	return w, nil, nil
 }
 
-func (s *WebSeeder) serveStats(w http.ResponseWriter, r *http.Request, h string, p string) {
+// availableWithoutTorrent checks if the file is available via cache or vault,
+// meaning no torrent download is needed.
+func (s *WebSeeder) availableWithoutTorrent(ctx context.Context, h string, p string) (bool, error) {
 	cp, err := s.fcm.Get(h, p)
 	if err != nil {
-		log.Error(err)
-		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
-		return
+		return false, err
 	}
 	if cp != "" {
-		http.NotFound(w, r)
-		return
+		return true, nil
 	}
 	if s.v != nil {
-		wsURL, err := s.v.GetWebseedURL(r.Context(), h)
+		wsURL, err := s.v.GetWebseedURL(ctx, h)
 		if err != nil {
 			log.WithError(err).Warnf("failed to check vault for %s", h)
 		} else if wsURL != "" {
-			http.NotFound(w, r)
-			return
+			return true, nil
 		}
+	}
+	return false, nil
+}
+
+func (s *WebSeeder) serveStats(w http.ResponseWriter, r *http.Request, h string, p string) {
+	avail, err := s.availableWithoutTorrent(r.Context(), h, p)
+	if err != nil {
+		log.Error(err)
+		http.Error(w, "failed to check availability", http.StatusInternalServerError)
+		return
+	}
+	if avail {
+		http.NotFound(w, r)
+		return
 	}
 	err = s.st.Serve(w, r, h, p)
 	if err != nil {
@@ -301,34 +392,26 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p == "" {
 			s.renderTorrentIndex(w, r, h)
 		} else if p == SourceTorrentPath {
-			s.renderTorrent(r.Context(), w, s.getHash(r))
+			s.renderTorrent(r.Context(), w, h)
 		} else if _, ok := r.URL.Query()["stats"]; ok {
 			s.serveStats(w, r, h, p)
 		} else if _, ok := r.URL.Query()["done"]; ok {
 			s.serveDone(w, r, h, p)
 		} else {
-			s.serveFile(w, r, s.getHash(r), p)
+			s.serveFile(w, r, h, p)
 		}
 	}
 }
 
 func (s *WebSeeder) serveDone(w http.ResponseWriter, r *http.Request, h string, p string) {
-	cp, err := s.fcm.Get(h, p)
+	avail, err := s.availableWithoutTorrent(r.Context(), h, p)
 	if err != nil {
 		log.Error(err)
-		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
+		http.Error(w, "failed to check availability", http.StatusInternalServerError)
 		return
 	}
-	if cp != "" {
+	if avail {
 		return
-	}
-	if s.v != nil {
-		wsURL, err := s.v.GetWebseedURL(r.Context(), h)
-		if err != nil {
-			log.WithError(err).Warnf("failed to check vault for %s", h)
-		} else if wsURL != "" {
-			return
-		}
 	}
 	http.NotFound(w, r)
 }
