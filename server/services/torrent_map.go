@@ -83,17 +83,15 @@ type TorrentMap struct {
 	timers map[string]*time.Timer
 	ttl    time.Duration
 	mux    sync.Mutex
-	v      *Vault
 }
 
-func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap, vault *Vault) *TorrentMap {
+func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap) *TorrentMap {
 	return &TorrentMap{
 		tc:     tc,
 		tsm:    tsm,
 		fsm:    fsm,
 		timers: map[string]*time.Timer{},
 		ttl:    time.Duration(600) * time.Second,
-		v:      vault,
 	}
 }
 
@@ -132,79 +130,59 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 	if err != nil {
 		return nil, err
 	}
-	startTime := time.Now()
-	go func() {
-		const tickDuration = time.Millisecond * 50
-		ticker := time.NewTicker(tickDuration)
-		defer ticker.Stop()
-		firstPeerRecorded := false
-		tenPeersRecorded := false
-		thirtyPeersRecorded := false
-		firstByteRecorded := false
-		var lastBytesRead int64
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.Closed():
-				return
-			case <-ticker.C:
-				stats := t.Stats()
-				activePeers := stats.ActivePeers
-				bytesRead := stats.ConnStats.BytesRead.Int64()
-				if bytesRead == lastBytesRead {
-					if activePeers == 0 {
-						promStallDiscoverySeconds.Add(tickDuration.Seconds())
-					} else if !firstByteRecorded {
-						promStallIdleSeconds.Add(tickDuration.Seconds())
-					} else {
-						promStallDownloadSeconds.Add(tickDuration.Seconds())
-					}
-				}
-				lastBytesRead = bytesRead
-				if !firstPeerRecorded && activePeers > 0 {
-					promTimeToFirstPeerMs.Observe(float64(time.Since(startTime).Milliseconds()))
-					firstPeerRecorded = true
-				}
-				if !tenPeersRecorded && activePeers >= 10 {
-					promTimeTo10PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
-					tenPeersRecorded = true
-				}
-				if !thirtyPeersRecorded && activePeers >= 30 {
-					promTimeTo30PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
-					thirtyPeersRecorded = true
-				}
-				if !firstByteRecorded && stats.ConnStats.BytesReadUsefulData.Int64() > 0 {
-					promTimeToFirstByteMs.Observe(float64(time.Since(startTime).Milliseconds()))
-					firstByteRecorded = true
-				}
-				if firstPeerRecorded && tenPeersRecorded && thirtyPeersRecorded && firstByteRecorded {
-					// We continue the loop to keep tracking stall seconds even after all time-to-X metrics are recorded.
-					// However, the original logic returned here.
-					// If we return, we stop tracking stall seconds for this torrent.
-					// But usually TorrentMap.Get is called when a torrent is requested.
-					// If we want to track stalls for the lifetime of the torrent, we should probably not return.
-				}
-			}
-		}
-	}()
-	if s.v != nil {
-		wsURL, err := s.v.GetWebseedURL(ctx, h)
-		if err != nil {
-			log.WithError(err).Errorf("failed to get webseed url for %s", h)
-		} else if wsURL == "" {
-			log.Warnf("no webseed url for %s", h)
-		} else {
-			log.Infof("adding webseed %s for %s", wsURL, h)
-			t.AddWebSeeds([]string{wsURL})
-		}
-	}
 	ti, ok := s.timers[h]
 	if ok {
 		ti.Reset(s.ttl)
 	} else {
 		log.Infof("torrent added infohash=%v", h)
 		promActiveTorrentCount.Inc()
+		startTime := time.Now()
+		go func() {
+			const tickDuration = time.Millisecond * 50
+			ticker := time.NewTicker(tickDuration)
+			defer ticker.Stop()
+			firstPeerRecorded := false
+			tenPeersRecorded := false
+			thirtyPeersRecorded := false
+			firstByteRecorded := false
+			var lastBytesRead int64
+			for {
+				select {
+				case <-t.Closed():
+					return
+				case <-ticker.C:
+					stats := t.Stats()
+					activePeers := stats.ActivePeers
+					bytesRead := stats.ConnStats.BytesRead.Int64()
+					if bytesRead == lastBytesRead {
+						if activePeers == 0 {
+							promStallDiscoverySeconds.Add(tickDuration.Seconds())
+						} else if !firstByteRecorded {
+							promStallIdleSeconds.Add(tickDuration.Seconds())
+						} else {
+							promStallDownloadSeconds.Add(tickDuration.Seconds())
+						}
+					}
+					lastBytesRead = bytesRead
+					if !firstPeerRecorded && activePeers > 0 {
+						promTimeToFirstPeerMs.Observe(float64(time.Since(startTime).Milliseconds()))
+						firstPeerRecorded = true
+					}
+					if !tenPeersRecorded && activePeers >= 10 {
+						promTimeTo10PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
+						tenPeersRecorded = true
+					}
+					if !thirtyPeersRecorded && activePeers >= 30 {
+						promTimeTo30PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
+						thirtyPeersRecorded = true
+					}
+					if !firstByteRecorded && stats.ConnStats.BytesReadUsefulData.Int64() > 0 {
+						promTimeToFirstByteMs.Observe(float64(time.Since(startTime).Milliseconds()))
+						firstByteRecorded = true
+					}
+				}
+			}
+		}()
 		ti := time.NewTimer(s.ttl)
 		s.timers[h] = ti
 		go func(h string, ti *time.Timer) {

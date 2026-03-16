@@ -64,7 +64,7 @@ func run(c *cli.Context) error {
 	touchMap := s.NewTouchMap(c)
 
 	// Setting TorrentMap
-	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap, vault)
+	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap)
 
 	// Setting Stat
 	stat := s.NewStat(torrentMap)
