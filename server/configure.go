@@ -81,12 +81,15 @@ func run(c *cli.Context) error {
 	// Setting FileCacheMap
 	fileCacheMap := s.NewFileCacheMap(c)
 
+	// Setting TorrentFileCountMap
+	torrentFileCountMap := s.NewTorrentFileCountMap(fileStoreMap, torrentStoreMap)
+
 	// Setting WebSeeder
 	maxReadahead, err := bytefmt.ToBytes(c.String(s.MaxReadaheadFlag))
 	if err != nil {
 		return errors.Wrap(err, "failed to parse max readahead flag")
 	}
-	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, touchMap, statWeb, vault, cl, int64(maxReadahead))
+	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, torrentFileCountMap, touchMap, statWeb, vault, cl, int64(maxReadahead))
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)

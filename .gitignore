@@ -24,3 +24,4 @@ client/client
 server/__debug_bin
 server/.env
 .idea
+.env

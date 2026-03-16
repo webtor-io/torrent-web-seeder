@@ -42,17 +42,19 @@ type WebSeeder struct {
 	tm           *TorrentMap
 	st           *StatWeb
 	fcm          *FileCacheMap
+	tfcm         *TorrentFileCountMap
 	tom          *TouchMap
 	v            *Vault
 	cl           *http.Client
 	maxReadahead int64
 }
 
-func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tom *TouchMap, st *StatWeb, v *Vault, cl *http.Client, maxReadahead int64) *WebSeeder {
+func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, tom *TouchMap, st *StatWeb, v *Vault, cl *http.Client, maxReadahead int64) *WebSeeder {
 	return &WebSeeder{
 		tm:           tm,
 		st:           st,
 		fcm:          fcm,
+		tfcm:         tfcm,
 		tom:          tom,
 		v:            v,
 		cl:           cl,
@@ -314,16 +316,45 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 	return w, nil, nil
 }
 
-// availableWithoutTorrent checks if the file is available via cache or vault,
+// availableWithoutTorrent checks if the file/directory/root is available via cache or vault,
 // meaning no torrent download is needed.
 func (s *WebSeeder) availableWithoutTorrent(ctx context.Context, h string, p string) (bool, error) {
-	cp, err := s.fcm.Get(h, p)
-	if err != nil {
-		return false, err
+	if p == "" {
+		// Root: check if all torrent files are cached
+		totalFiles, err := s.tfcm.TotalFiles(h)
+		if err != nil {
+			log.WithError(err).Warnf("failed to get total files for %s", h)
+		} else if totalFiles > 0 {
+			complete, err := s.fcm.IsDirComplete(h, "", totalFiles)
+			if err != nil {
+				log.WithError(err).Warnf("failed to check dir complete for %s", h)
+			} else if complete {
+				return true, nil
+			}
+		}
+	} else {
+		// Try exact file match first
+		cp, err := s.fcm.Get(h, p)
+		if err != nil {
+			return false, err
+		}
+		if cp != "" {
+			return true, nil
+		}
+		// Try as directory prefix
+		dirFiles, err := s.tfcm.DirFileCount(h, p)
+		if err != nil {
+			log.WithError(err).Warnf("failed to get dir file count for %s/%s", h, p)
+		} else if dirFiles > 0 {
+			complete, err := s.fcm.IsDirComplete(h, p, dirFiles)
+			if err != nil {
+				log.WithError(err).Warnf("failed to check dir complete for %s/%s", h, p)
+			} else if complete {
+				return true, nil
+			}
+		}
 	}
-	if cp != "" {
-		return true, nil
-	}
+	// Check vault
 	if s.v != nil {
 		wsURL, err := s.v.GetWebseedURL(ctx, h)
 		if err != nil {
@@ -389,14 +420,14 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p := r.URL.Path[1:]
 		p = strings.TrimPrefix(p, h+"/")
-		if p == "" {
-			s.renderTorrentIndex(w, r, h)
-		} else if p == SourceTorrentPath {
-			s.renderTorrent(r.Context(), w, h)
-		} else if _, ok := r.URL.Query()["stats"]; ok {
+		if _, ok := r.URL.Query()["stats"]; ok {
 			s.serveStats(w, r, h, p)
 		} else if _, ok := r.URL.Query()["done"]; ok {
 			s.serveDone(w, r, h, p)
+		} else if p == "" {
+			s.renderTorrentIndex(w, r, h)
+		} else if p == SourceTorrentPath {
+			s.renderTorrent(r.Context(), w, h)
 		} else {
 			s.serveFile(w, r, h, p)
 		}

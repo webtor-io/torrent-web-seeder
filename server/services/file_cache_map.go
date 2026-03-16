@@ -81,3 +81,53 @@ func (s *FileCacheMap) Get(h string, path string) (string, error) {
 		return s.get(h, path)
 	})
 }
+
+// IsDirComplete checks if all files under a directory (or all torrent files for root) are in file_completion.
+// expectedFiles is the total number of files expected (from torrent metadata).
+func (s *FileCacheMap) IsDirComplete(h string, dirPath string, expectedFiles int) (bool, error) {
+	if expectedFiles <= 0 {
+		return false, nil
+	}
+	dir, err := GetDir(s.p, h)
+	if err != nil {
+		return false, err
+	}
+	f := dir + "/.torrent.db"
+	if _, err := os.Stat(f); os.IsNotExist(err) {
+		return false, nil
+	}
+	db, err := sqlite.OpenConn(f, 0)
+	if err != nil {
+		return false, err
+	}
+	defer func(db *sqlite.Conn) {
+		_ = db.Close()
+	}(db)
+
+	var completedCount int
+	if dirPath == "" {
+		// Root: count all completed files
+		err = sqlitex.Exec(
+			db, `select count(*) from file_completion`,
+			func(stmt *sqlite.Stmt) error {
+				completedCount = stmt.ColumnInt(0)
+				return nil
+			})
+	} else {
+		// Directory: count completed files with matching prefix
+		err = sqlitex.Exec(
+			db, `select count(*) from file_completion where "path" like ?`,
+			func(stmt *sqlite.Stmt) error {
+				completedCount = stmt.ColumnInt(0)
+				return nil
+			},
+			dirPath+"/%")
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return false, nil
+		}
+		return false, err
+	}
+	return completedCount >= expectedFiles, nil
+}
