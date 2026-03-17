@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,17 +15,24 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/webtor-io/lazymap"
 	pb "github.com/webtor-io/torrent-web-seeder/proto"
 )
 
 type Stat struct {
 	pb.UnimplementedTorrentWebSeederServer
-	tm *TorrentMap
+	tm    *TorrentMap
+	cache lazymap.LazyMap[*pb.StatReply]
 }
 
 func NewStat(tm *TorrentMap) *Stat {
 	return &Stat{
 		tm: tm,
+		cache: lazymap.New[*pb.StatReply](&lazymap.Config{
+			Expire:      3 * time.Second,
+			StoreErrors: true,
+			ErrorExpire: time.Second,
+		}),
 	}
 }
 
@@ -44,8 +52,9 @@ func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 	if completed == 0 {
 		rStatus = pb.StatReply_WAITING_FOR_PEERS
 	}
-	var pieces []*pb.Piece
-	for i := 0; i < t.NumPieces(); i++ {
+	numPieces := t.NumPieces()
+	pieces := make([]*pb.Piece, 0, numPieces)
+	for i := 0; i < numPieces; i++ {
 		p := t.Piece(i)
 		ps := p.State()
 		pr := pb.Piece_NONE
@@ -55,10 +64,10 @@ func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 			pr = pb.Piece_HIGH
 		}
 		pieces = append(pieces, &pb.Piece{Position: int64(i), Complete: ps.Complete, Priority: pr})
-
 	}
-	peers := t.Stats().ActivePeers
-	seeders := t.Stats().ConnectedSeeders
+	stats := t.Stats()
+	peers := stats.ActivePeers
+	seeders := stats.ConnectedSeeders
 	leechers := peers - seeders
 	return &pb.StatReply{
 		Completed: completed,
@@ -77,8 +86,9 @@ func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, err
 	if completed == 0 {
 		rStatus = pb.StatReply_WAITING_FOR_PEERS
 	}
-	var pieces []*pb.Piece
-	for i, p := range f.State() {
+	state := f.State()
+	pieces := make([]*pb.Piece, 0, len(state))
+	for i, p := range state {
 		pr := pb.Piece_NONE
 		if p.Priority == torrent.PiecePriorityNormal {
 			pr = pb.Piece_NORMAL
@@ -87,8 +97,9 @@ func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, err
 		}
 		pieces = append(pieces, &pb.Piece{Position: int64(i), Complete: p.Complete, Priority: pr})
 	}
-	peers := t.Stats().ActivePeers
-	seeders := t.Stats().ConnectedSeeders
+	stats := t.Stats()
+	peers := stats.ActivePeers
+	seeders := stats.ConnectedSeeders
 	leechers := peers - seeders
 	return &pb.StatReply{
 		Completed: completed,
@@ -110,7 +121,7 @@ func findFile(t *torrent.Torrent, path string) *torrent.File {
 	return nil
 }
 
-func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
+func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
 		return nil, errors.Errorf("No info-hash provided")
@@ -130,19 +141,28 @@ func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, err
 	return s.fileStat(t, f)
 }
 
+func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
+		return nil, errors.Errorf("No info-hash provided")
+	}
+	h := md.Get("info-hash")[0]
+	key := fmt.Sprintf("%s/%s", h, in.GetPath())
+	return s.cache.Get(key, func() (*pb.StatReply, error) {
+		return s.statUncached(ctx, in)
+	})
+}
+
 func diff(a []*pb.Piece, b []*pb.Piece) []*pb.Piece {
 	var d []*pb.Piece
-	for _, aa := range a {
-		found := false
-		for _, bb := range b {
-			if aa.GetPosition() == bb.GetPosition() && aa.GetComplete() == bb.GetComplete() && aa.GetPriority() == bb.GetPriority() {
-				found = true
-				break
+	for i, aa := range a {
+		if i < len(b) {
+			bb := b[i]
+			if aa.GetComplete() == bb.GetComplete() && aa.GetPriority() == bb.GetPriority() {
+				continue
 			}
 		}
-		if !found {
-			d = append(d, aa)
-		}
+		d = append(d, aa)
 	}
 	return d
 }
@@ -157,7 +177,7 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 	if err != nil {
 		return err
 	}
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	errCh := make(chan error)
 	done := make(chan bool)
 	defer func() {
