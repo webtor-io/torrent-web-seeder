@@ -182,11 +182,11 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		return
 	}
 
-	// Try vault proxy
+	// Try vault redirect
 	if s.v != nil {
-		served, err := s.proxyFromVault(w, r, h, p, etag, lastMod)
+		served, err := s.redirectFromVault(w, r, h, p)
 		if err != nil {
-			logWithField.WithError(err).Warn("vault proxy failed, falling back to torrent")
+			logWithField.WithError(err).Warn("vault redirect failed, falling back to torrent")
 		}
 		if served {
 			return
@@ -221,7 +221,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	http.ServeContent(tw, r, p, lastMod, reader)
 }
 
-func (s *WebSeeder) proxyFromVault(w http.ResponseWriter, r *http.Request, h string, p string, etag string, lastMod time.Time) (bool, error) {
+func (s *WebSeeder) redirectFromVault(w http.ResponseWriter, r *http.Request, h string, p string) (bool, error) {
 	wsURL, err := s.v.GetWebseedURL(r.Context(), h)
 	if err != nil {
 		return false, err
@@ -232,22 +232,18 @@ func (s *WebSeeder) proxyFromVault(w http.ResponseWriter, r *http.Request, h str
 
 	fileURL := wsURL + p
 
-	method := r.Method
-	if method == "" {
-		method = http.MethodGet
+	// Use a client that does not follow redirects so we can capture the Location header.
+	noRedirectCl := *s.cl
+	noRedirectCl.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), method, fileURL, nil)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, fileURL, nil)
 	if err != nil {
 		return false, err
 	}
 
-	// Forward Range header
-	if rng := r.Header.Get("Range"); rng != "" {
-		req.Header.Set("Range", rng)
-	}
-
-	resp, err := s.cl.Do(req)
+	resp, err := noRedirectCl.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -256,47 +252,17 @@ func (s *WebSeeder) proxyFromVault(w http.ResponseWriter, r *http.Request, h str
 	if resp.StatusCode == http.StatusNotFound {
 		return false, nil
 	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		return false, fmt.Errorf("unexpected vault status %d for %s", resp.StatusCode, fileURL)
-	}
 
-	log.Debugf("serving %s/%s from vault (proxy)", h, p)
-
-	// Set our own headers
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Last-Modified", lastMod.Format(http.TimeFormat))
-	w.Header().Set("Etag", etag)
-
-	// Proxy Content-Type from vault only if not already set (e.g. by ?download)
-	if w.Header().Get("Content-Type") == "" {
-		if ct := resp.Header.Get("Content-Type"); ct != "" {
-			w.Header().Set("Content-Type", ct)
+	// Vault returns 302 with presigned S3 URL — pass it through.
+	if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusTemporaryRedirect {
+		loc := resp.Header.Get("Location")
+		if loc != "" {
+			http.Redirect(w, r, loc, resp.StatusCode)
+			return true, nil
 		}
 	}
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		w.Header().Set("Content-Length", cl)
-	}
-	if cr := resp.Header.Get("Content-Range"); cr != "" {
-		w.Header().Set("Content-Range", cr)
-	}
 
-	w.WriteHeader(resp.StatusCode)
-
-	if r.Method == http.MethodHead {
-		return true, nil
-	}
-
-	written, err := io.Copy(w, resp.Body)
-	if err != nil {
-		// Client likely disconnected — log but don't return error since headers are already sent
-		log.WithError(err).WithFields(log.Fields{
-			"hash":    h,
-			"path":    p,
-			"written": written,
-		}).Warn("vault proxy copy interrupted")
-	}
-
-	return true, nil
+	return false, fmt.Errorf("unexpected vault status %d for %s", resp.StatusCode, fileURL)
 }
 
 func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
