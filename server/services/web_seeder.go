@@ -238,7 +238,13 @@ func (s *WebSeeder) redirectFromVault(w http.ResponseWriter, r *http.Request, h 
 		return http.ErrUseLastResponse
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, fileURL, nil)
+	// Preserve original method so vault can handle HEAD separately.
+	method := r.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), method, fileURL, nil)
 	if err != nil {
 		return false, err
 	}
@@ -253,13 +259,26 @@ func (s *WebSeeder) redirectFromVault(w http.ResponseWriter, r *http.Request, h 
 		return false, nil
 	}
 
-	// Vault returns 302 with presigned S3 URL — pass it through.
+	// GET: vault returns 302 with presigned S3 URL — pass it through.
 	if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusTemporaryRedirect {
 		loc := resp.Header.Get("Location")
 		if loc != "" {
 			http.Redirect(w, r, loc, resp.StatusCode)
 			return true, nil
 		}
+	}
+
+	// HEAD: vault returns 200 with Content-Length from S3 HeadObject.
+	if resp.StatusCode == http.StatusOK {
+		if cl := resp.Header.Get("Content-Length"); cl != "" {
+			w.Header().Set("Content-Length", cl)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.WriteHeader(http.StatusOK)
+		return true, nil
 	}
 
 	return false, fmt.Errorf("unexpected vault status %d for %s", resp.StatusCode, fileURL)
