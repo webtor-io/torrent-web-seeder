@@ -113,6 +113,7 @@ type TorrentClient struct {
 	seed                       bool
 	dUTP                       bool
 	dWebTorrent                bool
+	dWebseeds                  bool
 	establishedConnsPerTorrent int
 	halfOpenConnsPerTorrent    int
 	torrentPeersHighWater      int
@@ -136,6 +137,7 @@ const (
 	SeedFlag                       = "seed"
 	DisableUtpFlag                 = "disable-utp"
 	DisableWebTorrentFlag          = "disable-webtorrent"
+	DisableWebseedsFlag            = "disable-webseeds"
 	EstablishedConnsPerTorrentFlag = "established-conns-per-torrent"
 	HalfOpenConnsPerTorrentFlag    = "half-open-conns-per-torrent"
 	TorrentPeersHighWaterFlag      = "torrent-peers-high-water"
@@ -191,6 +193,11 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Name:   DisableWebTorrentFlag,
 			Usage:  "disables WebTorrent",
 			EnvVar: "DISABLE_WEBTORRENT",
+		},
+		cli.BoolFlag{
+			Name:   DisableWebseedsFlag,
+			Usage:  "disables webseeds",
+			EnvVar: "DISABLE_WEBSEEDS",
 		},
 		cli.BoolFlag{
 			Name:   DisableUtpFlag,
@@ -291,6 +298,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		ua:                         c.String(TorrentClientUserAgentFlag),
 		dUTP:                       c.Bool(DisableUtpFlag),
 		dWebTorrent:                c.Bool(DisableWebTorrentFlag),
+		dWebseeds:                  c.Bool(DisableWebseedsFlag),
 		establishedConnsPerTorrent: c.Int(EstablishedConnsPerTorrentFlag),
 		halfOpenConnsPerTorrent:    c.Int(HalfOpenConnsPerTorrentFlag),
 		torrentPeersHighWater:      c.Int(TorrentPeersHighWaterFlag),
@@ -323,6 +331,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.Seed = s.seed
 	cfg.DisableUTP = s.dUTP
 	cfg.DisableWebtorrent = s.dWebTorrent
+	cfg.DisableWebseeds = s.dWebseeds
 	if s.proxy != "" {
 		u, err := url.Parse(s.proxy)
 		if err != nil {
