@@ -24,9 +24,74 @@ type completions struct {
 func (s *completions) Complete(index int) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
+	if s.pieces[index] {
+		return
+	}
 	s.completedCount++
 	s.pieces[index] = true
 	s.completed = s.completedCount == len(s.pieces)
+}
+
+// Uncomplete marks a piece as incomplete and invalidates file-level completion
+// for any files that include this piece.
+func (s *completions) Uncomplete(index int) []string {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if !s.pieces[index] {
+		return nil
+	}
+	s.completedCount--
+	s.pieces[index] = false
+	s.completed = false
+	// Find and reset file completions affected by this piece.
+	var affectedFiles []string
+	if len(s.info.Files) == 0 {
+		// Single-file torrent.
+		delete(s.completedFiles, s.info.Name)
+		affectedFiles = append(affectedFiles, s.info.Name)
+	} else {
+		offset := 0
+		for _, f := range s.info.Files {
+			path := s.info.Name + "/" + strings.Join(f.Path, "/")
+			startPiece := offset / int(s.info.PieceLength)
+			endPiece := (offset + int(f.Length)) / int(s.info.PieceLength)
+			offset += int(f.Length)
+			if index >= startPiece && index <= endPiece {
+				if s.completedFiles[path] {
+					delete(s.completedFiles, path)
+					affectedFiles = append(affectedFiles, path)
+				}
+			}
+		}
+	}
+	return affectedFiles
+}
+
+// IsPieceInCompletedFile returns true if the piece belongs to a file
+// that is fully downloaded (tracked in completedFiles).
+func (s *completions) IsPieceInCompletedFile(index int) bool {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if len(s.completedFiles) == 0 {
+		return false
+	}
+	if len(s.info.Files) == 0 {
+		// Single-file torrent.
+		return s.completedFiles[s.info.Name]
+	}
+	offset := 0
+	for _, f := range s.info.Files {
+		path := s.info.Name + "/" + strings.Join(f.Path, "/")
+		startPiece := offset / int(s.info.PieceLength)
+		endPiece := (offset + int(f.Length)) / int(s.info.PieceLength)
+		offset += int(f.Length)
+		if index >= startPiece && index <= endPiece {
+			if s.completedFiles[path] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *completions) GetCompletedFiles() []string {
@@ -134,17 +199,15 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash) (re
 		completions: completions,
 	}
 	go func() {
-		completedFiles := make(map[string]bool)
+		// No local dedup map — always call CompleteFile() so that after
+		// eviction + re-download the file_completion entry is re-added.
+		// INSERT OR REPLACE is idempotent, so repeated calls are safe.
 		for {
 			for _, f := range completions.GetCompletedFiles() {
-				if completedFiles[f] {
-					continue
-				}
 				err = ret.CompleteFile(f)
 				if err != nil {
 					return
 				}
-				completedFiles[f] = true
 			}
 			if completions.completed || ret.closed {
 				return
@@ -177,6 +240,8 @@ func (s *pieceCompletion) Set(pk metainfo.PieceKey, b bool) error {
 	}
 	if b {
 		s.completions.Complete(pk.Index)
+	} else {
+		s.completions.Uncomplete(pk.Index)
 	}
 	return sqlitex.Exec(
 		s.db,
@@ -185,6 +250,23 @@ func (s *pieceCompletion) Set(pk metainfo.PieceKey, b bool) error {
 		pk.Index,
 		b,
 	)
+}
+
+// UncompleteFiles removes entries from the file_completion table.
+// Called during piece eviction to invalidate file-level cache.
+func (s *pieceCompletion) UncompleteFiles(paths []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("closed")
+	}
+	for _, p := range paths {
+		err := sqlitex.Exec(s.db, `delete from file_completion where "path"=?`, nil, p)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *pieceCompletion) CompleteFile(path string) error {

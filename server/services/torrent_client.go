@@ -102,6 +102,7 @@ func (m *metricsDialer) DialerNetwork() string {
 
 type TorrentClient struct {
 	cl                         *torrent.Client
+	storageImpl                *mmapClientImpl
 	mux                        sync.Mutex
 	err                        error
 	inited                     bool
@@ -127,6 +128,8 @@ type TorrentClient struct {
 	keepAliveTimeout           time.Duration
 	pieceHashersPerTorrent     int
 	dialRateLimit              int
+	perTorrentCacheBudget      int64
+	torrentClientDebug         bool
 }
 
 const (
@@ -143,6 +146,7 @@ const (
 	TorrentPeersHighWaterFlag      = "torrent-peers-high-water"
 	TorrentPeersLowWaterFlag       = "torrent-peers-low-water"
 	Debug                          = "debug"
+	TorrentClientDebugFlag         = "torrent-client-debug"
 	MaxUnverifiedBytesFlag         = "max-unverified-bytes"
 	TotalHalfOpenConnsFlag         = "total-half-open-conns"
 	MinDialTimeoutFlag             = "min-dial-timeout"
@@ -151,6 +155,7 @@ const (
 	KeepAliveTimeoutFlag           = "keep-alive-timeout"
 	PieceHashersPerTorrentFlag     = "piece-hashers-per-torrent"
 	DialRateLimitFlag              = "dial-rate-limit"
+	PerTorrentCacheBudgetFlag      = "per-torrent-cache-budget"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -226,8 +231,13 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 		},
 		cli.BoolFlag{
 			Name:   Debug,
-			Usage:  "debug",
+			Usage:  "debug logging for the application",
 			EnvVar: "DEBUG",
+		},
+		cli.BoolFlag{
+			Name:   TorrentClientDebugFlag,
+			Usage:  "verbose debug logging for anacrolix torrent client",
+			EnvVar: "TORRENT_CLIENT_DEBUG",
 		},
 		cli.StringFlag{
 			Name:   MaxUnverifiedBytesFlag,
@@ -270,6 +280,12 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Usage:  "dial rate limit",
 			EnvVar: "DIAL_RATE_LIMIT",
 		},
+		cli.StringFlag{
+			Name:   PerTorrentCacheBudgetFlag,
+			Usage:  "per-torrent cache budget (e.g. 50GB, 0 = unlimited)",
+			Value:  "50GB",
+			EnvVar: "PER_TORRENT_CACHE_BUDGET",
+		},
 	)
 }
 
@@ -290,6 +306,14 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 			return nil, errors.Wrap(err, "failed to parse max unverified bytes flag")
 		}
 		ub = int64(uub)
+	}
+	var cacheBudget int64
+	if c.String(PerTorrentCacheBudgetFlag) != "" && c.String(PerTorrentCacheBudgetFlag) != "0" {
+		cb, err := bytefmt.ToBytes(c.String(PerTorrentCacheBudgetFlag))
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to parse per-torrent cache budget flag")
+		}
+		cacheBudget = int64(cb)
 	}
 	return &TorrentClient{
 		rLimit:                     dr,
@@ -314,6 +338,8 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		keepAliveTimeout:           c.Duration(KeepAliveTimeoutFlag),
 		pieceHashersPerTorrent:     c.Int(PieceHashersPerTorrentFlag),
 		dialRateLimit:              c.Int(DialRateLimitFlag),
+		perTorrentCacheBudget:      cacheBudget,
+		torrentClientDebug:         c.Bool(TorrentClientDebugFlag),
 	}, nil
 }
 
@@ -321,9 +347,16 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	log.Infof("initializing TorrentClient dataDir=%v", s.dataDir)
 	cfg := torrent.NewDefaultClientConfig()
 	// cfg.DisableIPv6 = true
-	cfg.Logger = tlog.Default.WithNames("main", "client")
-	cfg.Debug = s.debug
-	cfg.DefaultStorage = NewMMap(s.dataDir)
+	if s.torrentClientDebug {
+		cfg.Logger = tlog.Default.WithNames("main", "client")
+		cfg.Debug = true
+	} else {
+		l := tlog.NewLogger()
+		l.SetHandlers(tlog.DiscardHandler)
+		cfg.Logger = l
+	}
+	s.storageImpl = NewMMap(s.dataDir, s.perTorrentCacheBudget)
+	cfg.DefaultStorage = s.storageImpl
 	if s.ua != "" {
 		cfg.HTTPUserAgent = s.ua
 	}
@@ -407,6 +440,8 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create new torrent client")
 	}
+	// Wire client reference to storage for eviction VerifyData calls.
+	s.storageImpl.SetClient(cl)
 	cl.AddDialer(&metricsDialer{
 		network: "tcp",
 		dialer:  torrent.NetworkDialer{Network: "tcp", Dialer: *torrent.DefaultNetDialer},
