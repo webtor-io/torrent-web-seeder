@@ -104,6 +104,9 @@ func (s *StatStreamServer) Ping() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 
+	if s.ctx.Err() != nil {
+		return
+	}
 	fmt.Fprintf(s.w, "id: %v\n", s.counter)
 	fmt.Fprintf(s.w, "event: ping\n")
 	fmt.Fprintf(s.w, "data: %v\n\n", time.Now().Unix())
@@ -114,6 +117,9 @@ func (s *StatStreamServer) Ping() {
 func (s *StatStreamServer) Send(m *pb.StatReply) error {
 	s.mux.Lock()
 	defer s.mux.Unlock()
+	if s.ctx.Err() != nil {
+		return s.ctx.Err()
+	}
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
