@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	code.cloudfoundry.org/bytefmt v0.53.0
+	github.com/RoaringBitmap/roaring v1.9.4 // indirect
 	github.com/anacrolix/chansync v0.7.0 // indirect
 	github.com/anacrolix/log v0.17.1-0.20251118025802-918f1157b7bb
 	github.com/anacrolix/sync v0.6.0 // indirect
@@ -23,14 +24,14 @@ require (
 	github.com/webtor-io/torrent-store v1.0.0
 	go.etcd.io/bbolt v1.4.3 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/sys v0.39.0
+	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.77.0
 )
 
 require (
 	github.com/anacrolix/missinggo/v2 v2.10.0
-	github.com/anacrolix/torrent v1.61.1-0.20260328005157-3fff0ed9c1b9
+	github.com/anacrolix/torrent v1.60.1-0.20250925080637-414bd5781457
 	github.com/edsrzf/mmap-go v1.2.0
 	github.com/go-llsqlite/adapter v0.2.0
 	github.com/prometheus/client_golang v1.23.2
@@ -39,9 +40,9 @@ require (
 )
 
 require (
-	github.com/RoaringBitmap/roaring/v2 v2.16.0 // indirect
+	github.com/ajwerner/btree v0.0.0-20211221152037-f427b3e689c0 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
-	github.com/anacrolix/btree v0.1.1 // indirect
+	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
 	github.com/anacrolix/dht/v2 v2.23.0 // indirect
 	github.com/anacrolix/envpprof v1.5.0 // indirect
 	github.com/anacrolix/generics v0.2.0 // indirect
@@ -126,7 +127,7 @@ require (
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251124214823-79d6a2a48846 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251022142026-3a174f9686a8 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mellium.im/sasl v0.3.2 // indirect
 	modernc.org/libc v1.67.1 // indirect
