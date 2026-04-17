@@ -95,6 +95,14 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 			infoHash.HexString(), info.TotalLength(), s.budget)
 	}
 
+	// Hint the kernel that mmap'd regions will be read sequentially (streaming).
+	// This enables aggressive readahead and proactive page reclamation after reads.
+	for _, m := range mmaps {
+		if m != nil {
+			_ = madviseSequential(m)
+		}
+	}
+
 	impl := storage.TorrentImpl{
 		Piece: t.Piece,
 		Close: t.Close,
@@ -220,7 +228,14 @@ func (me mmapStoragePiece) ReadAt(b []byte, off int64) (int, error) {
 	if me.t.lru != nil {
 		me.t.lru.Touch(me.p.Index())
 	}
-	return me.sectionReader.ReadAt(b, off)
+	n, err := me.sectionReader.ReadAt(b, off)
+	// After copying data into the buffer, advise the kernel to drop the
+	// mmap pages. The data is now in `b` and will be sent to the client;
+	// keeping it in the page cache wastes cgroup memory.
+	if n > 0 && me.t.lru != nil {
+		me.t.madviseSpanRange(me.p.Offset()+off, int64(n))
+	}
+	return n, err
 }
 
 func (me mmapStoragePiece) WriteAt(b []byte, off int64) (int, error) {
@@ -261,6 +276,28 @@ func (sp mmapStoragePiece) MarkComplete() error {
 
 func (sp mmapStoragePiece) MarkNotComplete() error {
 	return sp.t.pc.Set(sp.pieceKey(), false)
+}
+
+// madviseSpanRange advises the kernel to drop pages for a byte range in the
+// concatenated mmap span. Used after ReadAt to free page cache for data that
+// has already been copied into a userspace buffer.
+func (ts *mmapTorrentStorage) madviseSpanRange(spanOff, length int64) {
+	end := spanOff + length
+	fileOff := int64(0)
+	for i, fLen := range ts.fileLens {
+		fEnd := fileOff + fLen
+		if end > fileOff && spanOff < fEnd {
+			regStart := max(spanOff, fileOff) - fileOff
+			regEnd := min(end, fEnd) - fileOff
+			if i < len(ts.mmaps) && ts.mmaps[i] != nil && regEnd <= int64(len(ts.mmaps[i])) {
+				_ = madviseEvict(ts.mmaps[i][regStart:regEnd])
+			}
+		}
+		if fileOff >= end {
+			break
+		}
+		fileOff = fEnd
+	}
 }
 
 // fileRegion describes a contiguous region within a single torrent file.
