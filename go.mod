@@ -24,7 +24,7 @@ require (
 	github.com/webtor-io/torrent-store v1.0.0
 	go.etcd.io/bbolt v1.4.3 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/sys v0.39.0
 	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.77.0
 )
@@ -42,7 +42,6 @@ require (
 require (
 	github.com/ajwerner/btree v0.0.0-20211221152037-f427b3e689c0 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
-	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect
 	github.com/anacrolix/dht/v2 v2.23.0 // indirect
 	github.com/anacrolix/envpprof v1.5.0 // indirect
 	github.com/anacrolix/generics v0.2.0 // indirect
@@ -72,7 +71,6 @@ require (
 	github.com/go-pg/migrations/v8 v8.1.0 // indirect
 	github.com/go-pg/zerochecker v0.2.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20251208000136-3d256cb9ff16 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
@@ -136,3 +134,5 @@ require (
 	modernc.org/sqlite v1.40.1 // indirect
 	zombiezen.com/go/sqlite v1.4.2 // indirect
 )
+
+replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20260417103103-8badad926e96

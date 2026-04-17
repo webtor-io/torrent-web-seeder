@@ -52,7 +52,7 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 	if err != nil {
 		return
 	}
-	span, files, fileLens, err := mMapTorrent(info, dir)
+	span, files, fileLens, mmaps, err := mMapTorrent(info, dir)
 	if err != nil {
 		return
 	}
@@ -69,6 +69,7 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 		info:     info,
 		files:    files,
 		fileLens: fileLens,
+		mmaps:    mmaps,
 		closeCh:  make(chan struct{}),
 		cl:       s.cl,
 	}
@@ -139,6 +140,7 @@ type mmapTorrentStorage struct {
 	info     *metainfo.Info
 	files    []*os.File         // file handles for hole-punching
 	fileLens []int64            // file lengths for piece→file mapping
+	mmaps    []mmap.MMap        // raw mmap regions per file, for madvise after eviction
 	closeCh  chan struct{}
 	cl       *torrent.Client    // for VerifyData on eviction
 	verifyCh chan int           // evicted piece indices queued for VerifyData
@@ -195,6 +197,14 @@ func (ts *mmapTorrentStorage) Close() error {
 		ts.lru.mu.Lock()
 		promCachePieceCount.Sub(float64(len(ts.lru.entries)))
 		ts.lru.mu.Unlock()
+	}
+	// Advise the kernel to drop all mmap'd pages before unmapping.
+	// This ensures immediate RSS release when a torrent is dropped,
+	// rather than waiting for the kernel to lazily reclaim pages.
+	for _, m := range ts.mmaps {
+		if m != nil {
+			_ = madviseEvict(m)
+		}
 	}
 	return ts.span.Close()
 }
@@ -310,13 +320,28 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 	// 2. Clean up file_completion for affected files.
 	ts.uncompleteAffectedFiles(idx)
 
-	// 3. Punch holes in the mmap'd files to free disk blocks.
+	// 3. Punch holes in the mmap'd files to free disk blocks,
+	// then advise the kernel to drop the corresponding pages from RSS.
 	for _, region := range ts.pieceFileRegions(piece) {
 		if region.fileIndex >= len(ts.files) || ts.files[region.fileIndex] == nil {
 			continue
 		}
 		if err := punchHole(ts.files[region.fileIndex], region.offset, region.length); err != nil {
 			log.WithError(err).Errorf("failed to punch hole for piece %d in file %d", idx, region.fileIndex)
+		}
+		// MADV_DONTNEED on the mmap region ensures the kernel immediately reclaims
+		// the pages from the process's page tables and cgroup memory accounting,
+		// preventing stale page-table entries from being re-faulted by concurrent reads.
+		if region.fileIndex < len(ts.mmaps) && ts.mmaps[region.fileIndex] != nil {
+			end := region.offset + region.length
+			if end > int64(len(ts.mmaps[region.fileIndex])) {
+				end = int64(len(ts.mmaps[region.fileIndex]))
+			}
+			if region.offset < end {
+				if err := madviseEvict(ts.mmaps[region.fileIndex][region.offset:end]); err != nil {
+					log.WithError(err).Errorf("madvise failed for piece %d in file %d", idx, region.fileIndex)
+				}
+			}
 		}
 	}
 
@@ -373,7 +398,7 @@ func (ts *mmapTorrentStorage) uncompleteAffectedFiles(pieceIndex int) {
 	}
 }
 
-func mMapTorrent(md *metainfo.Info, location string) (mms *mmapSpan.MMapSpan, files []*os.File, fileLens []int64, err error) {
+func mMapTorrent(md *metainfo.Info, location string) (mms *mmapSpan.MMapSpan, files []*os.File, fileLens []int64, mmaps []mmap.MMap, err error) {
 	var mMaps []FileMapping
 	defer func() {
 		if err != nil {
@@ -382,6 +407,7 @@ func mMapTorrent(md *metainfo.Info, location string) (mms *mmapSpan.MMapSpan, fi
 			}
 			files = nil
 			fileLens = nil
+			mmaps = nil
 		}
 	}()
 	for _, miFile := range md.UpvertedFiles() {
@@ -404,8 +430,9 @@ func mMapTorrent(md *metainfo.Info, location string) (mms *mmapSpan.MMapSpan, fi
 		mMaps = append(mMaps, mm)
 		files = append(files, f)
 		fileLens = append(fileLens, miFile.Length)
+		mmaps = append(mmaps, mm.Bytes())
 	}
-	return mmapSpan.New(mMaps, md.FileSegmentsIndex()), files, fileLens, nil
+	return mmapSpan.New(mMaps, md.FileSegmentsIndex()), files, fileLens, mmaps, nil
 }
 
 func mmapFile(name string, size int64) (_ FileMapping, file *os.File, err error) {
