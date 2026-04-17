@@ -263,6 +263,13 @@ func (sp mmapStoragePiece) MarkComplete() error {
 	if err != nil {
 		return err
 	}
+	// The piece has been fully written and verified. Drop the mmap pages —
+	// dirty pages will be written back by the kernel asynchronously, and
+	// clean pages are freed immediately. This prevents downloaded pieces
+	// from accumulating in cgroup memory.
+	if sp.t.lru != nil {
+		sp.t.madviseSpanRange(sp.p.Offset(), sp.p.Length())
+	}
 	if sp.t.lru != nil {
 		toEvict := sp.t.lru.Add(sp.p.Index(), sp.p.Length())
 		promCacheBytesUsed.Add(float64(sp.p.Length()))
