@@ -26,6 +26,7 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterWebSeederFlags(app.Flags)
 	// app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
+	configureDiagnose(app)
 }
 
 func run(c *cli.Context) error {
