@@ -1,36 +1,82 @@
 # torrent-web-seeder
 
-A wrapper around the BitTorrent client ([anacrolix/torrent](https://github.com/anacrolix/torrent)) that provides:
-1. HTTP access to torrent content (file streaming with range requests)
-2. gRPC status service (real-time download progress, piece states)
-3. Fetching torrent files from a remote TorrentStore
-4. Torrent diagnostics CLI for troubleshooting download issues
+BitTorrent client with HTTP interface for streaming torrent content. Part of the [Webtor](https://github.com/webtor-io) platform.
 
-## Diagnostics
+Built on [anacrolix/torrent](https://github.com/anacrolix/torrent) (custom [fork](https://github.com/webtor-io/torrent)) with mmap-based storage, LRU piece eviction, and Prometheus instrumentation.
 
-The `diagnose` command helps troubleshoot why a torrent isn't downloading. Pass a magnet URI or `.torrent` file and get a structured report covering tracker responses, peer discovery, and download capability.
+## Features
+
+- **HTTP file streaming** — serve any file from a torrent over HTTP with range request support
+- **gRPC status service** — real-time download progress, piece states, peer counts via `Stat`/`StatStream`/`Files` RPCs
+- **Remote torrent store** — fetch `.torrent` metadata from a gRPC [torrent-store](https://github.com/webtor-io/torrent-store) service
+- **Vault integration** — redirect to pre-cached files on S3 when available
+- **Memory-mapped storage** — mmap-backed piece storage with per-torrent LRU cache eviction
+- **Diagnostics CLI** — `diagnose` command for troubleshooting torrent download issues
+
+## Architecture
 
 ```
-torrent-web-seeder diagnose [options] <magnet-uri or .torrent path>
+                    ┌─────────────────┐
+                    │  torrent-store  │ (gRPC, port 50051)
+                    │  .torrent files │
+                    └────────┬────────┘
+                             │
+┌──────────┐    HTTP    ┌────▼────────────────────┐    BitTorrent
+│  Client  │◄──────────►│  torrent-web-seeder     │◄──────────────► Peers
+│          │  :8080     │                         │
+└──────────┘            │  ┌───────────────────┐  │
+                        │  │ anacrolix/torrent  │  │
+                        │  │ mmap storage + LRU │  │
+┌──────────┐   gRPC     │  └───────────────────┘  │
+│  Proxy   │◄──────────►│                         │
+│          │  :50051    │  Prometheus metrics      │──► :8083
+└──────────┘            │  Health probes           │──► :8081
+                        │  pprof                   │──► :8082
+                        └─────────────────────────┘
 ```
 
-### Example
+## Usage
+
+### Server mode (default)
+
+```bash
+torrent-web-seeder \
+  --port 8080 \
+  --data-dir /data \
+  --torrent-store-host torrent-store \
+  --torrent-store-port 50051 \
+  --use-stat --use-probe --use-prom
+```
+
+Serves torrent content over HTTP:
 
 ```
-$ torrent-web-seeder diagnose --timeout 60s "magnet:?xt=urn:btih:08ada5a7..."
+GET /<info-hash>/                  — file listing
+GET /<info-hash>/<path>            — stream file (supports Range)
+GET /<info-hash>/source.torrent    — download .torrent metadata
+GET /<info-hash>/<path>?stats      — download progress page
+```
 
+Torrent metadata is resolved from local files (`--input`) or remote torrent-store (gRPC).
+
+### Diagnose mode
+
+Troubleshoot why a torrent isn't downloading — test tracker responses, peer discovery, and download capability:
+
+```bash
+torrent-web-seeder diagnose --timeout 60s "magnet:?xt=urn:btih:..."
+torrent-web-seeder diagnose ./path/to/file.torrent
+```
+
+Example output:
+
+```
 === Torrent Diagnostics ===
 
 --- Client Initialization ---
 [OK]   Client started
        Listen: 0.0.0.0:42069
        DHT: 2 server(s)
-
---- Torrent Input ---
-       Type: magnet link
-       Info Hash: 08ada5a7a6183aae1e09d831df6748d566095a10
-       Display Name: Sintel
-       Trackers: 8
 
 --- Metadata Resolution ---
 [OK]   Metadata received in 0.9s
@@ -40,11 +86,9 @@ $ torrent-web-seeder diagnose --timeout 60s "magnet:?xt=urn:btih:08ada5a7..."
 --- Download Test ---
           6s  peers=3   seeders=3   downloaded=1.0 MB    speed=357.3 KB/s
          12s  peers=6   seeders=6   downloaded=33.1 MB   speed=9.0 MB/s
-[OK]   First useful data at 6.0s
 
 --- Tracker Status ---
 [OK]   udp4://explodie.org:6969           — 32 peers
-[OK]   udp4://tracker.empire-js.us:1337   — 12 peers
 [FAIL] udp4://tracker.leechers-paradise.org:6969 — no such host
 
 === Diagnosis ===
@@ -53,47 +97,102 @@ $ torrent-web-seeder diagnose --timeout 60s "magnet:?xt=urn:btih:08ada5a7..."
      Downloaded: 123.8 MB useful data
 ```
 
-### Diagnostic phases
+Diagnose flags: `--timeout`, `--http-proxy` (test from different IP), `--torrent-client-debug` (verbose logging), plus all torrent client flags.
 
-| Phase | What it checks |
-|-------|---------------|
-| Client Initialization | Torrent client startup, listen addresses, DHT servers |
-| Torrent Input | Magnet URI / .torrent parsing, info hash, tracker list |
-| Metadata Resolution | Ability to obtain torrent metadata from peers (with live progress) |
-| Download Test | Actual data download — peer count, speed, first byte latency |
-| Tracker Status | Per-tracker announce results — peers returned, errors, failure reasons |
-| Final Statistics | Aggregate stats — peers, seeders, bytes downloaded, pieces |
-| Connected Peers | Per-peer detail — address, download rate, useful data |
-| Raw Client Status | Full `WriteStatus` dump from anacrolix/torrent for deep debugging |
-| Diagnosis | Automated verdict with root cause analysis and suggestions |
+## gRPC API
 
-### Options
+Defined in [`proto/torrent-web-seeder.proto`](proto/torrent-web-seeder.proto):
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--timeout` | Total diagnostic timeout | `60s` |
-| `--torrent-client-debug` | Enable verbose anacrolix/torrent logging | off |
-| `--http-proxy` | Route traffic through HTTP proxy (test from different IP) | — |
-| `--data-dir` | Temp storage directory | system temp |
-| `--disable-utp` | Disable uTP protocol | off |
-| `--disable-webtorrent` | Disable WebTorrent | off |
-| `--disable-webseeds` | Disable webseeds | off |
+| Method | Description |
+|--------|-------------|
+| `Stat(path)` | Point-in-time snapshot: total/completed bytes, peers, seeders, leechers, status, piece states |
+| `StatStream(path)` | Server-streaming updates (sends on change, 3s interval) |
+| `Files()` | List all files in the torrent |
 
-All torrent client flags from the main server mode are also available.
+Status values: `INITIALIZATION`, `SEEDING`, `IDLE`, `TERMINATED`, `WAITING_FOR_PEERS`, `RESTORING`, `BACKINGUP`.
 
-### Common diagnoses
+## Configuration
 
-- **All trackers failed** — tracker blocked your IP, torrent removed from tracker, or tracker is down
-- **No peers discovered** — dead torrent, IP blocked, or DHT/PEX not finding peers
-- **Peers found but no seeders** — only leechers available, torrent partially seeded
-- **Seeders connected but no data** — seeders choking, rate limit too restrictive
+All configuration via CLI flags and environment variables.
 
-## Server mode
+### Server flags
 
-Default mode — runs the HTTP server for torrent content streaming:
+| Flag | Env | Default | Description |
+|------|-----|---------|-------------|
+| `--host` | `WEB_HOST` | — | HTTP listen host |
+| `--port` | `WEB_PORT` | `8080` | HTTP listen port |
+| `--data-dir` | `DATA_DIR` | system temp | Storage directory for torrent data |
+| `--input` | `INPUT` | — | Local `.torrent` file or directory |
+| `--torrent-store-host` | `TORRENT_STORE_SERVICE_HOST` | — | Remote torrent-store gRPC host |
+| `--torrent-store-port` | `TORRENT_STORE_SERVICE_PORT` | `50051` | Remote torrent-store gRPC port |
+| `--max-readahead` | `MAX_READAHEAD` | `20MB` | Read-ahead buffer size |
 
+### Torrent client flags
+
+| Flag | Env | Default | Description |
+|------|-----|---------|-------------|
+| `--download-rate` | `DOWNLOAD_RATE` | unlimited | Download rate limit (e.g. `100MB`) |
+| `--per-torrent-cache-budget` | `PER_TORRENT_CACHE_BUDGET` | `50GB` | LRU cache per torrent |
+| `--established-conns-per-torrent` | `ESTABLISHED_CONNS_PER_TORRENT` | — | Max active peers per torrent |
+| `--http-proxy` | `HTTP_PROXY` | — | HTTP proxy for tracker/webseed requests |
+| `--no-upload` | `NO_UPLOAD` | `false` | Disable uploading |
+| `--seed` | `SEED` | `false` | Continue seeding after download |
+| `--disable-utp` | `DISABLE_UTP` | `false` | Disable uTP protocol |
+| `--disable-webtorrent` | `DISABLE_WEBTORRENT` | `false` | Disable WebTorrent |
+| `--disable-webseeds` | `DISABLE_WEBSEEDS` | `false` | Disable webseeds |
+| `--torrent-client-debug` | `TORRENT_CLIENT_DEBUG` | `false` | Verbose torrent client logging |
+
+### Infrastructure flags
+
+| Flag | Env | Default | Description |
+|------|-----|---------|-------------|
+| `--use-stat` | `USE_STAT` | `false` | Enable gRPC stat service (port 50051) |
+| `--use-probe` | `USE_PROBE` | `false` | Enable health probe (port 8081) |
+| `--use-pprof` | `USE_PPROF` | `false` | Enable pprof (port 8082) |
+| `--use-prom` | `USE_PROM` | `false` | Enable Prometheus metrics (port 8083) |
+
+## Docker
+
+```bash
+docker build -t torrent-web-seeder .
+docker run -p 8080:8080 -v /data:/data torrent-web-seeder
 ```
-torrent-web-seeder [global options]
+
+Ports: `8080` (HTTP), `50051` (gRPC), `8081` (probes), `8082` (pprof), `8083` (Prometheus).
+
+## Development
+
+```bash
+# Build
+cd server && go build -o server
+
+# Regenerate protobuf
+make protoc
+
+# Run with local torrent file
+./server/server --input ./torrents/Sintel.torrent --data-dir /tmp/tws
+
+# Run diagnostics
+./server/server diagnose "magnet:?xt=urn:btih:..."
 ```
 
-Key options: `--host`, `--port` (default 8080), `--input` (torrent file path), `--torrent-store-host/port` (remote torrent store), `--download-rate`, `--data-dir`.
+## Metrics
+
+Prometheus metrics exported on `:8083/metrics`:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `torrent_web_seeder_dial_attempts_total` | Counter | Dial attempts by type (peer/http/tracker) |
+| `torrent_web_seeder_dial_failures_total` | Counter | Dial failures by type and error category |
+| `torrent_web_seeder_dial_success_total` | Counter | Successful dials by type |
+| `torrent_web_seeder_handshake_success_total` | Counter | Successful peer handshakes |
+| `torrent_web_seeder_established_connections` | Gauge | Active peer connections |
+| `torrent_web_seeder_half_open_connections` | Gauge | Pending peer connections |
+| `torrent_web_seeder_active_torrents_count` | Gauge | Number of active torrents |
+| `torrent_web_seeder_time_to_first_peer_ms` | Histogram | Latency to first peer connection |
+| `torrent_web_seeder_time_to_first_byte_ms` | Histogram | Latency to first downloaded byte |
+| `torrent_web_seeder_stall_*_seconds_total` | Counter | Stall detection (discovery/idle/download) |
+
+## License
+
+MIT
