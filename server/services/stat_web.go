@@ -41,6 +41,12 @@ func (s *StatWeb) Serve(w http.ResponseWriter, r *http.Request, h string, p stri
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Tell nginx-ingress to disable response buffering for this SSE stream
+	// only. Without this the ingress holds statupdate events in its
+	// 64×128KB proxy buffers (the small JSON payloads never fill the
+	// buffer) and clients see updates only after a 30s+ flush, which the
+	// web-ui warmup watchdog misreads as "no peers".
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	ctx := metadata.NewIncomingContext(r.Context(), metadata.MD{
 		"info-hash": []string{h},
