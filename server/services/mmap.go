@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anacrolix/missinggo/v2"
@@ -22,6 +23,10 @@ import (
 
 	log "github.com/sirupsen/logrus"
 )
+
+// evictShards bounds the number of RWMutexes used to serialize piece reads
+// against eviction. Power of two for cheap sharding via bitmask.
+const evictShards = 1024
 
 type mmapClientImpl struct {
 	baseDir string
@@ -146,20 +151,31 @@ type mmapTorrentStorage struct {
 	pc       storage.PieceCompletion
 	lru      *PieceLRU
 	info     *metainfo.Info
-	files    []*os.File         // file handles for hole-punching
-	fileLens []int64            // file lengths for piece→file mapping
-	mmaps    []mmap.MMap        // raw mmap regions per file, for madvise after eviction
+	files    []*os.File  // file handles for hole-punching
+	fileLens []int64     // file lengths for piece→file mapping
+	mmaps    []mmap.MMap // raw mmap regions per file, for madvise after eviction
 	closeCh  chan struct{}
-	cl       *torrent.Client    // for VerifyData on eviction
-	verifyCh chan int           // evicted piece indices queued for VerifyData
+	cl       *torrent.Client // for VerifyData on eviction
+	verifyCh chan int        // evicted piece indices queued for VerifyData
+	// evictMu serializes piece reads against eviction. Sharded by piece
+	// index so eviction of one piece does not block reads of unrelated
+	// pieces. ReadAt takes RLock; evictPiece takes Lock — guaranteeing
+	// the mmap region is not punch-holed mid-read, which would otherwise
+	// hand zero-filled bytes to the HTTP client.
+	evictMu [evictShards]sync.RWMutex
+}
+
+// pieceLock returns the RWMutex shard for a given piece index.
+func (ts *mmapTorrentStorage) pieceLock(idx int) *sync.RWMutex {
+	return &ts.evictMu[uint(idx)&(evictShards-1)]
 }
 
 func (ts *mmapTorrentStorage) Piece(p metainfo.Piece) storage.PieceImpl {
 	return mmapStoragePiece{
-		t:              ts,
-		p:              p,
-		sectionReader:  io.NewSectionReader(ts.span, p.Offset(), p.Length()),
-		sectionWriter:  missinggo.NewSectionWriter(ts.span, p.Offset(), p.Length()),
+		t:             ts,
+		p:             p,
+		sectionReader: io.NewSectionReader(ts.span, p.Offset(), p.Length()),
+		sectionWriter: missinggo.NewSectionWriter(ts.span, p.Offset(), p.Length()),
 	}
 }
 
@@ -225,13 +241,28 @@ type mmapStoragePiece struct {
 }
 
 func (me mmapStoragePiece) ReadAt(b []byte, off int64) (int, error) {
+	// Hold the piece shard for read so an in-flight evictPiece cannot
+	// punch holes in the mmap region while we are copying out of it.
+	mu := me.t.pieceLock(me.p.Index())
+	mu.RLock()
+	defer mu.RUnlock()
+
+	// Defense-in-depth: between the caller's Completion() check and now,
+	// the piece may have been evicted (pc.Set(false) is the first thing
+	// evictPiece does). Refuse to serve a piece whose backing bytes may
+	// already be holes — anacrolix re-fetches it via BitTorrent instead
+	// of streaming zeros to the client.
+	if me.t.lru != nil {
+		c, err := me.t.pc.Get(me.pieceKey())
+		if err == nil && c.Ok && !c.Complete {
+			return 0, io.ErrUnexpectedEOF
+		}
+	}
+
 	if me.t.lru != nil {
 		me.t.lru.Touch(me.p.Index())
 	}
 	n, err := me.sectionReader.ReadAt(b, off)
-	// After copying data into the buffer, advise the kernel to drop the
-	// mmap pages. The data is now in `b` and will be sent to the client;
-	// keeping it in the page cache wastes cgroup memory.
 	if n > 0 && me.t.lru != nil {
 		me.t.madviseSpanRange(me.p.Offset()+off, int64(n))
 	}
@@ -350,22 +381,24 @@ func (ts *mmapTorrentStorage) evictOverBudget() {
 }
 
 // evictPiece removes a piece from cache by punching holes in the mmap'd files
-// and marking it as incomplete.
+// and marking it as incomplete. Holds the piece shard's eviction lock for the
+// entire mutating section so concurrent ReadAt calls cannot observe the
+// transient state where mmap pages have been zeroed but completion still
+// reports the piece as available.
 func (ts *mmapTorrentStorage) evictPiece(idx int) {
 	piece := ts.info.Piece(idx)
 	pk := metainfo.PieceKey{InfoHash: ts.infoHash, Index: idx}
 
-	// 1. Mark piece incomplete in SQLite + in-memory state.
+	mu := ts.pieceLock(idx)
+	mu.Lock()
+
 	if err := ts.pc.Set(pk, false); err != nil {
+		mu.Unlock()
 		log.WithError(err).Errorf("failed to mark piece %d incomplete during eviction", idx)
 		return
 	}
-
-	// 2. Clean up file_completion for affected files.
 	ts.uncompleteAffectedFiles(idx)
 
-	// 3. Punch holes in the mmap'd files to free disk blocks,
-	// then advise the kernel to drop the corresponding pages from RSS.
 	for _, region := range ts.pieceFileRegions(piece) {
 		if region.fileIndex >= len(ts.files) || ts.files[region.fileIndex] == nil {
 			continue
@@ -373,9 +406,6 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 		if err := punchHole(ts.files[region.fileIndex], region.offset, region.length); err != nil {
 			log.WithError(err).Errorf("failed to punch hole for piece %d in file %d", idx, region.fileIndex)
 		}
-		// MADV_DONTNEED on the mmap region ensures the kernel immediately reclaims
-		// the pages from the process's page tables and cgroup memory accounting,
-		// preventing stale page-table entries from being re-faulted by concurrent reads.
 		if region.fileIndex < len(ts.mmaps) && ts.mmaps[region.fileIndex] != nil {
 			end := region.offset + region.length
 			if end > int64(len(ts.mmaps[region.fileIndex])) {
@@ -389,7 +419,6 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 		}
 	}
 
-	// 4. Remove from LRU tracker and update metrics.
 	prevUsed := ts.lru.Used()
 	ts.lru.Remove(idx)
 	freedBytes := prevUsed - ts.lru.Used()
@@ -397,16 +426,19 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 	promCachePieceCount.Dec()
 	promCacheEvictions.Inc()
 
+	mu.Unlock()
+
 	log.Infof("evicted piece %d, freed %d bytes, used=%d budget=%d",
 		idx, freedBytes, ts.lru.Used(), ts.lru.budget)
 
-	// 5. Queue VerifyData to notify anacrolix that this piece is no longer valid.
-	// Done via channel to avoid calling VerifyData inside MarkComplete's call chain
-	// (which could deadlock on anacrolix internal locks).
+	// Notify anacrolix asynchronously — calling VerifyData synchronously
+	// from MarkComplete's call chain (the LRU eviction trigger) can
+	// deadlock on anacrolix's internal locks. Correctness no longer
+	// depends on this signal because pc.Set(false) above plus the ReadAt
+	// completion recheck under RLock already prevent zero-filled reads.
 	select {
 	case ts.verifyCh <- idx:
 	default:
-		// Channel full — verify goroutine will catch up via background sweep.
 	}
 }
 

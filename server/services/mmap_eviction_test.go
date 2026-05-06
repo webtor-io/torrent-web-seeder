@@ -2,10 +2,15 @@ package services
 
 import (
 	"crypto/sha1"
+	"math/rand"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anacrolix/torrent/storage"
 )
 
 // makeDummyPieces creates a Pieces byte slice with n dummy 20-byte hashes.
@@ -273,6 +278,210 @@ func TestHolePunch(t *testing.T) {
 		if b != 0xAB {
 			t.Fatalf("expected 0xAB at offset %d, got %d", 300+i, b)
 		}
+	}
+}
+
+// TestEvictRaceNoZeroReads is a regression test for a data-corruption bug
+// where ReadAt could observe a zero-filled mmap region in the gap between
+// evictPiece punching the hole and anacrolix marking the piece as needing
+// re-download. With the eviction lock + completion recheck in ReadAt, every
+// successful read must return the original pattern bytes (or an error if
+// the piece was evicted between the caller's check and our read).
+func TestEvictRaceNoZeroReads(t *testing.T) {
+	if testing.Short() {
+		t.Skip("stress test")
+	}
+
+	const numPieces = 32
+	const pieceLen = 64 * 1024
+
+	info := &metainfo.Info{
+		PieceLength: pieceLen,
+		Length:      int64(numPieces * pieceLen),
+		Name:        "race",
+		Pieces:      makeDummyPieces(numPieces),
+	}
+	var infoHash metainfo.Hash
+	copy(infoHash[:], "racetest1234567890ab")
+
+	dir := t.TempDir()
+	span, files, fileLens, mmaps, err := mMapTorrent(info, dir)
+	if err != nil {
+		t.Fatalf("mMapTorrent: %v", err)
+	}
+	defer span.Close()
+
+	pc := storage.NewMapPieceCompletion()
+	lru := NewPieceLRU(int64(numPieces) * pieceLen)
+
+	ts := &mmapTorrentStorage{
+		infoHash: infoHash,
+		span:     span,
+		pc:       pc,
+		lru:      lru,
+		info:     info,
+		files:    files,
+		fileLens: fileLens,
+		mmaps:    mmaps,
+		closeCh:  make(chan struct{}),
+		verifyCh: make(chan int, numPieces*64),
+	}
+	defer close(ts.closeCh)
+
+	pattern := func(i int) byte { return byte(0xa0 | (i & 0x1f)) }
+
+	fillPiece := func(idx int) {
+		buf := make([]byte, pieceLen)
+		for k := range buf {
+			buf[k] = pattern(idx)
+		}
+		if _, err := span.WriteAt(buf, int64(idx)*pieceLen); err != nil {
+			t.Errorf("WriteAt piece %d: %v", idx, err)
+			return
+		}
+		if err := pc.Set(metainfo.PieceKey{InfoHash: infoHash, Index: idx}, true); err != nil {
+			t.Errorf("pc.Set: %v", err)
+			return
+		}
+		lru.Add(idx, int64(pieceLen))
+	}
+
+	for i := 0; i < numPieces; i++ {
+		fillPiece(i)
+	}
+
+	var failures atomic.Int64
+	var reads atomic.Int64
+	var evicts atomic.Int64
+
+	deadline := time.Now().Add(2 * time.Second)
+
+	var wg sync.WaitGroup
+
+	for r := 0; r < 8; r++ {
+		wg.Add(1)
+		go func(seed int) {
+			defer wg.Done()
+			local := make([]byte, pieceLen)
+			rng := rand.New(rand.NewSource(int64(seed)))
+			for time.Now().Before(deadline) {
+				idx := rng.Intn(numPieces)
+				p := ts.Piece(info.Piece(idx)).(mmapStoragePiece)
+				n, err := p.ReadAt(local, 0)
+				reads.Add(1)
+				if err != nil {
+					continue
+				}
+				want := pattern(idx)
+				for k := 0; k < n; k++ {
+					if local[k] != want {
+						failures.Add(1)
+						return
+					}
+				}
+			}
+		}(r)
+	}
+
+	// Per-piece serialization between evict+refill so two evictors don't
+	// punch a hole through each other's in-progress refill. Production
+	// has the same guarantee implicitly: anacrolix only writes a piece
+	// once, in MarkComplete, never racing two writers on one piece.
+	var pieceMu [numPieces]sync.Mutex
+	for e := 0; e < 2; e++ {
+		wg.Add(1)
+		go func(seed int) {
+			defer wg.Done()
+			rng := rand.New(rand.NewSource(int64(seed + 100)))
+			for time.Now().Before(deadline) {
+				idx := rng.Intn(numPieces)
+				pieceMu[idx].Lock()
+				ts.evictPiece(idx)
+				fillPiece(idx)
+				pieceMu[idx].Unlock()
+				evicts.Add(1)
+			}
+		}(e)
+	}
+
+	wg.Wait()
+
+	if failures.Load() > 0 {
+		t.Fatalf("read returned bad bytes %d times (reads=%d, evicts=%d)",
+			failures.Load(), reads.Load(), evicts.Load())
+	}
+	t.Logf("ok: %d reads, %d evicts, no bad-byte returns", reads.Load(), evicts.Load())
+}
+
+// TestReadAtRefusesEvictedPiece confirms the defense-in-depth check: once
+// pc.Set(false) is called, ReadAt returns an error rather than reading
+// from a possibly-zeroed mmap region.
+func TestReadAtRefusesEvictedPiece(t *testing.T) {
+	const pieceLen = 4096
+	info := &metainfo.Info{
+		PieceLength: pieceLen,
+		Length:      pieceLen,
+		Name:        "single",
+		Pieces:      makeDummyPieces(1),
+	}
+	var infoHash metainfo.Hash
+	copy(infoHash[:], "singlepiecehash12345")
+
+	dir := t.TempDir()
+	span, files, fileLens, mmaps, err := mMapTorrent(info, dir)
+	if err != nil {
+		t.Fatalf("mMapTorrent: %v", err)
+	}
+	defer span.Close()
+
+	pc := storage.NewMapPieceCompletion()
+	lru := NewPieceLRU(pieceLen)
+
+	ts := &mmapTorrentStorage{
+		infoHash: infoHash,
+		span:     span,
+		pc:       pc,
+		lru:      lru,
+		info:     info,
+		files:    files,
+		fileLens: fileLens,
+		mmaps:    mmaps,
+		closeCh:  make(chan struct{}),
+		verifyCh: make(chan int, 4),
+	}
+	defer close(ts.closeCh)
+
+	buf := make([]byte, pieceLen)
+	for k := range buf {
+		buf[k] = 0xCC
+	}
+	if _, err := span.WriteAt(buf, 0); err != nil {
+		t.Fatalf("WriteAt: %v", err)
+	}
+	if err := pc.Set(metainfo.PieceKey{InfoHash: infoHash, Index: 0}, true); err != nil {
+		t.Fatalf("pc.Set: %v", err)
+	}
+	lru.Add(0, pieceLen)
+
+	p := ts.Piece(info.Piece(0)).(mmapStoragePiece)
+
+	// Pre-eviction: succeeds with the pattern.
+	got := make([]byte, pieceLen)
+	if n, err := p.ReadAt(got, 0); err != nil {
+		t.Fatalf("ReadAt before eviction: n=%d err=%v", n, err)
+	}
+	for k := 0; k < pieceLen; k++ {
+		if got[k] != 0xCC {
+			t.Fatalf("byte %d: want 0xCC, got %x", k, got[k])
+		}
+	}
+
+	// After pc.Set(false): defense-in-depth must short-circuit ReadAt.
+	if err := pc.Set(metainfo.PieceKey{InfoHash: infoHash, Index: 0}, false); err != nil {
+		t.Fatalf("pc.Set false: %v", err)
+	}
+	if n, err := p.ReadAt(got, 0); err == nil {
+		t.Fatalf("ReadAt after eviction: expected error, got n=%d", n)
 	}
 }
 
