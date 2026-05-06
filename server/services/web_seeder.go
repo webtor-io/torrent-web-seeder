@@ -160,7 +160,25 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		}
 	}
 
-	// Try file cache first
+	// Vault is the authoritative store (worker verifies piece SHA-1 before
+	// committing to S3). The local file cache may contain stale bytes from
+	// past piece evictions that punched holes into the mmap'd file before
+	// the eviction race fix landed — file_completion can still report the
+	// file as complete while the underlying bytes have zero-filled regions.
+	// Serve from vault first; only fall back to the local cache when vault
+	// does not have the file (typically while the resource is still being
+	// ingested).
+	if s.v != nil {
+		served, err := s.redirectFromVault(w, r, h, p)
+		if err != nil {
+			logWithField.WithError(err).Warn("vault redirect failed, falling back to file cache or torrent")
+		}
+		if served {
+			return
+		}
+	}
+
+	// Vault does not have it — try the local file cache.
 	cp, err := s.fcm.Get(h, p)
 	if err != nil {
 		logWithField.WithError(err).Error("failed to check file cache")
@@ -180,17 +198,6 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		defer file.Close()
 		http.ServeContent(w, r, p, lastMod, file)
 		return
-	}
-
-	// Try vault redirect
-	if s.v != nil {
-		served, err := s.redirectFromVault(w, r, h, p)
-		if err != nil {
-			logWithField.WithError(err).Warn("vault redirect failed, falling back to torrent")
-		}
-		if served {
-			return
-		}
 	}
 
 	// Fallback to torrent
