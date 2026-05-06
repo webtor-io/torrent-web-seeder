@@ -222,15 +222,18 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 }
 
 func (s *WebSeeder) redirectFromVault(w http.ResponseWriter, r *http.Request, h string, p string) (bool, error) {
-	wsURL, err := s.v.GetWebseedURL(r.Context(), h)
+	// Vault now serves individual files as soon as they're stored, even if
+	// the resource isn't fully uploaded. Probe the file directly (cached)
+	// instead of gating on whole-torrent availability.
+	has, err := s.v.HasFile(r.Context(), h, p)
 	if err != nil {
 		return false, err
 	}
-	if wsURL == "" {
+	if !has {
 		return false, nil
 	}
 
-	fileURL := wsURL + p
+	fileURL := s.v.FileURL(h, p)
 
 	// Use a client that does not follow redirects so we can capture the Location header.
 	noRedirectCl := *s.cl
@@ -346,6 +349,16 @@ func (s *WebSeeder) availableWithoutTorrent(ctx context.Context, h string, p str
 			log.WithError(err).Warnf("failed to check vault for %s", h)
 		} else if wsURL != "" {
 			return true, nil
+		}
+		// Whole torrent isn't stored, but a specific file may be —
+		// vault serves per-file as soon as the individual file is stored.
+		if p != "" {
+			has, err := s.v.HasFile(ctx, h, p)
+			if err != nil {
+				log.WithError(err).Warnf("failed to check vault file for %s/%s", h, p)
+			} else if has {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
