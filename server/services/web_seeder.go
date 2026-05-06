@@ -117,11 +117,6 @@ func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h
 }
 
 func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, p string) {
-	_, err := s.tom.Touch(h)
-	if err != nil {
-		log.Error(err)
-	}
-
 	_, download := r.URL.Query()["download"]
 
 	logWithField := log.WithFields(log.Fields{
@@ -178,7 +173,15 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		}
 	}
 
-	// Vault does not have it — try the local file cache.
+	// Vault does not have it — we will be serving from this seeder's local
+	// torrent state (cache or live download). Touch the dir-level marker so
+	// torrent-web-seeder-cleaner does not reap the torrent while it is in
+	// use here. Skipped on the vault path above: redirects don't need this
+	// seeder to keep the torrent loaded.
+	if _, err := s.tom.Touch(h); err != nil {
+		log.Error(err)
+	}
+
 	cp, err := s.fcm.Get(h, p)
 	if err != nil {
 		logWithField.WithError(err).Error("failed to check file cache")
