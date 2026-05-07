@@ -306,7 +306,14 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 	for _, f := range t.Files() {
 		if f.Path() == p {
 			torReader := f.NewReader()
-			torReader.SetResponsive()
+			// SetResponsive disabled: in responsive mode, ReadAt on an
+			// evicted (incomplete) piece returns (0, io.ErrUnexpectedEOF)
+			// immediately, which http.ServeContent treats as EOF and ends
+			// the response with size=0 status=206 before anacrolix has a
+			// chance to refetch the piece from peers. Blocking reads make
+			// the response wait for piece reacquisition. Re-enable per
+			// request type if it turns out to break player streaming.
+			// torReader.SetResponsive()
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
 			return NewTouchWriter(w, s.tm, h), torReader, nil
 		}
