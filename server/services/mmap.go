@@ -243,21 +243,21 @@ type mmapStoragePiece struct {
 func (me mmapStoragePiece) ReadAt(b []byte, off int64) (int, error) {
 	// Hold the piece shard for read so an in-flight evictPiece cannot
 	// punch holes in the mmap region while we are copying out of it.
+	// The RLock + evictPiece's Lock are sufficient on their own to
+	// prevent reading from a region in the middle of being punched.
+	//
+	// We deliberately do NOT short-circuit here when pc.Get reports
+	// !Complete. That check used to live here as defense-in-depth but
+	// it also fired during anacrolix's hashPiece verification ReadAt
+	// for a piece that was just downloaded after eviction: the row in
+	// piece_completion still says complete=0 (MarkComplete only fires
+	// AFTER hash passes), so the verification read returned 0 bytes
+	// and the piece could never be re-acquired. Result: any piece that
+	// had been evicted at least once became permanently un-redownloadable.
+	// Trust the caller to only ReadAt after seeing Completion=true.
 	mu := me.t.pieceLock(me.p.Index())
 	mu.RLock()
 	defer mu.RUnlock()
-
-	// Defense-in-depth: between the caller's Completion() check and now,
-	// the piece may have been evicted (pc.Set(false) is the first thing
-	// evictPiece does). Refuse to serve a piece whose backing bytes may
-	// already be holes — anacrolix re-fetches it via BitTorrent instead
-	// of streaming zeros to the client.
-	if me.t.lru != nil {
-		c, err := me.t.pc.Get(me.pieceKey())
-		if err == nil && c.Ok && !c.Complete {
-			return 0, io.ErrUnexpectedEOF
-		}
-	}
 
 	if me.t.lru != nil {
 		me.t.lru.Touch(me.p.Index())
