@@ -142,6 +142,7 @@ func (s *completions) GetCompletedFiles() []string {
 type pieceCompletion struct {
 	mu          sync.Mutex
 	closed      bool
+	done        chan struct{}
 	db          *sqlite.Conn
 	info        *metainfo.Info
 	hash        metainfo.Hash
@@ -197,22 +198,33 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash) (re
 		info:        info,
 		hash:        hash,
 		completions: completions,
+		done:        make(chan struct{}),
 	}
 	go func() {
 		// No local dedup map — always call CompleteFile() so that after
 		// eviction + re-download the file_completion entry is re-added.
 		// INSERT OR REPLACE is idempotent, so repeated calls are safe.
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 		for {
 			for _, f := range completions.GetCompletedFiles() {
-				err = ret.CompleteFile(f)
-				if err != nil {
+				if err := ret.CompleteFile(f); err != nil {
 					return
 				}
 			}
-			if completions.completed || ret.closed {
+			if completions.completed {
 				return
 			}
-			<-time.After(5 * time.Second)
+			// Selectable sleep so Close() unblocks us immediately. The
+			// previous bare `<-time.After(...)` left this goroutine
+			// asleep through the full 5s after Close, and (when
+			// Close() was never called at all — see mmap.Close prior
+			// to fix) leaked it for the lifetime of the pod.
+			select {
+			case <-ret.done:
+				return
+			case <-ticker.C:
+			}
 		}
 	}()
 	return
@@ -289,6 +301,7 @@ func (s *pieceCompletion) Close() (err error) {
 	if s.closed {
 		return
 	}
+	close(s.done)
 	err = s.db.Close()
 	s.db = nil
 	s.closed = true

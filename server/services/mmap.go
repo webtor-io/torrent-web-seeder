@@ -230,6 +230,15 @@ func (ts *mmapTorrentStorage) Close() error {
 			_ = madviseEvict(m)
 		}
 	}
+	// Close the piece-completion store: releases its background goroutine,
+	// closes the SQLite handle backing .torrent.db (one FD + many in-memory
+	// prepared statements), and drops the metainfo reference held inside
+	// the goroutine closure. Without this, every dropped torrent leaks ~1
+	// goroutine + 1 SQLite conn + the full piece/file map for the lifetime
+	// of the pod — a 3-day pod accumulates thousands and OOMs.
+	if ts.pc != nil {
+		_ = ts.pc.Close()
+	}
 	return ts.span.Close()
 }
 

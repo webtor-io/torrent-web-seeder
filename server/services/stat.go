@@ -178,11 +178,22 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 		return err
 	}
 	ticker := time.NewTicker(3 * time.Second)
-	errCh := make(chan error)
-	done := make(chan bool)
+	// Buffered so the producer goroutine can return without a partner
+	// reader (errCh) and the parent's defer can signal exit without a
+	// running consumer (done). Unbuffered chans here leaked one goroutine
+	// per StatStream invocation: when the parent select fired on
+	// t.Closed/sigs/ctxDone before the producer had reached its select,
+	// the producer parked on `errCh <- err` forever, and the parent's
+	// `done <- true` blocked forever waiting for a producer that had
+	// already exited via the other branch.
+	errCh := make(chan error, 1)
+	done := make(chan bool, 1)
 	defer func() {
 		ticker.Stop()
-		done <- true
+		select {
+		case done <- true:
+		default:
+		}
 	}()
 	go func() {
 		var prevRep *pb.StatReply
