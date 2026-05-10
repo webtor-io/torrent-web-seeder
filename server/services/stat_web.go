@@ -120,12 +120,24 @@ func (s *StatStreamServer) Ping() {
 	s.f.Flush()
 }
 
-func (s *StatStreamServer) Send(m *pb.StatReply) error {
+func (s *StatStreamServer) Send(m *pb.StatReply) (retErr error) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if s.ctx.Err() != nil {
 		return s.ctx.Err()
 	}
+	// net/http's chunkWriter has a race when the underlying handler has
+	// already returned: response.cw.flush dereferences a freed bufio.Writer
+	// → SIGSEGV in bufio.(*Writer).Flush. The ctx check above closes the
+	// window for most cases, but a Send fired between the parent handler's
+	// return and the next ctx-cancel propagation can still hit the freed
+	// writer. Recover so a single late Send can't crash the process and
+	// take down 30+ active streams on the pod.
+	defer func() {
+		if r := recover(); r != nil {
+			retErr = errors.Errorf("StatStreamServer.Send recovered from panic: %v", r)
+		}
+	}()
 	data, err := json.Marshal(m)
 	if err != nil {
 		return err
