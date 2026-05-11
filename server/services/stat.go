@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -188,14 +189,24 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 	// already exited via the other branch.
 	errCh := make(chan error, 1)
 	done := make(chan bool, 1)
+	// Block the handler return on the producer goroutine's exit. Without
+	// this the parent could return out of StatStream while the producer
+	// was still mid-Send; net/http would finalize the response (zeroing
+	// the underlying bufio.Writer) and the next Flush from the producer
+	// would SIGSEGV in chunkWriter. The recover() in StatStreamServer.Send
+	// is now belt-and-suspenders rather than the primary defence.
+	var wg sync.WaitGroup
+	wg.Add(1)
 	defer func() {
 		ticker.Stop()
 		select {
 		case done <- true:
 		default:
 		}
+		wg.Wait()
 	}()
 	go func() {
+		defer wg.Done()
 		var prevRep *pb.StatReply
 		for {
 			rep, err := s.Stat(stream.Context(), in)

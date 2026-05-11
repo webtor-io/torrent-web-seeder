@@ -126,13 +126,13 @@ func (s *StatStreamServer) Send(m *pb.StatReply) (retErr error) {
 	if s.ctx.Err() != nil {
 		return s.ctx.Err()
 	}
-	// net/http's chunkWriter has a race when the underlying handler has
-	// already returned: response.cw.flush dereferences a freed bufio.Writer
-	// → SIGSEGV in bufio.(*Writer).Flush. The ctx check above closes the
-	// window for most cases, but a Send fired between the parent handler's
-	// return and the next ctx-cancel propagation can still hit the freed
-	// writer. Recover so a single late Send can't crash the process and
-	// take down 30+ active streams on the pod.
+	// Belt-and-suspenders: the StatStream handler now wg.Wait()s on its
+	// producer goroutine before returning, so this Send should never run
+	// after net/http has finalized the response (and zeroed the underlying
+	// bufio.Writer that chunkWriter.flush would otherwise SIGSEGV on).
+	// Keep the recover anyway — a future caller adding a Send path that
+	// bypasses the wg sync, or any other unforeseen race, shouldn't crash
+	// the whole pod and take 30+ live streams down with it.
 	defer func() {
 		if r := recover(); r != nil {
 			retErr = errors.Errorf("StatStreamServer.Send recovered from panic: %v", r)
