@@ -278,7 +278,23 @@ func (me mmapStoragePiece) ReadAt(b []byte, off int64) (int, error) {
 	return n, err
 }
 
-func (me mmapStoragePiece) WriteAt(b []byte, off int64) (int, error) {
+func (me mmapStoragePiece) WriteAt(b []byte, off int64) (n int, err error) {
+	// A peer's mainReadLoop can call WriteAt right while anacrolix is
+	// finalizing Storage.Close() — span.Close unmaps the underlying
+	// regions and MMapSpan's mmaps slice goes empty; the subsequent
+	// locateCopy then indexes mmaps[0] on length-0 and panics. anacrolix
+	// doesn't synchronise the in-flight chunk writes with storage close;
+	// pre-fix this race was hidden by piece_completion's leaked goroutine
+	// keeping the torrent alive past Drop, but the leak fix made Close
+	// land faster and exposed the window. Recover so a single mid-Close
+	// chunk write returns an error to the peer loop (it'll just drop
+	// the peer) instead of taking the whole pod down.
+	defer func() {
+		if r := recover(); r != nil {
+			n = 0
+			err = fmt.Errorf("mmap WriteAt recovered from panic (storage closing?): %v", r)
+		}
+	}()
 	return me.sectionWriter.WriteAt(b, off)
 }
 

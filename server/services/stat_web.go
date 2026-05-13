@@ -51,20 +51,34 @@ func (s *StatWeb) Serve(w http.ResponseWriter, r *http.Request, h string, p stri
 	ctx := metadata.NewIncomingContext(r.Context(), metadata.MD{
 		"info-hash": []string{h},
 	})
+	// Local cancelable context so we can stop the Ping goroutine the same
+	// way StatStream's producer is stopped (sync.WaitGroup wait before the
+	// handler returns). Without this, the Ping goroutine could fire one
+	// final Flush after Serve had returned and net/http freed the
+	// response's bufio.Writer — SIGSEGV in chunkWriter, taking the pod
+	// with it. The recover() in StatStreamServer.Ping is kept as
+	// belt-and-suspenders for any future call path that bypasses this
+	// sync.
+	pingCtx, cancel := context.WithCancel(ctx)
 	stream := NewStatStreamServer(ctx, ha, f)
 	ticker := time.NewTicker(10 * time.Second)
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case <-ticker.C:
 				stream.Ping()
-			case <-ctx.Done():
+			case <-pingCtx.Done():
 				return
 			}
 		}
 	}()
 	err := s.st.StatStream(&pb.StatRequest{Path: p}, stream)
 	ticker.Stop()
+	cancel()
+	wg.Wait()
 	return err
 }
 
@@ -113,6 +127,17 @@ func (s *StatStreamServer) Ping() {
 	if s.ctx.Err() != nil {
 		return
 	}
+	// Belt-and-suspenders: StatWeb.Serve now wg.Wait()s on the Ping
+	// goroutine via a cancelable ping context, so Flush should never
+	// run after net/http has finalized the response. Keep the recover
+	// against any future call path that bypasses that sync, since this
+	// panic is unrecoverable at process level and would take 30+ live
+	// streams down with the pod.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = r
+		}
+	}()
 	fmt.Fprintf(s.w, "id: %v\n", s.counter)
 	fmt.Fprintf(s.w, "event: ping\n")
 	fmt.Fprintf(s.w, "data: %v\n\n", time.Now().Unix())
