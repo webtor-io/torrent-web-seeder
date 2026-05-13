@@ -291,6 +291,7 @@ func (me mmapStoragePiece) WriteAt(b []byte, off int64) (n int, err error) {
 	// the peer) instead of taking the whole pod down.
 	defer func() {
 		if r := recover(); r != nil {
+			log.WithField("at", "mmap.WriteAt").Warnf("recovered panic (storage closing?): %v", r)
 			n = 0
 			err = fmt.Errorf("mmap WriteAt recovered from panic (storage closing?): %v", r)
 		}

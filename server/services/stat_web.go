@@ -12,6 +12,7 @@ import (
 
 	logrusmiddleware "github.com/bakins/logrus-middleware"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 
 	pb "github.com/webtor-io/torrent-web-seeder/proto"
 )
@@ -132,10 +133,12 @@ func (s *StatStreamServer) Ping() {
 	// run after net/http has finalized the response. Keep the recover
 	// against any future call path that bypasses that sync, since this
 	// panic is unrecoverable at process level and would take 30+ live
-	// streams down with the pod.
+	// streams down with the pod. The Warn log lets us track whether
+	// the wg-sync above actually closes the race in practice — if 0
+	// events for a week we can drop the recover and trust the sync.
 	defer func() {
 		if r := recover(); r != nil {
-			_ = r
+			log.WithField("at", "stat_web.Ping").Warnf("recovered panic: %v", r)
 		}
 	}()
 	fmt.Fprintf(s.w, "id: %v\n", s.counter)
@@ -160,6 +163,7 @@ func (s *StatStreamServer) Send(m *pb.StatReply) (retErr error) {
 	// the whole pod and take 30+ live streams down with it.
 	defer func() {
 		if r := recover(); r != nil {
+			log.WithField("at", "stat_web.Send").Warnf("recovered panic: %v", r)
 			retErr = errors.Errorf("StatStreamServer.Send recovered from panic: %v", r)
 		}
 	}()
