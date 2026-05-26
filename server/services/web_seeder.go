@@ -41,6 +41,7 @@ func RegisterWebSeederFlags(f []cli.Flag) []cli.Flag {
 type WebSeeder struct {
 	tm           *TorrentMap
 	st           *StatWeb
+	wu           *Warmup
 	fcm          *FileCacheMap
 	tfcm         *TorrentFileCountMap
 	tom          *TouchMap
@@ -49,10 +50,11 @@ type WebSeeder struct {
 	maxReadahead int64
 }
 
-func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, tom *TouchMap, st *StatWeb, v *Vault, cl *http.Client, maxReadahead int64) *WebSeeder {
+func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, tom *TouchMap, st *StatWeb, wu *Warmup, v *Vault, cl *http.Client, maxReadahead int64) *WebSeeder {
 	return &WebSeeder{
 		tm:           tm,
 		st:           st,
+		wu:           wu,
 		fcm:          fcm,
 		tfcm:         tfcm,
 		tom:          tom,
@@ -393,6 +395,41 @@ func (s *WebSeeder) serveStats(w http.ResponseWriter, r *http.Request, h string,
 	}
 }
 
+func (s *WebSeeder) serveWarmup(w http.ResponseWriter, r *http.Request, h string, p string) {
+	avail, err := s.availableWithoutTorrent(r.Context(), h, p)
+	if err != nil {
+		log.Error(err)
+		http.Error(w, "failed to check availability", http.StatusInternalServerError)
+		return
+	}
+	// File is already in vault/cache — there is nothing to warm. Return
+	// an empty SSE stream; the closed connection is the "done" signal
+	// the client checks for.
+	if avail {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		return
+	}
+	// Keep the torrent alive while we're warming it — same reason as
+	// serveFile: torrent-web-seeder-cleaner will reap it otherwise.
+	if _, err := s.tom.Touch(h); err != nil {
+		log.Error(err)
+	}
+	err = s.wu.Serve(w, r, h, p)
+	if err != nil {
+		log.Error(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 func (s *WebSeeder) getHash(r *http.Request) string {
 	if r.Header.Get("X-Info-Hash") != "" {
 		return r.Header.Get("X-Info-Hash")
@@ -430,6 +467,8 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p = strings.TrimPrefix(p, h+"/")
 		if _, ok := r.URL.Query()["stats"]; ok {
 			s.serveStats(w, r, h, p)
+		} else if _, ok := r.URL.Query()["warmup"]; ok {
+			s.serveWarmup(w, r, h, p)
 		} else if _, ok := r.URL.Query()["done"]; ok {
 			s.serveDone(w, r, h, p)
 		} else if p == "" {
