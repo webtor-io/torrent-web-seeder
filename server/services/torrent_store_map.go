@@ -22,6 +22,11 @@ func NewTorrentStoreMap(ts *TorrentStore) *TorrentStoreMap {
 		ts: ts,
 		LazyMap: lazymap.New[*metainfo.MetaInfo](&lazymap.Config{
 			Capacity: 1000,
+			// TTL bounds metadata staleness when torrent-store mutates
+			// trackers after first pull (e.g. announce-list merge from a
+			// re-uploaded .torrent). Pull is cheap; torrent-store has its
+			// own pullm cache, so this just hits an in-cluster gRPC.
+			Expire: 5 * time.Minute,
 		}),
 	}
 }
