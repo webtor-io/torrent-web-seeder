@@ -284,12 +284,15 @@ func (s *WebSeeder) redirectFromVault(w http.ResponseWriter, r *http.Request, h 
 	}
 
 	// HEAD: vault returns 200 with Content-Length from S3 HeadObject.
+	// ETag/Last-Modified must survive the hop: players key stream-resume
+	// (If-Range/restart heuristics) on these validators, and s3-cache emits
+	// the same ones on GET — dropping them here made HEAD and GET look like
+	// different resources.
 	if resp.StatusCode == http.StatusOK {
-		if cl := resp.Header.Get("Content-Length"); cl != "" {
-			w.Header().Set("Content-Length", cl)
-		}
-		if ct := resp.Header.Get("Content-Type"); ct != "" {
-			w.Header().Set("Content-Type", ct)
+		for _, hdr := range []string{"Content-Length", "Content-Type", "ETag", "Last-Modified"} {
+			if v := resp.Header.Get(hdr); v != "" {
+				w.Header().Set(hdr, v)
+			}
 		}
 		w.Header().Set("Accept-Ranges", "bytes")
 		w.WriteHeader(http.StatusOK)
