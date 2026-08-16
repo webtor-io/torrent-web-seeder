@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anacrolix/missinggo/v2"
@@ -80,6 +81,7 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 	}
 
 	if evictionEnabled {
+		t.evicted = make([]atomic.Bool, info.NumPieces())
 		lru := NewPieceLRU(s.budget)
 		// Protect pieces belonging to completed files from eviction (first pass).
 		if pci, ok := pc.(*pieceCompletion); ok {
@@ -89,12 +91,14 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 		}
 		recoverLRU(lru, pc, info, infoHash)
 		t.lru = lru
-		t.verifyCh = make(chan int, 256)
 
 		if lru.Used() > s.budget {
 			log.Infof("cache over budget on recovery (%d > %d), evicting", lru.Used(), s.budget)
 			t.evictOverBudget()
 		}
+		// Only now may evictions talk to anacrolix — see the `attached`
+		// field comment for why this must come after evictOverBudget.
+		t.attached.Store(true)
 		t.startEvictionSweep()
 		log.Infof("eviction enabled for torrent %s (size=%d > budget=%d)",
 			infoHash.HexString(), info.TotalLength(), s.budget)
@@ -155,8 +159,32 @@ type mmapTorrentStorage struct {
 	fileLens []int64     // file lengths for piece→file mapping
 	mmaps    []mmap.MMap // raw mmap regions per file, for madvise after eviction
 	closeCh  chan struct{}
-	cl       *torrent.Client // for VerifyData on eviction
-	verifyCh chan int        // evicted piece indices queued for VerifyData
+	cl       *torrent.Client // for completion refresh on eviction
+	// evicted[i] is true while piece i's bytes are a punched hole. Set
+	// before the hole is punched, cleared when the piece is written again.
+	//
+	// This is the correctness guard, and it is deliberately NOT derived
+	// from pc completion. A pc-based guard is what a13efd6 had to remove:
+	// after a re-download anacrolix hashes the piece BEFORE MarkComplete,
+	// so pc still reads incomplete, the guard refused the verification
+	// read, the hash failed, and any once-evicted piece became permanently
+	// un-redownloadable. "Has a hole" and "is not marked complete" are
+	// different facts; only the first one may refuse a read.
+	evicted []atomic.Bool
+	// attached gates the anacrolix notification in refreshCompletion.
+	//
+	// OpenTorrent runs INSIDE Torrent.setInfo, which anacrolix calls with
+	// the client lock held (setInfoBytesLocked). The eviction that
+	// OpenTorrent may trigger for a recovered over-budget torrent would
+	// therefore call RefreshCompletionFromStorage — which takes that same
+	// lock — and self-deadlock on the first oversized torrent to restart.
+	//
+	// Skipping the notification there is not a compromise: anacrolix runs
+	// onSetInfo immediately after OpenTorrent returns, and that calls
+	// setInitialPieceCompletionFromStorage for every piece, reading the
+	// completion store we have just updated. The bitmap ends up correct
+	// without us saying anything.
+	attached atomic.Bool
 	// evictMu serializes piece reads against eviction. Sharded by piece
 	// index so eviction of one piece does not block reads of unrelated
 	// pieces. ReadAt takes RLock; evictPiece takes Lock — guaranteeing
@@ -170,6 +198,30 @@ func (ts *mmapTorrentStorage) pieceLock(idx int) *sync.RWMutex {
 	return &ts.evictMu[uint(idx)&(evictShards-1)]
 }
 
+// ErrPieceEvicted is returned by ReadAt for a piece whose bytes have been
+// dropped from the cache. It is a "come back after re-downloading" answer,
+// not a failure — but it must be an error rather than zeroes, because
+// zeroes are indistinguishable from data.
+var ErrPieceEvicted = errors.New("piece evicted from cache")
+
+// isEvicted reports whether piece idx is currently a punched hole. Eviction
+// is only ever enabled for torrents larger than the cache budget, so the
+// slice is nil (and every piece present) for the common small torrent.
+func (ts *mmapTorrentStorage) isEvicted(idx int) bool {
+	if ts.evicted == nil || idx < 0 || idx >= len(ts.evicted) {
+		return false
+	}
+	return ts.evicted[idx].Load()
+}
+
+// setEvicted marks (or unmarks) piece idx as a punched hole.
+func (ts *mmapTorrentStorage) setEvicted(idx int, v bool) {
+	if ts.evicted == nil || idx < 0 || idx >= len(ts.evicted) {
+		return
+	}
+	ts.evicted[idx].Store(v)
+}
+
 func (ts *mmapTorrentStorage) Piece(p metainfo.Piece) storage.PieceImpl {
 	return mmapStoragePiece{
 		t:             ts,
@@ -180,8 +232,9 @@ func (ts *mmapTorrentStorage) Piece(p metainfo.Piece) storage.PieceImpl {
 }
 
 // startEvictionSweep runs a periodic background eviction sweep.
-// Also processes the verify queue — calling VerifyData on evicted pieces
-// to notify anacrolix that they need re-downloading.
+//
+// It no longer drains a verify queue: evictPiece notifies anacrolix inline
+// now that the notification is cheap (a completion re-read, not a re-hash).
 func (ts *mmapTorrentStorage) startEvictionSweep() {
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -190,8 +243,6 @@ func (ts *mmapTorrentStorage) startEvictionSweep() {
 			select {
 			case <-ts.closeCh:
 				return
-			case idx := <-ts.verifyCh:
-				ts.verifyPiece(idx)
 			case <-ticker.C:
 				if ts.lru.Used() > ts.lru.budget && ts.lru.budget > 0 {
 					ts.evictOverBudget()
@@ -199,19 +250,6 @@ func (ts *mmapTorrentStorage) startEvictionSweep() {
 			}
 		}
 	}()
-}
-
-// verifyPiece calls VerifyData on a piece to notify anacrolix that it's no longer valid.
-func (ts *mmapTorrentStorage) verifyPiece(idx int) {
-	if ts.cl == nil {
-		return
-	}
-	for _, t := range ts.cl.Torrents() {
-		if t.InfoHash() == ts.infoHash {
-			t.Piece(idx).VerifyData()
-			return
-		}
-	}
 }
 
 func (ts *mmapTorrentStorage) Close() error {
@@ -255,18 +293,37 @@ func (me mmapStoragePiece) ReadAt(b []byte, off int64) (int, error) {
 	// The RLock + evictPiece's Lock are sufficient on their own to
 	// prevent reading from a region in the middle of being punched.
 	//
-	// We deliberately do NOT short-circuit here when pc.Get reports
-	// !Complete. That check used to live here as defense-in-depth but
-	// it also fired during anacrolix's hashPiece verification ReadAt
-	// for a piece that was just downloaded after eviction: the row in
-	// piece_completion still says complete=0 (MarkComplete only fires
-	// AFTER hash passes), so the verification read returned 0 bytes
-	// and the piece could never be re-acquired. Result: any piece that
-	// had been evicted at least once became permanently un-redownloadable.
-	// Trust the caller to only ReadAt after seeing Completion=true.
+	// We deliberately do NOT short-circuit on pc.Get reporting !Complete.
+	// That check used to live here and had to go (a13efd6): it also fired
+	// during anacrolix's hashPiece verification ReadAt for a piece that had
+	// just been re-downloaded after eviction — piece_completion still says
+	// complete=0, because MarkComplete only fires AFTER the hash passes —
+	// so the verification read returned 0 bytes and the piece could never
+	// be re-acquired. Any piece evicted once became permanently
+	// un-redownloadable.
+	//
+	// The guard below is the correct version of that idea. It keys on
+	// "we punched a hole in this piece", not on "this piece is not marked
+	// complete" — the two coincided in the old check, which is why it
+	// caught the hasher. A re-download clears the flag on its first
+	// WriteAt, long before the hash reads.
 	mu := me.t.pieceLock(me.p.Index())
 	mu.RLock()
 	defer mu.RUnlock()
+
+	// Refuse a piece whose bytes are currently a hole. Reading a hole
+	// SUCCEEDS and yields zeroes, so without this every caller — anacrolix's
+	// reader included — takes the zeroes as real data: n == len(b),
+	// err == nil, so none of the reader's recovery paths
+	// (clearStorageReader, updatePieceCompletion, retry) even run. The
+	// client gets HTTP 200, a correct Content-Length, and a zero-filled
+	// hole in the middle of the file, with nothing logged anywhere.
+	//
+	// An explicit error is what makes that recoverable: anacrolix retries,
+	// resyncs completion from storage, and re-requests the piece.
+	if me.t.isEvicted(me.p.Index()) {
+		return 0, ErrPieceEvicted
+	}
 
 	if me.t.lru != nil {
 		me.t.lru.Touch(me.p.Index())
@@ -296,6 +353,12 @@ func (me mmapStoragePiece) WriteAt(b []byte, off int64) (n int, err error) {
 			err = fmt.Errorf("mmap WriteAt recovered from panic (storage closing?): %v", r)
 		}
 	}()
+	// The piece is being written again, so it is no longer a hole and reads
+	// of it must be allowed. This has to clear on the FIRST chunk write
+	// rather than at MarkComplete: anacrolix hashes the piece before marking
+	// it, and that hash goes through ReadAt. Clearing late is exactly the
+	// trap that forced a13efd6 to delete the previous guard.
+	me.t.setEvicted(me.p.Index(), false)
 	return me.sectionWriter.WriteAt(b, off)
 }
 
@@ -423,6 +486,13 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 		log.WithError(err).Errorf("failed to mark piece %d incomplete during eviction", idx)
 		return
 	}
+	// Flag first, punch second. Readers cannot currently observe the
+	// difference — the shard write lock held across this whole section
+	// excludes them either way, and a negative-control run with the two
+	// swapped stays green. It is ordered this way so the flag is still
+	// correct if the punch ever moves out from under the lock, not because
+	// it closes a window today.
+	ts.setEvicted(idx, true)
 	ts.uncompleteAffectedFiles(idx)
 
 	for _, region := range ts.pieceFileRegions(piece) {
@@ -457,14 +527,39 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 	log.Infof("evicted piece %d, freed %d bytes, used=%d budget=%d",
 		idx, freedBytes, ts.lru.Used(), ts.lru.budget)
 
-	// Notify anacrolix asynchronously — calling VerifyData synchronously
-	// from MarkComplete's call chain (the LRU eviction trigger) can
-	// deadlock on anacrolix's internal locks. Correctness no longer
-	// depends on this signal because pc.Set(false) above plus the ReadAt
-	// completion recheck under RLock already prevent zero-filled reads.
-	select {
-	case ts.verifyCh <- idx:
-	default:
+	// Tell anacrolix the piece is gone, so it re-requests it.
+	//
+	// This is LIVENESS, not correctness — the evicted flag checked in ReadAt
+	// is what actually stops zeroes reaching a client, and it is already set
+	// above. That separation is why this can run after mu.Unlock(): the
+	// refresh re-enters anacrolix (peer request updates, priority
+	// recalculation) and must not do so holding a storage lock that
+	// anacrolix's callbacks could need.
+	//
+	// pc.Set(false) alone does NOT tell anacrolix anything: reads consult
+	// Torrent._completedPieces, an in-memory bitmap that only anacrolix
+	// writes, and it never re-reads the completion store on its own.
+	//
+	// The old code queued VerifyData onto a 256-deep channel with a silent
+	// `default:` drop. Two problems: VerifyData forces a full re-hash to
+	// discover what we already know and blocks until it finishes, and a
+	// dropped notification left the piece marked complete forever. This
+	// call does neither — no hash, no queue, nothing to drop.
+	ts.refreshCompletion(idx)
+}
+
+// refreshCompletion updates anacrolix's cached completion for a piece from
+// the completion store, without re-hashing. Must be called with no storage
+// lock held.
+func (ts *mmapTorrentStorage) refreshCompletion(idx int) {
+	if ts.cl == nil || !ts.attached.Load() {
+		return
+	}
+	for _, t := range ts.cl.Torrents() {
+		if t.InfoHash() == ts.infoHash {
+			t.Piece(idx).RefreshCompletionFromStorage()
+			return
+		}
 	}
 }
 

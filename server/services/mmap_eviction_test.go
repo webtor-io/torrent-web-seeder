@@ -324,7 +324,7 @@ func TestEvictRaceNoZeroReads(t *testing.T) {
 		fileLens: fileLens,
 		mmaps:    mmaps,
 		closeCh:  make(chan struct{}),
-		verifyCh: make(chan int, numPieces*64),
+		evicted:  make([]atomic.Bool, numPieces),
 	}
 	defer close(ts.closeCh)
 
