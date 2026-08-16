@@ -392,6 +392,15 @@ func (s *WebSeeder) serveStats(w http.ResponseWriter, r *http.Request, h string,
 	}
 	err = s.st.Serve(w, r, h, p)
 	if err != nil {
+		// Belt to StatStream's braces: it now returns nil when the client
+		// simply left, but this is an SSE endpoint and any future path that
+		// surfaces a disconnect here must not log an error and must not try
+		// to write a 500 — the socket is already gone, so http.Error only
+		// buys a second failure.
+		if clientGone(err) {
+			log.WithField("info-hash", h).Debug("client went away during stats stream")
+			return
+		}
 		log.Error(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
