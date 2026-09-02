@@ -58,7 +58,12 @@ func NewStat(tm *TorrentMap) *Stat {
 	return &Stat{
 		tm: tm,
 		cache: lazymap.New[*pb.StatReply](&lazymap.Config{
-			Expire:      3 * time.Second,
+			// One second: StatStream ticks at the same pace, and the badge
+			// and warm-up line in web-ui redraw from these events — three
+			// seconds read as "stuck" next to a 1 s countdown. torrentStat is
+			// a walk over the piece bitfield; per torrent, shared by every
+			// subscriber through this cache.
+			Expire:      1 * time.Second,
 			StoreErrors: true,
 			ErrorExpire: time.Second,
 		}),
@@ -206,7 +211,7 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 	if err != nil {
 		return err
 	}
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	// Buffered so the producer goroutine can return without a partner
 	// reader (errCh) and the parent's defer can signal exit without a
 	// running consumer (done). Unbuffered chans here leaked one goroutine
@@ -250,19 +255,27 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 				errCh <- err
 				return
 			}
+			// Send when anything a client draws has changed: the counters,
+			// the swarm split, or any piece's state — a priority bump (piece
+			// now being fetched) used to be invisible until a piece completed.
+			var diffPieces []*pb.Piece
+			if prevRep == nil {
+				diffPieces = rep.GetPieces()
+			} else {
+				diffPieces = diff(rep.GetPieces(), prevRep.GetPieces())
+			}
 			if prevRep == nil ||
 				rep.GetCompleted() != prevRep.GetCompleted() ||
-				rep.GetPeers() != prevRep.GetPeers() {
-				var diffPieces []*pb.Piece
-				if prevRep == nil {
-					diffPieces = rep.GetPieces()
-				} else {
-					diffPieces = diff(rep.GetPieces(), prevRep.GetPieces())
-				}
+				rep.GetPeers() != prevRep.GetPeers() ||
+				rep.GetSeeders() != prevRep.GetSeeders() ||
+				rep.GetLeechers() != prevRep.GetLeechers() ||
+				len(diffPieces) > 0 {
 				prevRep = rep
 				diffRep := &pb.StatReply{
 					Completed: rep.GetCompleted(),
 					Peers:     rep.GetPeers(),
+					Seeders:   rep.GetSeeders(),
+					Leechers:  rep.GetLeechers(),
 					Status:    rep.GetStatus(),
 					Total:     rep.GetTotal(),
 					Pieces:    diffPieces,
