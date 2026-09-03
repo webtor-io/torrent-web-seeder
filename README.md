@@ -127,6 +127,13 @@ All configuration via CLI flags and environment variables.
 | `--torrent-store-port` | `TORRENT_STORE_SERVICE_PORT` | `50051` | Remote torrent-store gRPC port |
 | `--max-readahead` | `MAX_READAHEAD` | `20MB` | Read-ahead buffer size |
 
+- `--reader-linger` / `READER_LINGER` (default `90s`) — keep a torrent reader
+  open this long after its HTTP request ends. anacrolix derives piece
+  priorities from open readers; closing at once on a client disconnect
+  abandons the piece, and a client whose idle timeout is shorter than the
+  swarm's time-to-first-byte (download managers: 30 s) then retries the same
+  offset forever. Bounded to 512 held readers per pod; `0` disables.
+
 ### Torrent client flags
 
 | Flag | Env | Default | Description |

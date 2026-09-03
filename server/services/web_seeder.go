@@ -48,9 +48,10 @@ type WebSeeder struct {
 	v            *Vault
 	cl           *http.Client
 	maxReadahead int64
+	linger       *Linger
 }
 
-func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, tom *TouchMap, st *StatWeb, wu *Warmup, v *Vault, cl *http.Client, maxReadahead int64) *WebSeeder {
+func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, tom *TouchMap, st *StatWeb, wu *Warmup, v *Vault, cl *http.Client, maxReadahead int64, linger *Linger) *WebSeeder {
 	return &WebSeeder{
 		tm:           tm,
 		st:           st,
@@ -61,6 +62,7 @@ func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, 
 		v:            v,
 		cl:           cl,
 		maxReadahead: maxReadahead,
+		linger:       linger,
 	}
 }
 
@@ -313,7 +315,9 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 			torReader := f.NewReader()
 			torReader.SetResponsive()
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
-			return NewTouchWriter(w, s.tm, h), torReader, nil
+			// Wrapped so the request's end does not drop the piece
+			// priorities this reader implies at once — see linger.go.
+			return NewTouchWriter(w, s.tm, h), s.linger.Wrap(torReader), nil
 		}
 	}
 	return w, nil, nil
