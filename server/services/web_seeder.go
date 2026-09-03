@@ -315,9 +315,9 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 			torReader := f.NewReader()
 			torReader.SetResponsive()
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
-			// Wrapped so the request's end does not drop the piece
-			// priorities this reader implies at once — see linger.go.
-			return NewTouchWriter(w, s.tm, h), s.linger.Wrap(torReader), nil
+			// Wrapped so the request's end does not drop the pieces this
+			// reader was after — see linger.go.
+			return NewTouchWriter(w, s.tm, h), s.linger.Wrap(torReader, t, f), nil
 		}
 	}
 	return w, nil, nil
