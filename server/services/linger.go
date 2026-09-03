@@ -103,7 +103,7 @@ func (l *Linger) Wrap(r io.ReadSeekCloser, t *torrent.Torrent, f *torrent.File) 
 }
 
 func (l *Linger) wrap(r io.ReadSeekCloser, p prioritizer, w window) io.ReadSeekCloser {
-	if w.pieceLen <= 0 || w.fileLength <= 0 {
+	if l == nil || l.d <= 0 || w.pieceLen <= 0 || w.fileLength <= 0 {
 		return r
 	}
 	return &lingerReader{ReadSeekCloser: r, l: l, p: p, w: w}
