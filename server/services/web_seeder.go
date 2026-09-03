@@ -145,19 +145,19 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	etag := fmt.Sprintf("\"%x\"", sha1.Sum([]byte(h+p)))
 	lastMod := time.Unix(0, 0)
 
-	// Handle conditional requests
-	if match := r.Header.Get("If-None-Match"); match != "" {
-		if match == etag {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-	}
-	if ims := r.Header.Get("If-Modified-Since"); ims != "" {
-		if t, err := http.ParseTime(ims); err == nil && !lastMod.After(t) {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-	}
+	// Conditional requests are left to http.ServeContent, which implements
+	// the RFC 9110 precedence (If-Match, If-Unmodified-Since, If-None-Match,
+	// If-Modified-Since, then If-Range) and knows that a Unix-epoch modtime
+	// means "unspecified".
+	//
+	// The hand-rolled checks that used to live here did neither, and the
+	// combination was a resume-killer: lastMod is the epoch, so
+	// `!lastMod.After(t)` held for every parseable date and ANY request
+	// carrying If-Modified-Since got a bodyless 304 — Range header and all.
+	// A download manager resuming with If-Modified-Since + Range therefore
+	// received no bytes and restarted the file from zero. Verified against
+	// production 2026-09-03: `Range: bytes=3000000000-` plus
+	// `If-Modified-Since` returned 304 instead of 206.
 
 	// Vault is the authoritative store (worker verifies piece SHA-1 before
 	// committing to S3). The local file cache may contain stale bytes from
@@ -194,8 +194,6 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	}
 	if cp != "" {
 		logWithField.Info("serve file from cache")
-		w.Header().Set("Last-Modified", lastMod.Format(http.TimeFormat))
-		w.Header().Set("Etag", etag)
 		file, err := os.Open(cp)
 		if err != nil {
 			logWithField.WithError(err).Error("failed to open cached file")
@@ -203,7 +201,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 			return
 		}
 		defer file.Close()
-		http.ServeContent(w, r, p, lastMod, file)
+		serveWithValidators(w, r, p, lastMod, etag, file)
 		return
 	}
 
@@ -230,9 +228,23 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	}
 	defer reader.Close()
 
-	tw.Header().Set("Last-Modified", lastMod.Format(http.TimeFormat))
-	tw.Header().Set("Etag", etag)
-	http.ServeContent(tw, r, p, lastMod, reader)
+	serveWithValidators(tw, r, p, lastMod, etag, reader)
+}
+
+// serveWithValidators publishes the resource validators and hands the request
+// to http.ServeContent.
+//
+// The ETag is derived from infohash+path, so it is stable across pods and
+// restarts; clients key download-resume on it (If-Range) and every seeder in
+// the pool answers with the same value for the same file. Last-Modified is
+// the Unix epoch — a placeholder, kept because HEAD and GET must advertise
+// the same validator set (see redirectFromVault) and players use its presence
+// as a resume heuristic. ServeContent treats an epoch modtime as unspecified,
+// so it never turns a conditional request into a 304 on the strength of it.
+func serveWithValidators(w http.ResponseWriter, r *http.Request, name string, lastMod time.Time, etag string, content io.ReadSeeker) {
+	w.Header().Set("Last-Modified", lastMod.Format(http.TimeFormat))
+	w.Header().Set("Etag", etag)
+	http.ServeContent(w, r, name, lastMod, content)
 }
 
 func (s *WebSeeder) redirectFromVault(w http.ResponseWriter, r *http.Request, h string, p string) (bool, error) {
