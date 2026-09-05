@@ -27,9 +27,12 @@ func NewWarmup(tm *TorrentMap) *Warmup {
 	return &Warmup{tm: tm}
 }
 
-// Serve handles `?warmup` SSE requests. It parses the Range header (or
-// defaults to the whole file), bumps PiecePriorityHigh on every piece
-// covering that byte range, and emits `data: <downloaded>\n\n` once per
+// Serve handles `?warmup` SSE requests. The path names a file or a
+// directory — a directory is warmed as its files concatenated in torrent
+// order, the byte order the archiver emits them in, so "the first MiB of
+// the archive" is the first MiB of that concatenation. Serve parses the
+// Range header (or defaults to the whole target), bumps PiecePriorityHigh
+// on every piece covering that byte range, and emits `data: <downloaded>\n\n` once per
 // second where downloaded is the number of bytes within the requested
 // range that the seeder has already verified. The stream closes when
 // downloaded == total or the client disconnects; the close itself is the
@@ -53,16 +56,19 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 	if err != nil {
 		return err
 	}
-	f := findFile(t, p)
-	if f == nil {
+	var files []*torrent.File
+	if f := findFile(t, p); f != nil {
+		files = []*torrent.File{f}
+	} else if files = dirFiles(t, p); len(files) == 0 {
 		http.NotFound(w, r)
 		return nil
 	}
-	if f.Length() <= 0 {
+	target := newWarmTarget(files)
+	if target.length <= 0 {
 		return errors.Errorf("empty file")
 	}
 
-	rangeStart, rangeEnd, err := parseSingleRange(r.Header.Get("Range"), f.Length())
+	rangeStart, rangeEnd, err := parseSingleRange(r.Header.Get("Range"), target.length)
 	if err != nil {
 		http.Error(w, "invalid range", http.StatusRequestedRangeNotSatisfiable)
 		return nil
@@ -73,7 +79,6 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 	if pieceLen <= 0 {
 		return errors.Errorf("piece length is zero")
 	}
-	firstPieceInFile := int(f.Offset() / pieceLen)
 
 	log.WithFields(log.Fields{
 		"hash":  h,
@@ -97,17 +102,7 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 	// SetPriority is idempotent and the request-strategy layer takes the
 	// max across all sources, so this won't downgrade pieces a concurrent
 	// reader has already raised to PiecePriorityNow.
-	state := f.State()
-	var fileOff int64
-	for i, ps := range state {
-		pieceFileStart := fileOff
-		pieceFileEnd := fileOff + ps.Bytes - 1
-		fileOff += ps.Bytes
-		if pieceFileEnd < rangeStart || pieceFileStart > rangeEnd {
-			continue
-		}
-		t.Piece(firstPieceInFile + i).SetPriority(torrent.PiecePriorityHigh)
-	}
+	target.prioritize(t, pieceLen, rangeStart, rangeEnd)
 
 	var mu sync.Mutex
 	emit := func(downloaded int64) {
@@ -129,7 +124,7 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 		flusher.Flush()
 	}
 
-	downloaded := warmupBytes(f.State(), rangeStart, rangeEnd)
+	downloaded := target.downloaded(rangeStart, rangeEnd)
 	emit(downloaded)
 	if downloaded >= total {
 		return nil
@@ -150,13 +145,88 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 			log.WithFields(log.Fields{"hash": h, "path": p}).Warn("warmup timeout")
 			return nil
 		case <-ticker.C:
-			downloaded = warmupBytes(f.State(), rangeStart, rangeEnd)
+			downloaded = target.downloaded(rangeStart, rangeEnd)
 			emit(downloaded)
 			if downloaded >= total {
 				return nil
 			}
 		}
 	}
+}
+
+// warmSegment is one file of a warmup target with its offset inside the
+// target's byte space.
+type warmSegment struct {
+	f      *torrent.File
+	off, n int64
+}
+
+// warmTarget is what a warmup request addresses: a single file, or a
+// directory read as its files concatenated in torrent order (the byte
+// order the archiver emits them in). Ranges are relative to the target.
+// Before 2026-09-05 a directory path was a NotFound, so downloading a
+// folder as an archive warmed nothing and web-ui logged "warmup head
+// failed" for every such download.
+type warmTarget struct {
+	segs   []warmSegment
+	length int64
+}
+
+func newWarmTarget(files []*torrent.File) *warmTarget {
+	wt := &warmTarget{}
+	for _, f := range files {
+		if f.Length() <= 0 {
+			continue
+		}
+		wt.segs = append(wt.segs, warmSegment{f: f, off: wt.length, n: f.Length()})
+		wt.length += f.Length()
+	}
+	return wt
+}
+
+// each calls fn for every segment overlapping [start, end] with the
+// overlap translated into that file's own byte range.
+func (wt *warmTarget) each(start, end int64, fn func(s warmSegment, fileStart, fileEnd int64)) {
+	for _, s := range wt.segs {
+		segEnd := s.off + s.n - 1
+		if segEnd < start || s.off > end {
+			continue
+		}
+		fileStart, fileEnd := start-s.off, end-s.off
+		if fileStart < 0 {
+			fileStart = 0
+		}
+		if fileEnd > s.n-1 {
+			fileEnd = s.n - 1
+		}
+		fn(s, fileStart, fileEnd)
+	}
+}
+
+// prioritize raises every piece overlapping [start, end] to High.
+func (wt *warmTarget) prioritize(t *torrent.Torrent, pieceLen, start, end int64) {
+	wt.each(start, end, func(s warmSegment, fileStart, fileEnd int64) {
+		firstPieceInFile := int(s.f.Offset() / pieceLen)
+		var fileOff int64
+		for i, ps := range s.f.State() {
+			pieceFileStart := fileOff
+			pieceFileEnd := fileOff + ps.Bytes - 1
+			fileOff += ps.Bytes
+			if pieceFileEnd < fileStart || pieceFileStart > fileEnd {
+				continue
+			}
+			t.Piece(firstPieceInFile + i).SetPriority(torrent.PiecePriorityHigh)
+		}
+	})
+}
+
+// downloaded is the number of verified bytes inside [start, end].
+func (wt *warmTarget) downloaded(start, end int64) int64 {
+	var n int64
+	wt.each(start, end, func(s warmSegment, fileStart, fileEnd int64) {
+		n += warmupBytes(s.f.State(), fileStart, fileEnd)
+	})
+	return n
 }
 
 // warmupBytes sums file bytes that are part of completed pieces and fall

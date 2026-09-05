@@ -138,6 +138,9 @@ All configuration via CLI flags and environment variables.
   (warmup's High) are left alone. Bounded to 512 windows per pod; `0`
   disables.
 
+- Warmup (`?warmup=true`, optional `Range`) takes a file or a directory;
+  a directory is warmed as its files concatenated in torrent order, which
+  is the byte order of the archive built from it.
 - Stats (`?stats=true`, gRPC `Stat`/`StatStream`) answer for the whole
   torrent (empty path), a single file, or a **directory** — the files under
   it summed, pieces over the span they occupy. Before 2026-09-05 a directory
