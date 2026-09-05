@@ -155,6 +155,85 @@ func findFile(t *torrent.Torrent, path string) *torrent.File {
 	return nil
 }
 
+// isUnderDir reports whether filePath lies inside dir ("Rio (2011)" holds
+// "Rio (2011)/Rio.mkv" but not "Rio (2011) extras/x.mkv").
+func isUnderDir(filePath, dir string) bool {
+	return len(filePath) > len(dir)+1 && filePath[:len(dir)] == dir && filePath[len(dir)] == '/'
+}
+
+// dirFiles are the torrent's files inside dir, in torrent order.
+func dirFiles(t *torrent.Torrent, dir string) []*torrent.File {
+	var out []*torrent.File
+	for _, f := range t.Files() {
+		if isUnderDir(f.Path(), dir) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// dirPieceRange is the [begin, end) piece span covering the byte range
+// [offset, offset+length) of a torrent with pieceLen-byte pieces.
+func dirPieceRange(pieceLen, offset, length int64) (begin, end int) {
+	if pieceLen <= 0 || length <= 0 {
+		return 0, 0
+	}
+	return int(offset / pieceLen), int((offset+length-1)/pieceLen) + 1
+}
+
+// dirStat aggregates the files of a directory: bytes completed and total
+// summed over them, pieces over the torrent span the directory occupies,
+// positions relative to that span like fileStat's are relative to the
+// file. Stats for a directory were a NotFound before (2026-09-05: ~2 000
+// torrents a day answered 500 — every single-root-directory torrent whose
+// resource page asked for the root item's stats), and the badge read
+// "status unavailable".
+func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File) (*pb.StatReply, error) {
+	var completed, total int64
+	first, last := int64(-1), int64(0)
+	for _, f := range files {
+		completed += fileBytesCompleted(f)
+		total += f.Length()
+		if first < 0 || f.Offset() < first {
+			first = f.Offset()
+		}
+		if end := f.Offset() + f.Length(); end > last {
+			last = end
+		}
+	}
+	rStatus := pb.StatReply_SEEDING
+	if completed == 0 {
+		rStatus = pb.StatReply_WAITING_FOR_PEERS
+	}
+	begin, end := dirPieceRange(t.Info().PieceLength, first, last-first)
+	if n := t.NumPieces(); end > n {
+		end = n
+	}
+	pieces := make([]*pb.Piece, 0, end-begin)
+	for i := begin; i < end; i++ {
+		ps := t.Piece(i).State()
+		pr := pb.Piece_NONE
+		if ps.Priority == torrent.PiecePriorityNormal {
+			pr = pb.Piece_NORMAL
+		} else if ps.Priority > torrent.PiecePriorityNormal {
+			pr = pb.Piece_HIGH
+		}
+		pieces = append(pieces, &pb.Piece{Position: int64(i - begin), Complete: ps.Complete, Priority: pr})
+	}
+	stats := t.Stats()
+	peers := stats.ActivePeers
+	seeders := stats.ConnectedSeeders
+	return &pb.StatReply{
+		Completed: completed,
+		Total:     total,
+		Peers:     int32(peers),
+		Status:    rStatus,
+		Seeders:   int32(seeders),
+		Leechers:  int32(peers - seeders),
+		Pieces:    pieces,
+	}, nil
+}
+
 func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
@@ -170,6 +249,13 @@ func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatRe
 	}
 	f := findFile(t, in.GetPath())
 	if f == nil {
+		// Not a file: a directory (the resource page asks for the root
+		// item, which for a single-root-directory torrent is that
+		// directory) — aggregate its files. Only a path matching nothing
+		// is NotFound.
+		if files := dirFiles(t, in.GetPath()); len(files) > 0 {
+			return s.dirStat(t, files)
+		}
 		return nil, status.Errorf(codes.NotFound, "unable to find file for path=%v", in.GetPath())
 	}
 	return s.fileStat(t, f)

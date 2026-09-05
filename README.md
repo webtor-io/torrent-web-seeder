@@ -138,6 +138,13 @@ All configuration via CLI flags and environment variables.
   (warmup's High) are left alone. Bounded to 512 windows per pod; `0`
   disables.
 
+- Stats (`?stats=true`, gRPC `Stat`/`StatStream`) answer for the whole
+  torrent (empty path), a single file, or a **directory** — the files under
+  it summed, pieces over the span they occupy. Before 2026-09-05 a directory
+  path was a NotFound, and every single-root-directory torrent's resource
+  page (which asks for the root item) got a 500 and a "status unavailable"
+  badge — about 2 000 torrents a day.
+
 ### Torrent client flags
 
 | Flag | Env | Default | Description |
