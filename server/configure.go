@@ -69,7 +69,7 @@ func run(c *cli.Context) error {
 	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap)
 
 	// Setting Stat
-	stat := s.NewStat(torrentMap)
+	stat := s.NewStat(torrentMap, c.String(s.DataDirFlag))
 
 	// Setting StatGRPC
 	statGRPC := s.NewStatGRPC(c, stat)

@@ -141,6 +141,15 @@ All configuration via CLI flags and environment variables.
 - Warmup (`?warmup=true`, optional `Range`) takes a file or a directory;
   a directory is warmed as its files concatenated in torrent order, which
   is the byte order of the archive built from it.
+- Stats look but do not touch (2026-09-09). `Stat`/`StatStream` ask the
+  client whether it already holds the torrent (`TorrentMap.Peek`); if it
+  does — someone is streaming, downloading or warming it — the numbers are
+  live and `live: true`. Otherwise the reply is **cold**: metainfo from the
+  file/torrent store, completed pieces from the per-torrent `.torrent.db`,
+  peers zero, `live: false`; the torrent is not loaded, the swarm is not
+  joined, the TTL is not extended. A status stream switches to live by
+  itself once the torrent comes up. Before this, every page view joined the
+  swarm on the viewer's behalf.
 - Stats (`?stats=true`, gRPC `Stat`/`StatStream`) answer for the whole
   torrent (empty path), a single file, or a **directory** — the files under
   it summed, pieces over the span they occupy. Before 2026-09-05 a directory

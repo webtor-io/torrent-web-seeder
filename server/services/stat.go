@@ -50,13 +50,15 @@ func clientGone(err error) bool {
 
 type Stat struct {
 	pb.UnimplementedTorrentWebSeederServer
-	tm    *TorrentMap
-	cache lazymap.LazyMap[*pb.StatReply]
+	tm      *TorrentMap
+	cache   lazymap.LazyMap[*pb.StatReply]
+	dataDir string
 }
 
-func NewStat(tm *TorrentMap) *Stat {
+func NewStat(tm *TorrentMap, dataDir string) *Stat {
 	return &Stat{
-		tm: tm,
+		tm:      tm,
+		dataDir: dataDir,
 		cache: lazymap.New[*pb.StatReply](&lazymap.Config{
 			// One second: StatStream ticks at the same pace, and the badge
 			// and warm-up line in web-ui redraw from these events — three
@@ -111,6 +113,7 @@ func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 		Seeders:   int32(seeders),
 		Leechers:  int32(leechers),
 		Pieces:    pieces,
+		Live:      true,
 	}, nil
 }
 
@@ -143,6 +146,7 @@ func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, err
 		Seeders:   int32(seeders),
 		Leechers:  int32(leechers),
 		Pieces:    pieces,
+		Live:      true,
 	}, nil
 }
 
@@ -231,6 +235,7 @@ func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File) (*pb.StatReply
 		Seeders:   int32(seeders),
 		Leechers:  int32(peers - seeders),
 		Pieces:    pieces,
+		Live:      true,
 	}, nil
 }
 
@@ -240,9 +245,12 @@ func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatRe
 		return nil, errors.Errorf("No info-hash provided")
 	}
 	h := md.Get("info-hash")[0]
-	t, err := s.tm.Get(ctx, h)
-	if err != nil {
-		return nil, err
+	// Look, do not touch: a torrent nobody is streaming stays unloaded and
+	// its numbers come from disk (coldStat). Peek never joins the swarm or
+	// extends the TTL — that is for serveFile and warm-up to do.
+	t := s.tm.Peek(h)
+	if t == nil {
+		return s.coldStat(h, in.GetPath())
 	}
 	if in.GetPath() == "" {
 		return s.torrentStat(t)
@@ -355,6 +363,7 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 				rep.GetPeers() != prevRep.GetPeers() ||
 				rep.GetSeeders() != prevRep.GetSeeders() ||
 				rep.GetLeechers() != prevRep.GetLeechers() ||
+				rep.GetLive() != prevRep.GetLive() ||
 				len(diffPieces) > 0 {
 				prevRep = rep
 				diffRep := &pb.StatReply{
@@ -365,6 +374,7 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 					Status:    rep.GetStatus(),
 					Total:     rep.GetTotal(),
 					Pieces:    diffPieces,
+					Live:      rep.GetLive(),
 				}
 				if err := stream.Send(diffRep); err != nil {
 					// Send losing the peer is the same non-event as the

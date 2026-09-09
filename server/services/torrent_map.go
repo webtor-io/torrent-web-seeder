@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/hex"
 	"sort"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/metainfo"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -102,6 +104,51 @@ func (s *TorrentMap) Touch(h string) {
 	if ok {
 		ti.Reset(s.ttl)
 	}
+}
+
+// Peek returns the torrent if this client already holds it — loaded by a
+// stream, a download or a warm-up — without loading it and without touching
+// its TTL. Stats look but do not touch: until 2026-09 every status request
+// went through Get, so a page view joined the swarm on the viewer's behalf
+// and kept the torrent alive, which is exactly what a headless farm hitting
+// a handful of hashes was buying from us.
+func (s *TorrentMap) Peek(h string) *torrent.Torrent {
+	if len(h) != 40 {
+		return nil
+	}
+	ih, err := hex.DecodeString(h)
+	if err != nil {
+		return nil
+	}
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	cl, err := s.tc.Get()
+	if err != nil {
+		return nil
+	}
+	var mh metainfo.Hash
+	copy(mh[:], ih)
+	t, ok := cl.Torrent(mh)
+	if !ok {
+		return nil
+	}
+	return t
+}
+
+// MetaInfo returns the torrent's metainfo from the file store or the
+// torrent store without loading the torrent into the client.
+func (s *TorrentMap) MetaInfo(h string) (*metainfo.MetaInfo, error) {
+	mi, err := s.fsm.Get(h)
+	if err != nil {
+		return nil, err
+	}
+	if mi == nil {
+		mi, err = s.tsm.Get(h)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return mi, nil
 }
 
 func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error) {

@@ -34,6 +34,12 @@ message StatReply {
   repeated Piece pieces = 5;
   int32 seeders       = 6;
   int32 leechers      = 7;
+  // live is true when the torrent is loaded in this seeder's client and the
+  // numbers above come from it; false when they were read from disk (the
+  // piece-completion db) for a torrent nobody is currently streaming or
+  // downloading. A cold reply has no peers by definition — the seeder did
+  // not join the swarm to answer it.
+  bool  live          = 8;
 }
 
 message Piece {
