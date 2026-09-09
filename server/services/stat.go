@@ -300,11 +300,11 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
 		return errors.Errorf("no info-hash provided")
 	}
-	h := md.Get("info-hash")[0]
-	t, err := s.tm.Get(stream.Context(), h)
-	if err != nil {
-		return err
-	}
+	// No Get here: the stream must not load the torrent either. Each tick
+	// goes through Stat, which peeks — cold frames while nobody streams the
+	// torrent, live ones once someone does, cold again after the seeder
+	// unloads it. There is no "torrent closed" event to end on any more;
+	// the client closes the stream when it is done looking.
 	ticker := time.NewTicker(1 * time.Second)
 	// Buffered so the producer goroutine can return without a partner
 	// reader (errCh) and the parent's defer can signal exit without a
@@ -406,11 +406,6 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	select {
-	case <-t.Closed():
-		_ = stream.Send(&pb.StatReply{
-			Status: pb.StatReply_TERMINATED,
-		})
-		return nil
 	case <-sigs:
 		_ = stream.Send(&pb.StatReply{
 			Status: pb.StatReply_TERMINATED,
