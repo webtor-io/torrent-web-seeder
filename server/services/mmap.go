@@ -19,7 +19,6 @@ import (
 	"github.com/edsrzf/mmap-go"
 
 	"github.com/anacrolix/torrent/metainfo"
-	mmapSpan "github.com/anacrolix/torrent/mmap-span"
 	"github.com/anacrolix/torrent/storage"
 
 	log "github.com/sirupsen/logrus"
@@ -30,20 +29,23 @@ import (
 const evictShards = 1024
 
 type mmapClientImpl struct {
-	baseDir string
-	budget  int64
-	cl      *torrent.Client // set after torrent.NewClient(), used for eviction VerifyData
+	baseDir   string
+	budget    int64
+	fileCache FileCacheConfig
+	cl        *torrent.Client // set after torrent.NewClient(), used for eviction VerifyData
 }
 
 // NewMMap creates a mmap-based storage backend.
 // budget is the per-torrent cache budget in bytes (0 = unlimited, no eviction).
-func NewMMap(baseDir string, budget int64) *mmapClientImpl {
+// fileCache bounds how many of a torrent's files are open at once.
+func NewMMap(baseDir string, budget int64, fileCache FileCacheConfig) *mmapClientImpl {
 	if budget > 0 {
 		promCacheBudget.Set(float64(budget))
 	}
 	return &mmapClientImpl{
-		baseDir: baseDir,
-		budget:  budget,
+		baseDir:   baseDir,
+		budget:    budget,
+		fileCache: fileCache,
 	}
 }
 
@@ -58,10 +60,15 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 	if err != nil {
 		return
 	}
-	span, files, fileLens, mmaps, err := mMapTorrent(info, dir)
+	files, err := torrentSpanFiles(info, dir)
 	if err != nil {
 		return
 	}
+	// Nothing is opened here: files open on first touch and at most
+	// fileCache.MaxOpen stay open (see lazySpan). OpenTorrent runs under the
+	// anacrolix client lock, so its cost is paid by every other request on
+	// the pod — with 184k files the eager open took ~7 s and failed anyway.
+	span := newLazySpan(files, s.fileCache)
 	pc := pieceCompletionForDir(dir, info, infoHash)
 
 	// Only enable LRU eviction if the torrent is larger than the cache budget.
@@ -73,9 +80,6 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 		span:     span,
 		pc:       pc,
 		info:     info,
-		files:    files,
-		fileLens: fileLens,
-		mmaps:    mmaps,
 		closeCh:  make(chan struct{}),
 		cl:       s.cl,
 	}
@@ -102,14 +106,6 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 		t.startEvictionSweep()
 		log.Infof("eviction enabled for torrent %s (size=%d > budget=%d)",
 			infoHash.HexString(), info.TotalLength(), s.budget)
-	}
-
-	// Hint the kernel that mmap'd regions will be read sequentially (streaming).
-	// This enables aggressive readahead and proactive page reclamation after reads.
-	for _, m := range mmaps {
-		if m != nil {
-			_ = madviseSequential(m)
-		}
 	}
 
 	impl := storage.TorrentImpl{
@@ -151,13 +147,10 @@ func (s *mmapClientImpl) Close() error {
 
 type mmapTorrentStorage struct {
 	infoHash metainfo.Hash
-	span     *mmapSpan.MMapSpan
+	span     *lazySpan // files opened on demand; descriptors and mappings for eviction live here
 	pc       storage.PieceCompletion
 	lru      *PieceLRU
 	info     *metainfo.Info
-	files    []*os.File  // file handles for hole-punching
-	fileLens []int64     // file lengths for piece→file mapping
-	mmaps    []mmap.MMap // raw mmap regions per file, for madvise after eviction
 	closeCh  chan struct{}
 	cl       *torrent.Client // for completion refresh on eviction
 	// evicted[i] is true while piece i's bytes are a punched hole. Set
@@ -263,11 +256,7 @@ func (ts *mmapTorrentStorage) Close() error {
 	// Advise the kernel to drop all mmap'd pages before unmapping.
 	// This ensures immediate RSS release when a torrent is dropped,
 	// rather than waiting for the kernel to lazily reclaim pages.
-	for _, m := range ts.mmaps {
-		if m != nil {
-			_ = madviseEvict(m)
-		}
-	}
+	ts.span.evictPages()
 	// Close the piece-completion store: releases its background goroutine,
 	// closes the SQLite handle backing .torrent.db (one FD + many in-memory
 	// prepared statements), and drops the metainfo reference held inside
@@ -337,15 +326,12 @@ func (me mmapStoragePiece) ReadAt(b []byte, off int64) (int, error) {
 
 func (me mmapStoragePiece) WriteAt(b []byte, off int64) (n int, err error) {
 	// A peer's mainReadLoop can call WriteAt right while anacrolix is
-	// finalizing Storage.Close() — span.Close unmaps the underlying
-	// regions and MMapSpan's mmaps slice goes empty; the subsequent
-	// locateCopy then indexes mmaps[0] on length-0 and panics. anacrolix
-	// doesn't synchronise the in-flight chunk writes with storage close;
-	// pre-fix this race was hidden by piece_completion's leaked goroutine
-	// keeping the torrent alive past Drop, but the leak fix made Close
-	// land faster and exposed the window. Recover so a single mid-Close
-	// chunk write returns an error to the peer loop (it'll just drop
-	// the peer) instead of taking the whole pod down.
+	// finalizing Storage.Close(); anacrolix doesn't synchronise in-flight
+	// chunk writes with storage close. lazySpan answers that with
+	// ErrSpanClosed (Close waits for in-flight writes and later ones are
+	// refused), which is the error the peer loop needs. The recover stays
+	// as the last line: with the eager span this window was a panic that
+	// took the pod down, and a mid-Close write must never do that again.
 	defer func() {
 		if r := recover(); r != nil {
 			log.WithField("at", "mmap.WriteAt").Warnf("recovered panic (storage closing?): %v", r)
@@ -409,21 +395,13 @@ func (sp mmapStoragePiece) MarkNotComplete() error {
 // concatenated mmap span. Used after ReadAt to free page cache for data that
 // has already been copied into a userspace buffer.
 func (ts *mmapTorrentStorage) madviseSpanRange(spanOff, length int64) {
-	end := spanOff + length
-	fileOff := int64(0)
-	for i, fLen := range ts.fileLens {
-		fEnd := fileOff + fLen
-		if end > fileOff && spanOff < fEnd {
-			regStart := max(spanOff, fileOff) - fileOff
-			regEnd := min(end, fEnd) - fileOff
-			if i < len(ts.mmaps) && ts.mmaps[i] != nil && regEnd <= int64(len(ts.mmaps[i])) {
-				_ = madviseEvict(ts.mmaps[i][regStart:regEnd])
+	for _, r := range ts.span.locate(spanOff, length) {
+		ts.span.ifMapped(r.fileIndex, func(m mmap.MMap) {
+			end := r.offset + r.length
+			if end <= int64(len(m)) {
+				_ = madviseEvict(m[r.offset:end])
 			}
-		}
-		if fileOff >= end {
-			break
-		}
-		fileOff = fEnd
+		})
 	}
 }
 
@@ -437,25 +415,7 @@ type fileRegion struct {
 // pieceFileRegions computes which file regions a piece covers.
 // A piece may span multiple files in a multi-file torrent.
 func (ts *mmapTorrentStorage) pieceFileRegions(p metainfo.Piece) []fileRegion {
-	pieceOff := p.Offset()
-	pieceLen := p.Length()
-	pEnd := pieceOff + pieceLen
-	var regions []fileRegion
-	fileOff := int64(0)
-	for i, fLen := range ts.fileLens {
-		fEnd := fileOff + fLen
-		if pEnd > fileOff && pieceOff < fEnd {
-			regStart := max(pieceOff, fileOff) - fileOff
-			regLen := min(pEnd, fEnd) - max(pieceOff, fileOff)
-			regions = append(regions, fileRegion{
-				fileIndex: i,
-				offset:    regStart,
-				length:    regLen,
-			})
-		}
-		fileOff = fEnd
-	}
-	return regions
+	return ts.span.locate(p.Offset(), p.Length())
 }
 
 // evictOverBudget runs eviction until cache usage is within budget.
@@ -496,22 +456,23 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 	ts.uncompleteAffectedFiles(idx)
 
 	for _, region := range ts.pieceFileRegions(piece) {
-		if region.fileIndex >= len(ts.files) || ts.files[region.fileIndex] == nil {
-			continue
-		}
-		if err := punchHole(ts.files[region.fileIndex], region.offset, region.length); err != nil {
-			log.WithError(err).Errorf("failed to punch hole for piece %d in file %d", idx, region.fileIndex)
-		}
-		if region.fileIndex < len(ts.mmaps) && ts.mmaps[region.fileIndex] != nil {
-			end := region.offset + region.length
-			if end > int64(len(ts.mmaps[region.fileIndex])) {
-				end = int64(len(ts.mmaps[region.fileIndex]))
+		region := region
+		err := ts.span.withFile(region.fileIndex, func(f *os.File, m mmap.MMap) error {
+			if err := punchHole(f, region.offset, region.length); err != nil {
+				log.WithError(err).Errorf("failed to punch hole for piece %d in file %d", idx, region.fileIndex)
 			}
-			if region.offset < end {
-				if err := madviseEvict(ts.mmaps[region.fileIndex][region.offset:end]); err != nil {
-					log.WithError(err).Errorf("madvise failed for piece %d in file %d", idx, region.fileIndex)
+			if m != nil {
+				end := min(region.offset+region.length, int64(len(m)))
+				if region.offset < end {
+					if err := madviseEvict(m[region.offset:end]); err != nil {
+						log.WithError(err).Errorf("madvise failed for piece %d in file %d", idx, region.fileIndex)
+					}
 				}
 			}
+			return nil
+		})
+		if err != nil {
+			log.WithError(err).Errorf("failed to open file %d to evict piece %d", region.fileIndex, idx)
 		}
 	}
 
@@ -595,129 +556,25 @@ func (ts *mmapTorrentStorage) uncompleteAffectedFiles(pieceIndex int) {
 	}
 }
 
-func mMapTorrent(md *metainfo.Info, location string) (mms *mmapSpan.MMapSpan, files []*os.File, fileLens []int64, mmaps []mmap.MMap, err error) {
-	var mMaps []FileMapping
-	defer func() {
-		if err != nil {
-			for _, mm := range mMaps {
-				err = errors.Join(err, mm.Unmap())
-			}
-			files = nil
-			fileLens = nil
-			mmaps = nil
-		}
-	}()
+// torrentSpanFiles lays the torrent's files out under location as
+// content/<2 hex>/<sha1 of the safe path>, the flat, content-addressed layout
+// this storage has always used (a 20-deep tree is not something to mkdir
+// 184k times). Nothing is opened.
+func torrentSpanFiles(md *metainfo.Info, location string) ([]spanFile, error) {
+	var files []spanFile
 	for _, miFile := range md.UpvertedFiles() {
-		var safeName string
-		safeName, err = storage.ToSafeFilePath(append([]string{md.BestName()}, miFile.BestPath()...)...)
+		safeName, err := storage.ToSafeFilePath(append([]string{md.BestName()}, miFile.BestPath()...)...)
 		if err != nil {
-			return
+			return nil, err
 		}
 		hash := sha1.Sum([]byte(safeName))
 		hexHash := fmt.Sprintf("%x", hash)
-		subPath := hexHash[:2]
-		fileName := filepath.Join(location, "content", subPath, hexHash)
-		var mm FileMapping
-		var f *os.File
-		mm, f, err = mmapFile(fileName, miFile.Length)
-		if err != nil {
-			err = fmt.Errorf("file %q: %w", miFile.DisplayPath(md), err)
-			return
-		}
-		mMaps = append(mMaps, mm)
-		files = append(files, f)
-		fileLens = append(fileLens, miFile.Length)
-		mmaps = append(mmaps, mm.Bytes())
+		files = append(files, spanFile{
+			path:   filepath.Join(location, "content", hexHash[:2], hexHash),
+			length: miFile.Length,
+		})
 	}
-	return mmapSpan.New(mMaps, md.FileSegmentsIndex()), files, fileLens, mmaps, nil
-}
-
-func mmapFile(name string, size int64) (_ FileMapping, file *os.File, err error) {
-	dir := filepath.Dir(name)
-	err = os.MkdirAll(dir, 0o750)
-	if err != nil {
-		err = fmt.Errorf("making directory %q: %s", dir, err)
-		return
-	}
-	file, err = os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			_ = file.Close()
-			file = nil
-		}
-	}()
-	var fi os.FileInfo
-	fi, err = file.Stat()
-	if err != nil {
-		return
-	}
-	if fi.Size() < size {
-		err = file.Truncate(size)
-		if err != nil {
-			return
-		}
-	}
-	mapping, mapErr := func() (ret mmapWithFile, err error) {
-		ret.f = file
-		if size == 0 {
-			return
-		}
-		intLen := int(size)
-		if int64(intLen) != size {
-			err = errors.New("size too large for system")
-			return
-		}
-		ret.mmap, err = mmap.MapRegion(file, intLen, mmap.RDWR, 0, 0)
-		if err != nil {
-			err = fmt.Errorf("error mapping region: %s", err)
-			return
-		}
-		if int64(len(ret.mmap)) != size {
-			panic(len(ret.mmap))
-		}
-		return
-	}()
-	return mapping, file, mapErr
-}
-
-// WrapFileMapping combines a mmapped region and file into a storage Mmap abstraction.
-func WrapFileMapping(region mmap.MMap, file *os.File) FileMapping {
-	return mmapWithFile{
-		f:    file,
-		mmap: region,
-	}
-}
-
-type FileMapping = mmapSpan.Mmap
-
-type mmapWithFile struct {
-	f    *os.File
-	mmap mmap.MMap
-}
-
-func (m mmapWithFile) Flush() error {
-	return m.mmap.Flush()
-}
-
-func (m mmapWithFile) Unmap() (err error) {
-	if m.mmap != nil {
-		err = m.mmap.Unmap()
-	}
-	fileErr := m.f.Close()
-	if err == nil {
-		err = fileErr
-	}
-	return
-}
-
-func (m mmapWithFile) Bytes() []byte {
-	if m.mmap == nil {
-		return nil
-	}
-	return m.mmap
+	return files, nil
 }
 
 func pieceCompletionForDir(dir string, info *metainfo.Info, hash metainfo.Hash) (ret storage.PieceCompletion) {

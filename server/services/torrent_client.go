@@ -107,6 +107,7 @@ type TorrentClient struct {
 	err                        error
 	inited                     bool
 	rLimit                     int64
+	fileCache                  FileCacheConfig
 	dataDir                    string
 	proxy                      string
 	ua                         string
@@ -286,6 +287,18 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Value:  "50GB",
 			EnvVar: "PER_TORRENT_CACHE_BUDGET",
 		},
+		cli.IntFlag{
+			Name:   "max-open-files-per-torrent",
+			Usage:  "files a torrent keeps open at once (descriptors and mappings); the rest open on demand",
+			Value:  2048,
+			EnvVar: "MAX_OPEN_FILES_PER_TORRENT",
+		},
+		cli.Int64Flag{
+			Name:   "mmap-min-file-size",
+			Usage:  "files shorter than this are read with pread instead of a mapping, in bytes",
+			Value:  64 * 1024,
+			EnvVar: "MMAP_MIN_FILE_SIZE",
+		},
 	)
 }
 
@@ -339,7 +352,11 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		pieceHashersPerTorrent:     c.Int(PieceHashersPerTorrentFlag),
 		dialRateLimit:              c.Int(DialRateLimitFlag),
 		perTorrentCacheBudget:      cacheBudget,
-		torrentClientDebug:         c.Bool(TorrentClientDebugFlag),
+		fileCache: FileCacheConfig{
+			MaxOpen: c.Int("max-open-files-per-torrent"),
+			MmapMin: c.Int64("mmap-min-file-size"),
+		},
+		torrentClientDebug: c.Bool(TorrentClientDebugFlag),
 	}, nil
 }
 
@@ -355,7 +372,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 		l.SetHandlers(tlog.DiscardHandler)
 		cfg.Logger = l
 	}
-	s.storageImpl = NewMMap(s.dataDir, s.perTorrentCacheBudget)
+	s.storageImpl = NewMMap(s.dataDir, s.perTorrentCacheBudget, s.fileCache)
 	cfg.DefaultStorage = s.storageImpl
 	if s.ua != "" {
 		cfg.HTTPUserAgent = s.ua

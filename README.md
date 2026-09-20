@@ -10,7 +10,7 @@ Built on [anacrolix/torrent](https://github.com/anacrolix/torrent) (custom [fork
 - **gRPC status service** — real-time download progress, piece states, peer counts via `Stat`/`StatStream`/`Files` RPCs
 - **Remote torrent store** — fetch `.torrent` metadata from a gRPC [torrent-store](https://github.com/webtor-io/torrent-store) service
 - **Vault integration** — redirect to pre-cached files on S3 when available
-- **Memory-mapped storage** — mmap-backed piece storage with per-torrent LRU cache eviction
+- **Memory-mapped storage** — mmap-backed piece storage with per-torrent LRU cache eviction; files open on first touch with a bounded number kept open per torrent (`MAX_OPEN_FILES_PER_TORRENT`, default 2048), files under `MMAP_MIN_FILE_SIZE` (64 KB) are read with pread instead of a mapping
 - **Diagnostics CLI** — `diagnose` command for troubleshooting torrent download issues
 
 ## Architecture

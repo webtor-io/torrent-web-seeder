@@ -2,8 +2,10 @@ package services
 
 import (
 	"crypto/sha1"
+	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,8 +32,8 @@ func TestPieceFileRegions_SingleFile(t *testing.T) {
 		Pieces:      makeDummyPieces(5),
 	}
 	ts := &mmapTorrentStorage{
-		info:     info,
-		fileLens: []int64{500},
+		info: info,
+		span: spanForLens(t, 500),
 	}
 
 	// Piece 0: offset=0, length=100 → file 0, offset 0, length 100.
@@ -69,8 +71,8 @@ func TestPieceFileRegions_MultiFile(t *testing.T) {
 		},
 	}
 	ts := &mmapTorrentStorage{
-		info:     info,
-		fileLens: []int64{150, 150},
+		info: info,
+		span: spanForLens(t, 150, 150),
 	}
 
 	// Piece 0: should be in file 0 only.
@@ -114,8 +116,8 @@ func TestPieceFileRegions_LastPieceShorter(t *testing.T) {
 		Pieces:      makeDummyPieces(3),
 	}
 	ts := &mmapTorrentStorage{
-		info:     info,
-		fileLens: []int64{250},
+		info: info,
+		span: spanForLens(t, 250),
 	}
 
 	lastPiece := info.Piece(2)
@@ -305,10 +307,11 @@ func TestEvictRaceNoZeroReads(t *testing.T) {
 	copy(infoHash[:], "racetest1234567890ab")
 
 	dir := t.TempDir()
-	span, files, fileLens, mmaps, err := mMapTorrent(info, dir)
+	files, err := torrentSpanFiles(info, dir)
 	if err != nil {
-		t.Fatalf("mMapTorrent: %v", err)
+		t.Fatalf("torrentSpanFiles: %v", err)
 	}
+	span := newLazySpan(files, FileCacheConfig{})
 	defer span.Close()
 
 	pc := storage.NewMapPieceCompletion()
@@ -320,9 +323,6 @@ func TestEvictRaceNoZeroReads(t *testing.T) {
 		pc:       pc,
 		lru:      lru,
 		info:     info,
-		files:    files,
-		fileLens: fileLens,
-		mmaps:    mmaps,
 		closeCh:  make(chan struct{}),
 		evicted:  make([]atomic.Bool, numPieces),
 	}
@@ -432,4 +432,16 @@ func createTempFileWithData(t *testing.T, size int, fillByte byte) (*os.File, er
 		return nil, err
 	}
 	return f, nil
+}
+
+// spanForLens builds a lazy span over files of the given lengths in a temp
+// dir, for tests that only need the layout.
+func spanForLens(t *testing.T, lens ...int64) *lazySpan {
+	t.Helper()
+	dir := t.TempDir()
+	files := make([]spanFile, len(lens))
+	for i, l := range lens {
+		files[i] = spanFile{path: filepath.Join(dir, fmt.Sprintf("f%d", i)), length: l}
+	}
+	return newLazySpan(files, FileCacheConfig{})
 }
