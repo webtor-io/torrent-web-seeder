@@ -712,3 +712,34 @@ func TestMMapStorage_ContentIntegrityUnderChurn(t *testing.T) {
 	}
 	t.Logf("pieces=%d files=%d reads=%d", numPieces, len(files), reads.Load())
 }
+
+// Files longer than MmapMax take the pread path like the small ones: no
+// mapping, same bytes, both in the span and on disk.
+func TestLazySpan_MmapMaxUsesPread(t *testing.T) {
+	s, ref := spanFixture(t, FileCacheConfig{MmapMin: 1024, MmapMax: 5000}, 10, 4000, 70000, 123456)
+	if _, err := s.WriteAt(ref, 0); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, s.Len())
+	if _, err := s.ReadAt(got, 0); err != nil || !bytes.Equal(got, ref) {
+		t.Fatalf("round trip with MmapMax: %v", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for idx, want := range map[int]bool{1: true, 2: false, 3: false} {
+		e := s.open[idx]
+		if e == nil {
+			t.Fatalf("file %d must be open after a full read", idx)
+		}
+		if (e.m != nil) != want {
+			t.Errorf("file %d (len %d): mapped=%v, want %v", idx, s.files[idx].length, e.m != nil, want)
+		}
+	}
+	for i, sf := range s.files {
+		data, err := os.ReadFile(sf.path)
+		off, _ := s.fileRange(i)
+		if err != nil || !bytes.Equal(data, ref[off:off+sf.length]) {
+			t.Errorf("file %d on disk differs: %v", i, err)
+		}
+	}
+}

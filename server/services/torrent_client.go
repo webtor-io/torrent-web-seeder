@@ -108,6 +108,7 @@ type TorrentClient struct {
 	inited                     bool
 	rLimit                     int64
 	fileCache                  FileCacheConfig
+	clientIdleTimeout          time.Duration
 	dataDir                    string
 	proxy                      string
 	ua                         string
@@ -299,6 +300,18 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Value:  64 * 1024,
 			EnvVar: "MMAP_MIN_FILE_SIZE",
 		},
+		cli.Int64Flag{
+			Name:   "mmap-max-file-size",
+			Usage:  "files longer than this are read with pread instead of a mapping (page tables of a mapping are pod memory), in bytes",
+			Value:  4 << 30,
+			EnvVar: "MMAP_MAX_FILE_SIZE",
+		},
+		cli.DurationFlag{
+			Name:   "client-idle-timeout",
+			Usage:  "close the torrent client after this long without torrents (0 = never); a closed client restarts with an empty DHT",
+			Value:  30 * time.Minute,
+			EnvVar: "CLIENT_IDLE_TIMEOUT",
+		},
 	)
 }
 
@@ -355,7 +368,9 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		fileCache: FileCacheConfig{
 			MaxOpen: c.Int("max-open-files-per-torrent"),
 			MmapMin: c.Int64("mmap-min-file-size"),
+			MmapMax: c.Int64("mmap-max-file-size"),
 		},
+		clientIdleTimeout:  c.Duration("client-idle-timeout"),
 		torrentClientDebug: c.Bool(TorrentClientDebugFlag),
 	}, nil
 }
@@ -468,11 +483,17 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 		dialer:  torrent.NetworkDialer{Network: "udp", Dialer: *torrent.DefaultNetDialer},
 	})
 	log.Infof("TorrentClient started")
+	// The client used to close 60 s after its last torrent was dropped. On
+	// a pod that serves a torrent every few minutes that meant 485 closes a
+	// day fleet-wide, each restart starting with an empty DHT: first peer
+	// p50 3.8 s, p95 68 s (audit 2026-09-20). A client without torrents
+	// costs ~100 MiB, so it now stays warm for clientIdleTimeout.
 	ticker := time.NewTicker(60 * time.Second)
 	metricsTicker := time.NewTicker(time.Second)
 	go func() {
 		defer metricsTicker.Stop()
 		defer ticker.Stop()
+		var idleSince time.Time
 		for {
 			select {
 			case <-cl.Closed():
@@ -483,6 +504,13 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 				promHalfOpenConns.Set(float64(stats.ActiveHalfOpenAttempts))
 			case <-ticker.C:
 				if len(cl.Torrents()) != 0 {
+					idleSince = time.Time{}
+					continue
+				}
+				if idleSince.IsZero() {
+					idleSince = time.Now()
+				}
+				if s.clientIdleTimeout <= 0 || time.Since(idleSince) < s.clientIdleTimeout {
 					continue
 				}
 				s.mux.Lock()

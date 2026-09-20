@@ -27,7 +27,12 @@ import (
 //
 // Files shorter than mmapMin are served with pread/pwrite instead of a
 // mapping: a source dump has thousands of 2 KB headers per piece, and a
-// mapping per header is what the map-count limit is made of.
+// mapping per header is what the map-count limit is made of. Files longer
+// than mmapMax take the same path for the opposite reason: a mapping's
+// page tables are kernel memory charged to the pod, MADV_DONTNEED frees
+// the pages but not the tables, and a pod with 384 GB mapped held 617 MB
+// of them — a third of its limit — until the torrent was dropped (audit
+// 2026-09-20: half of the OOM kills were that, not the heap).
 //
 // Locking: mu guards the open table and the LRU. An entry in use (refs > 0)
 // is never evicted, so a mapping cannot be unmapped under a reader on another
@@ -38,6 +43,7 @@ type lazySpan struct {
 	total   int64
 	maxOpen int
 	mmapMin int64
+	mmapMax int64
 
 	closeMu sync.RWMutex
 	mu      sync.Mutex
@@ -57,7 +63,7 @@ type spanFile struct {
 type spanEntry struct {
 	idx  int
 	f    *os.File
-	m    mmap.MMap // nil for files below mmapMin
+	m    mmap.MMap // nil for files outside [mmapMin, mmapMax]
 	refs int
 	elem *list.Element
 }
@@ -70,11 +76,15 @@ type FileCacheConfig struct {
 	// MmapMin is the smallest file length that gets a mapping; shorter files
 	// use pread/pwrite. Zero means the default.
 	MmapMin int64
+	// MmapMax is the largest file length that gets a mapping; longer files
+	// use pread/pwrite. Zero means the default.
+	MmapMax int64
 }
 
 const (
 	defaultMaxOpen = 2048
 	defaultMmapMin = 64 * 1024
+	defaultMmapMax = 4 << 30
 )
 
 func (c FileCacheConfig) withDefaults() FileCacheConfig {
@@ -83,6 +93,9 @@ func (c FileCacheConfig) withDefaults() FileCacheConfig {
 	}
 	if c.MmapMin <= 0 {
 		c.MmapMin = defaultMmapMin
+	}
+	if c.MmapMax <= 0 {
+		c.MmapMax = defaultMmapMax
 	}
 	return c
 }
@@ -104,6 +117,7 @@ func newLazySpan(files []spanFile, cfg FileCacheConfig) *lazySpan {
 		total:   off,
 		maxOpen: cfg.MaxOpen,
 		mmapMin: cfg.MmapMin,
+		mmapMax: cfg.MmapMax,
 		open:    map[int]*spanEntry{},
 		lru:     list.New(),
 	}
@@ -351,7 +365,7 @@ func (s *lazySpan) evictIdleLocked() {
 }
 
 // openEntry opens (creating a sparse file of the right length if needed) and,
-// for files at or above mmapMin, maps file idx.
+// for files within [mmapMin, mmapMax], maps file idx.
 func (s *lazySpan) openEntry(idx int) (*spanEntry, error) {
 	sf := s.files[idx]
 	if err := os.MkdirAll(filepath.Dir(sf.path), 0o750); err != nil {
@@ -373,7 +387,7 @@ func (s *lazySpan) openEntry(idx int) (*spanEntry, error) {
 		}
 	}
 	e := &spanEntry{idx: idx, f: f}
-	if sf.length >= s.mmapMin {
+	if sf.length >= s.mmapMin && sf.length <= s.mmapMax {
 		n := int(sf.length)
 		if int64(n) != sf.length {
 			_ = f.Close()
