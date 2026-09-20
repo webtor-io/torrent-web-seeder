@@ -541,3 +541,174 @@ func TestMMapStorage_LazyEvictRoundTrip(t *testing.T) {
 		t.Errorf("open = %d, want <= 1 (MaxOpen)", c)
 	}
 }
+
+// Content integrity under everything at once: many files on both the mapped
+// and the pread path, a cache far smaller than the file count, concurrent
+// writers of disjoint pieces, concurrent readers, and piece evictions with
+// re-writes. At the end every byte must match the reference — through the
+// span, through the storage pieces, and on disk file by file.
+func TestMMapStorage_ContentIntegrityUnderChurn(t *testing.T) {
+	const pieceLen = 4096
+	rng := rand.New(rand.NewSource(7))
+	var fis []metainfo.FileInfo
+	var total int64
+	for i := 0; i < 48; i++ {
+		var l int64
+		switch i % 4 {
+		case 0:
+			l = int64(1 + rng.Intn(200)) // tiny, pread path
+		case 1:
+			l = 0 // never created
+		case 2:
+			l = int64(3000 + rng.Intn(20000)) // straddles pieces, mapped when >= 4000
+		default:
+			l = int64(pieceLen*3 + rng.Intn(pieceLen)) // spans several pieces
+		}
+		fis = append(fis, metainfo.FileInfo{Path: []string{fmt.Sprintf("d%d", i%5), fmt.Sprintf("f%d", i)}, Length: l})
+		total += l
+	}
+	numPieces := int((total + pieceLen - 1) / pieceLen)
+	info := &metainfo.Info{Name: "churn", PieceLength: pieceLen, Pieces: makeDummyPieces(numPieces), Files: fis}
+	var infoHash metainfo.Hash
+	copy(infoHash[:], "churnchurnchurnchurn")
+
+	ref := make([]byte, total)
+	rng.Read(ref)
+
+	dir := t.TempDir()
+	files, err := torrentSpanFiles(info, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	span := newLazySpan(files, FileCacheConfig{MaxOpen: 3, MmapMin: 4000})
+	ts := &mmapTorrentStorage{
+		infoHash: infoHash,
+		span:     span,
+		pc:       storage.NewMapPieceCompletion(),
+		lru:      NewPieceLRU(total * 2), // no budget evictions; we evict by hand
+		info:     info,
+		closeCh:  make(chan struct{}),
+		evicted:  make([]atomic.Bool, numPieces),
+	}
+	defer ts.Close()
+
+	pieceBytes := func(i int) []byte {
+		p := info.Piece(i)
+		return ref[p.Offset() : p.Offset()+p.Length()]
+	}
+	writePiece := func(i int) error {
+		_, err := ts.Piece(info.Piece(i)).WriteAt(pieceBytes(i), 0)
+		if err != nil {
+			return err
+		}
+		return ts.Piece(info.Piece(i)).MarkComplete()
+	}
+
+	// Phase 1: all pieces written concurrently in a random order.
+	order := rng.Perm(numPieces)
+	var wg sync.WaitGroup
+	var werr atomic.Value
+	sem := make(chan struct{}, 6)
+	for _, i := range order {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := writePiece(i); err != nil {
+				werr.Store(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if e := werr.Load(); e != nil {
+		t.Fatal(e)
+	}
+
+	// Phase 2: readers hammer random pieces while an evictor punches random
+	// pieces and rewrites them. A read must return either the right bytes or
+	// ErrPieceEvicted — never anything else.
+	var pieceMu = make([]sync.Mutex, numPieces)
+	var bad, reads atomic.Int64
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(seed int64) {
+			defer wg.Done()
+			r := rand.New(rand.NewSource(seed))
+			buf := make([]byte, pieceLen)
+			for time.Now().Before(deadline) {
+				i := r.Intn(numPieces)
+				p := info.Piece(i)
+				pieceMu[i].Lock()
+				n, err := ts.Piece(p).ReadAt(buf[:p.Length()], 0)
+				pieceMu[i].Unlock()
+				reads.Add(1)
+				switch {
+				case errors.Is(err, ErrPieceEvicted):
+				case err == nil && int64(n) == p.Length() && bytes.Equal(buf[:n], pieceBytes(i)):
+				default:
+					bad.Add(1)
+				}
+			}
+		}(int64(g))
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r := rand.New(rand.NewSource(99))
+		for time.Now().Before(deadline) {
+			i := r.Intn(numPieces)
+			pieceMu[i].Lock()
+			ts.evictPiece(i)
+			if err := writePiece(i); err != nil {
+				werr.Store(err)
+			}
+			pieceMu[i].Unlock()
+		}
+	}()
+	wg.Wait()
+	if e := werr.Load(); e != nil {
+		t.Fatal(e)
+	}
+	if bad.Load() != 0 {
+		t.Fatalf("%d reads returned wrong bytes (of %d)", bad.Load(), reads.Load())
+	}
+
+	// Phase 3: every byte, three ways.
+	got := make([]byte, total)
+	if _, err := span.ReadAt(got, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, ref) {
+		t.Fatal("span content differs from reference after churn")
+	}
+	for i := 0; i < numPieces; i++ {
+		p := info.Piece(i)
+		buf := make([]byte, p.Length())
+		if _, err := ts.Piece(p).ReadAt(buf, 0); err != nil || !bytes.Equal(buf, pieceBytes(i)) {
+			t.Fatalf("piece %d differs after churn: %v", i, err)
+		}
+	}
+	var off int64
+	for i, sf := range files {
+		if sf.length == 0 {
+			if _, err := os.Stat(sf.path); err == nil {
+				t.Errorf("zero-length file %d must not exist", i)
+			}
+			continue
+		}
+		data, err := os.ReadFile(sf.path)
+		if err != nil {
+			t.Fatalf("file %d: %v", i, err)
+		}
+		if int64(len(data)) != sf.length || !bytes.Equal(data, ref[off:off+sf.length]) {
+			t.Fatalf("file %d on disk differs (len %d want %d)", i, len(data), sf.length)
+		}
+		off += sf.length
+	}
+	if c := span.openCount(); c > 3 {
+		t.Errorf("open = %d, want <= 3", c)
+	}
+	t.Logf("pieces=%d files=%d reads=%d", numPieces, len(files), reads.Load())
+}
