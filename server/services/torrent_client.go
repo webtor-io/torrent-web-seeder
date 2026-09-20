@@ -306,6 +306,12 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Value:  4 << 30,
 			EnvVar: "MMAP_MAX_FILE_SIZE",
 		},
+		cli.Int64Flag{
+			Name:   "mmap-budget-per-torrent",
+			Usage:  "most bytes a torrent keeps mapped at once; files opened past it are read with pread (page tables of mappings are pod memory)",
+			Value:  8 << 30,
+			EnvVar: "MMAP_BUDGET_PER_TORRENT",
+		},
 		cli.DurationFlag{
 			Name:   "client-idle-timeout",
 			Usage:  "close the torrent client after this long without torrents (0 = never); a closed client restarts with an empty DHT",
@@ -366,9 +372,10 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		dialRateLimit:              c.Int(DialRateLimitFlag),
 		perTorrentCacheBudget:      cacheBudget,
 		fileCache: FileCacheConfig{
-			MaxOpen: c.Int("max-open-files-per-torrent"),
-			MmapMin: c.Int64("mmap-min-file-size"),
-			MmapMax: c.Int64("mmap-max-file-size"),
+			MaxOpen:    c.Int("max-open-files-per-torrent"),
+			MmapMin:    c.Int64("mmap-min-file-size"),
+			MmapMax:    c.Int64("mmap-max-file-size"),
+			MmapBudget: c.Int64("mmap-budget-per-torrent"),
 		},
 		clientIdleTimeout:  c.Duration("client-idle-timeout"),
 		torrentClientDebug: c.Bool(TorrentClientDebugFlag),

@@ -32,7 +32,11 @@ import (
 // page tables are kernel memory charged to the pod, MADV_DONTNEED frees
 // the pages but not the tables, and a pod with 384 GB mapped held 617 MB
 // of them — a third of its limit — until the torrent was dropped (audit
-// 2026-09-20: half of the OOM kills were that, not the heap).
+// 2026-09-20: half of the OOM kills were that, not the heap). A per-file
+// cap alone does not bound that: a 1627-file pack of 3.9 GiB files mapped
+// 698 GiB on one pod (1.4 GiB of page tables). mmapBudget bounds the
+// bytes mapped per torrent; files opened past it use pread as well, and
+// the bound on page tables is ~2 MiB per GiB of budget.
 //
 // Locking: mu guards the open table and the LRU. An entry in use (refs > 0)
 // is never evicted, so a mapping cannot be unmapped under a reader on another
@@ -44,6 +48,10 @@ type lazySpan struct {
 	maxOpen int
 	mmapMin int64
 	mmapMax int64
+	// mmapBudget caps the bytes mapped at once; mapped is the running sum,
+	// guarded by mu.
+	mmapBudget int64
+	mapped     int64
 
 	closeMu sync.RWMutex
 	mu      sync.Mutex
@@ -79,12 +87,18 @@ type FileCacheConfig struct {
 	// MmapMax is the largest file length that gets a mapping; longer files
 	// use pread/pwrite. Zero means the default.
 	MmapMax int64
+	// MmapBudget is the most bytes a torrent keeps mapped at once; files
+	// opened past it use pread/pwrite. Zero means the default.
+	MmapBudget int64
 }
 
 const (
 	defaultMaxOpen = 2048
 	defaultMmapMin = 64 * 1024
 	defaultMmapMax = 4 << 30
+	// 8 GiB of mappings is ~16 MiB of page tables; enough for a film and its
+	// neighbours, and a pack of a thousand films stays on pread.
+	defaultMmapBudget = 8 << 30
 )
 
 func (c FileCacheConfig) withDefaults() FileCacheConfig {
@@ -96,6 +110,9 @@ func (c FileCacheConfig) withDefaults() FileCacheConfig {
 	}
 	if c.MmapMax <= 0 {
 		c.MmapMax = defaultMmapMax
+	}
+	if c.MmapBudget <= 0 {
+		c.MmapBudget = defaultMmapBudget
 	}
 	return c
 }
@@ -113,13 +130,14 @@ func newLazySpan(files []spanFile, cfg FileCacheConfig) *lazySpan {
 		off += files[i].length
 	}
 	return &lazySpan{
-		files:   files,
-		total:   off,
-		maxOpen: cfg.MaxOpen,
-		mmapMin: cfg.MmapMin,
-		mmapMax: cfg.MmapMax,
-		open:    map[int]*spanEntry{},
-		lru:     list.New(),
+		files:      files,
+		total:      off,
+		maxOpen:    cfg.MaxOpen,
+		mmapMin:    cfg.MmapMin,
+		mmapMax:    cfg.MmapMax,
+		mmapBudget: cfg.MmapBudget,
+		open:       map[int]*spanEntry{},
+		lru:        list.New(),
 	}
 }
 
@@ -306,11 +324,18 @@ func (s *lazySpan) Close() error {
 	s.closed = true
 	var err error
 	for idx, e := range s.open {
-		err = errors.Join(err, closeEntry(e))
+		err = errors.Join(err, s.closeEntryLocked(e))
 		delete(s.open, idx)
 	}
 	s.lru.Init()
 	return err
+}
+
+// mappedBytes is the sum of the lengths currently mapped (tests and metrics).
+func (s *lazySpan) mappedBytes() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mapped
 }
 
 // openCount is the number of files currently open (tests and metrics).
@@ -331,6 +356,9 @@ func (s *lazySpan) acquire(idx int) (*spanEntry, error) {
 		s.lru.MoveToFront(e.elem)
 		return e, nil
 	}
+	// Make room before opening, so bytes freed by an evicted mapping count
+	// toward the new file's mapping decision.
+	s.evictIdleLocked(1)
 	e, err := s.openEntry(idx)
 	if err != nil {
 		return nil, err
@@ -338,7 +366,6 @@ func (s *lazySpan) acquire(idx int) (*spanEntry, error) {
 	e.refs = 1
 	e.elem = s.lru.PushFront(e)
 	s.open[idx] = e
-	s.evictIdleLocked()
 	return e, nil
 }
 
@@ -349,23 +376,25 @@ func (s *lazySpan) release(e *spanEntry) {
 }
 
 // evictIdleLocked closes least recently used files with no active reference
-// until the table fits maxOpen. Files in use stay open even past the cap:
-// a cap is a target, an unmap under a reader is a crash.
-func (s *lazySpan) evictIdleLocked() {
-	for el := s.lru.Back(); el != nil && len(s.open) > s.maxOpen; {
+// until the table has room for `room` more within maxOpen. Files in use stay
+// open even past the cap: a cap is a target, an unmap under a reader is a
+// crash.
+func (s *lazySpan) evictIdleLocked(room int) {
+	for el := s.lru.Back(); el != nil && len(s.open)+room > s.maxOpen; {
 		prev := el.Prev()
 		e := el.Value.(*spanEntry)
 		if e.refs == 0 {
 			s.lru.Remove(el)
 			delete(s.open, e.idx)
-			_ = closeEntry(e)
+			_ = s.closeEntryLocked(e)
 		}
 		el = prev
 	}
 }
 
 // openEntry opens (creating a sparse file of the right length if needed) and,
-// for files within [mmapMin, mmapMax], maps file idx.
+// for files within [mmapMin, mmapMax] while the mapped budget allows, maps
+// file idx. Called with mu held.
 func (s *lazySpan) openEntry(idx int) (*spanEntry, error) {
 	sf := s.files[idx]
 	if err := os.MkdirAll(filepath.Dir(sf.path), 0o750); err != nil {
@@ -387,7 +416,7 @@ func (s *lazySpan) openEntry(idx int) (*spanEntry, error) {
 		}
 	}
 	e := &spanEntry{idx: idx, f: f}
-	if sf.length >= s.mmapMin && sf.length <= s.mmapMax {
+	if sf.length >= s.mmapMin && sf.length <= s.mmapMax && s.mapped+sf.length <= s.mmapBudget {
 		n := int(sf.length)
 		if int64(n) != sf.length {
 			_ = f.Close()
@@ -401,13 +430,17 @@ func (s *lazySpan) openEntry(idx int) (*spanEntry, error) {
 		// Streaming access: aggressive readahead, pages reclaimed after use.
 		_ = madviseSequential(m)
 		e.m = m
+		s.mapped += sf.length
 	}
 	return e, nil
 }
 
-func closeEntry(e *spanEntry) error {
+// closeEntryLocked unmaps and closes e, returning its bytes to the mapped
+// budget. Called with mu held.
+func (s *lazySpan) closeEntryLocked(e *spanEntry) error {
 	var err error
 	if e.m != nil {
+		s.mapped -= int64(len(e.m))
 		err = e.m.Unmap()
 		e.m = nil
 	}

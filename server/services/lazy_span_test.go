@@ -743,3 +743,71 @@ func TestLazySpan_MmapMaxUsesPread(t *testing.T) {
 		}
 	}
 }
+
+// The mapped budget bounds the bytes mapped at once: files opened past it use
+// pread, and a mapping's bytes return to the budget when the LRU closes it,
+// so later files can be mapped again. Bytes are the same either way.
+func TestLazySpan_MmapBudgetBoundsMappedBytes(t *testing.T) {
+	lens := []int64{3000, 3000, 3000, 3000}
+	s, ref := spanFixture(t, FileCacheConfig{MaxOpen: 2, MmapMin: 1000, MmapBudget: 7000}, lens...)
+	if _, err := s.WriteAt(ref, 0); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 10)
+	// Touch files 0 and 1: both fit the budget (6000 <= 7000) and the cache.
+	for i := 0; i < 2; i++ {
+		off, _ := s.fileRange(i)
+		if _, err := s.ReadAt(buf, off); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.mappedBytes() != 6000 {
+		t.Fatalf("mapped = %d, want 6000", s.mappedBytes())
+	}
+	// Hold file 0 so it cannot be evicted; open file 2: MaxOpen evicts idle
+	// file 1 (budget back to 3000), so file 2 still maps.
+	s.closeMu.RLock()
+	held, err := s.acquire(0)
+	s.closeMu.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	off2, _ := s.fileRange(2)
+	if _, err := s.ReadAt(buf, off2); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	e2 := s.open[2]
+	s.mu.Unlock()
+	if e2 == nil || e2.m == nil || s.mappedBytes() != 6000 {
+		t.Fatalf("file 2 should be mapped after file 1 was closed: e2=%v mapped=%d", e2 != nil && e2.m != nil, s.mappedBytes())
+	}
+	// Hold file 2 too; now file 3 cannot evict anything: 6000+3000 > 7000,
+	// so it opens on pread. It still reads the right bytes.
+	s.closeMu.RLock()
+	held2, err := s.acquire(2)
+	s.closeMu.RUnlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	off3, _ := s.fileRange(3)
+	got := make([]byte, 3000)
+	if _, err := s.ReadAt(got, off3); err != nil || !bytes.Equal(got, ref[off3:off3+3000]) {
+		t.Fatalf("file 3 read: %v", err)
+	}
+	s.mu.Lock()
+	e3 := s.open[3]
+	mapped := s.mapped
+	s.mu.Unlock()
+	if e3 == nil || e3.m != nil || mapped != 6000 {
+		t.Fatalf("file 3 must be open on pread with the budget unchanged: mapped(e3)=%v mapped=%d", e3 != nil && e3.m != nil, mapped)
+	}
+	s.release(held)
+	s.release(held2)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s.mappedBytes() != 0 {
+		t.Errorf("mapped = %d after Close, want 0", s.mappedBytes())
+	}
+}
