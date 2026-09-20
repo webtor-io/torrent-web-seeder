@@ -38,3 +38,15 @@ func madviseSequential(b []byte) error {
 	}
 	return unix.Madvise(pageAlignedSlice(b), unix.MADV_SEQUENTIAL)
 }
+
+// fadviseEvict tells the kernel the given byte range of an open file is no
+// longer needed (POSIX_FADV_DONTNEED): the pread counterpart of madviseEvict,
+// so file pages read through a descriptor do not pile up as page cache
+// charged to the pod. Dirty pages are skipped by the kernel; they leave
+// after writeback.
+func fadviseEvict(f *os.File, off, length int64) error {
+	if f == nil || length <= 0 {
+		return nil
+	}
+	return unix.Fadvise(int(f.Fd()), off, length, unix.FADV_DONTNEED)
+}

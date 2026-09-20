@@ -264,9 +264,27 @@ func (s *lazySpan) withFile(idx int, fn func(f *os.File, m mmap.MMap) error) err
 	return fn(e.f, e.m)
 }
 
-// ifMapped runs fn on file idx's mapping only if the file is currently open
-// and mapped. Page-cache advice on a cold file is not worth an open.
-func (s *lazySpan) ifMapped(idx int, fn func(m mmap.MMap)) {
+// advise drops the page cache of [off, off+length) in file idx if the file
+// is currently open — madvise on a mapping, fadvise on a descriptor. A cold
+// file is not opened for advice: its pages will be reclaimed like any other.
+// The two syscalls are hooked for tests.
+var (
+	madviseEvictFn = madviseEvict
+	fadviseEvictFn = fadviseEvict
+)
+
+func adviseEvict(e *spanEntry, off, length int64) {
+	if e.m != nil {
+		end := min(off+length, int64(len(e.m)))
+		if off < end {
+			_ = madviseEvictFn(e.m[off:end])
+		}
+		return
+	}
+	_ = fadviseEvictFn(e.f, off, length)
+}
+
+func (s *lazySpan) advise(idx int, off, length int64) {
 	s.closeMu.RLock()
 	defer s.closeMu.RUnlock()
 	if s.closed {
@@ -274,14 +292,14 @@ func (s *lazySpan) ifMapped(idx int, fn func(m mmap.MMap)) {
 	}
 	s.mu.Lock()
 	e, ok := s.open[idx]
-	if !ok || e.m == nil {
+	if !ok {
 		s.mu.Unlock()
 		return
 	}
 	e.refs++
 	s.lru.MoveToFront(e.elem)
 	s.mu.Unlock()
-	fn(e.m)
+	adviseEvict(e, off, length)
 	s.release(e)
 }
 

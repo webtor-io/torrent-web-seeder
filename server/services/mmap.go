@@ -396,12 +396,7 @@ func (sp mmapStoragePiece) MarkNotComplete() error {
 // has already been copied into a userspace buffer.
 func (ts *mmapTorrentStorage) madviseSpanRange(spanOff, length int64) {
 	for _, r := range ts.span.locate(spanOff, length) {
-		ts.span.ifMapped(r.fileIndex, func(m mmap.MMap) {
-			end := r.offset + r.length
-			if end <= int64(len(m)) {
-				_ = madviseEvict(m[r.offset:end])
-			}
-		})
+		ts.span.advise(r.fileIndex, r.offset, r.length)
 	}
 }
 

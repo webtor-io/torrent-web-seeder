@@ -405,13 +405,25 @@ func TestLazySpan_CloseWaitsForReadersThenRefuses(t *testing.T) {
 }
 
 // withFile opens a cold file for hole punching and hands over the mapping
-// only when the file is mapped; ifMapped never opens anything.
-func TestLazySpan_WithFileAndIfMapped(t *testing.T) {
+// only when the file is mapped; advise never opens anything and reaches the
+// mapped and the descriptor path alike.
+func TestLazySpan_WithFileAndAdvise(t *testing.T) {
 	s, _ := spanFixture(t, FileCacheConfig{MmapMin: 1024}, 100, 70000)
-	called := 0
-	s.ifMapped(1, func(mmap.MMap) { called++ })
-	if called != 0 || s.openCount() != 0 {
-		t.Fatal("ifMapped must not open a cold file")
+	var advised []string
+	origM, origF := madviseEvictFn, fadviseEvictFn
+	madviseEvictFn = func(b []byte) error {
+		advised = append(advised, fmt.Sprintf("mmap:%d", len(b)))
+		return origM(b)
+	}
+	fadviseEvictFn = func(f *os.File, off, length int64) error {
+		advised = append(advised, fmt.Sprintf("pread:%d:%d", off, length))
+		return origF(f, off, length)
+	}
+	defer func() { madviseEvictFn, fadviseEvictFn = origM, origF }()
+
+	s.advise(1, 0, 10)
+	if len(advised) != 0 || s.openCount() != 0 {
+		t.Fatal("advise must not open a cold file")
 	}
 	err := s.withFile(1, func(f *os.File, m mmap.MMap) error {
 		if f == nil || m == nil {
@@ -431,9 +443,17 @@ func TestLazySpan_WithFileAndIfMapped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.ifMapped(1, func(m mmap.MMap) { called++ })
-	if called != 1 {
-		t.Errorf("ifMapped on a mapped file must run, called=%d", called)
+	s.advise(1, 4096, 8192)
+	s.advise(0, 0, 100)
+	if fmt.Sprint(advised) != "[mmap:8192 pread:0:100]" {
+		t.Errorf("advised = %v", advised)
+	}
+	// The storage's page-advice path fans out over the span's regions.
+	ts := &mmapTorrentStorage{span: s}
+	advised = nil
+	ts.madviseSpanRange(50, 100) // 50 bytes of file 0, 50 of file 1
+	if fmt.Sprint(advised) != "[pread:50:50 mmap:50]" {
+		t.Errorf("madviseSpanRange advised = %v", advised)
 	}
 }
 
