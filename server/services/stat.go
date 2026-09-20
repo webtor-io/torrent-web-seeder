@@ -152,7 +152,7 @@ func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, err
 
 func findFile(t *torrent.Torrent, path string) *torrent.File {
 	for _, f := range t.Files() {
-		if f.Path() == path {
+		if samePath(f.Path(), path) {
 			return f
 		}
 	}

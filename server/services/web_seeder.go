@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -316,6 +317,19 @@ func (s *WebSeeder) redirectFromVault(w http.ResponseWriter, r *http.Request, h 
 	return false, fmt.Errorf("unexpected vault status %d for %s", resp.StatusCode, fileURL)
 }
 
+// samePath compares a torrent file path with a requested one after both
+// are cleaned. Some torrents carry an empty path component ("Name", "",
+// "04c.mp3" — "Isabel Wilkerson - The Warmth of Other Suns", 2026-09-20):
+// anacrolix renders that file as "Name//04c.mp3", while every client and
+// the proxy in front of us send the cleaned "Name/04c.mp3" (net/http's mux
+// itself redirects a "//" path), so an exact comparison never matched and
+// the torrent looked dead to the person. Cleaning both sides makes the
+// lookup tolerant of the empty component without changing anything for
+// well-formed torrents.
+func samePath(filePath, requested string) bool {
+	return path.Clean("/"+filePath) == path.Clean("/"+requested)
+}
+
 func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
 	t, err := s.tm.Get(ctx, h)
 	if err != nil {
@@ -323,7 +337,7 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 	}
 
 	for _, f := range t.Files() {
-		if f.Path() == p {
+		if samePath(f.Path(), p) {
 			torReader := f.NewReader()
 			torReader.SetResponsive()
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
