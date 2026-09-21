@@ -321,6 +321,19 @@ func (me mmapStoragePiece) ReadAt(b []byte, off int64) (int, error) {
 	if n > 0 && me.t.lru != nil {
 		me.t.madviseSpanRange(me.p.Offset()+off, int64(n))
 	}
+	if err != nil && err != io.EOF {
+		// anacrolix logs storage read errors to a logger this service
+		// discards, and a read that fails twice ends in a panic inside its
+		// reader (updatePieceCompletion, "0 N"); the error itself was
+		// invisible — 2026-09-21. Say what the storage answered.
+		log.WithError(err).WithFields(log.Fields{
+			"infohash": me.t.infoHash.HexString(),
+			"piece":    me.p.Index(),
+			"off":      off,
+			"len":      len(b),
+			"n":        n,
+		}).Warn("piece read failed")
+	}
 	return n, err
 }
 
