@@ -28,6 +28,7 @@ func spanFixture(t *testing.T, cfg FileCacheConfig, lens ...int64) (*lazySpan, [
 	for i, l := range lens {
 		files[i] = spanFile{path: filepath.Join(dir, "content", fmt.Sprintf("%02x", i%256), fmt.Sprintf("f%d", i)), length: l}
 	}
+	contiguous(files)
 	s := newLazySpan(files, cfg)
 	t.Cleanup(func() { _ = s.Close() })
 	ref := make([]byte, s.Len())
@@ -108,7 +109,17 @@ func filesFor(t *testing.T, lens []int64) []spanFile {
 	for i, l := range lens {
 		files[i] = spanFile{path: filepath.Join(dir, fmt.Sprintf("f%d", i)), length: l}
 	}
+	contiguous(files)
 	return files
+}
+
+// contiguous lays files out back to back (a v1 layout).
+func contiguous(files []spanFile) {
+	var off int64
+	for i := range files {
+		files[i].offset = off
+		off += files[i].length
+	}
 }
 
 // linearLocate is the eager span's O(files) scan, kept as the oracle.
@@ -829,5 +840,198 @@ func TestLazySpan_MmapBudgetBoundsMappedBytes(t *testing.T) {
 	}
 	if s.mappedBytes() != 0 {
 		t.Errorf("mapped = %d after Close, want 0", s.mappedBytes())
+	}
+}
+
+// A v2/hybrid layout: files start on piece boundaries, with gaps between
+// them. Bytes land in the right file at the right place, the gaps read as
+// zeros, and writes into a gap are swallowed but counted.
+func TestLazySpan_PieceAlignedLayoutWithGaps(t *testing.T) {
+	dir := t.TempDir()
+	const pl = 4096
+	files := []spanFile{
+		{path: filepath.Join(dir, "a"), length: 100, offset: 0},
+		{path: filepath.Join(dir, "b"), length: 5000, offset: pl},   // gap 100..4096
+		{path: filepath.Join(dir, "c"), length: 10, offset: 3 * pl}, // gap 9096..12288
+	}
+	s := newLazySpan(files, FileCacheConfig{MmapMin: 1000})
+	defer s.Close()
+	if s.Len() != 3*pl+10 {
+		t.Fatalf("Len = %d, want %d", s.Len(), 3*pl+10)
+	}
+	ref := make([]byte, s.Len())
+	for i := range ref {
+		ref[i] = byte(i*13 + 1)
+	}
+	// Write the whole span in one go, gaps included.
+	if n, err := s.WriteAt(ref, 0); err != nil || int64(n) != s.Len() {
+		t.Fatalf("WriteAt: n=%d err=%v", n, err)
+	}
+	// Each file holds exactly its slice of the span, at its own offset.
+	for _, f := range files {
+		data, err := os.ReadFile(f.path)
+		if err != nil || !bytes.Equal(data, ref[f.offset:f.offset+f.length]) {
+			t.Fatalf("file %s: err=%v, content differs=%v", filepath.Base(f.path), err, !bytes.Equal(data, ref[f.offset:f.offset+f.length]))
+		}
+	}
+	// Reading back: file bytes as written, gaps as zeros.
+	want := make([]byte, s.Len())
+	for _, f := range files {
+		copy(want[f.offset:], ref[f.offset:f.offset+f.length])
+	}
+	got := make([]byte, s.Len())
+	if n, err := s.ReadAt(got, 0); err != nil || int64(n) != s.Len() {
+		t.Fatalf("ReadAt: n=%d err=%v", n, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("read back differs: files must sit at their offsets and gaps must be zero")
+	}
+	// A read that starts inside a gap and ends inside the next file.
+	buf := make([]byte, 200)
+	if n, err := s.ReadAt(buf, pl-50); err != nil || n != 200 {
+		t.Fatalf("gap-straddling read: n=%d err=%v", n, err)
+	}
+	if !bytes.Equal(buf[:50], make([]byte, 50)) || !bytes.Equal(buf[50:], ref[pl:pl+150]) {
+		t.Fatal("gap-straddling read: zeros then file b")
+	}
+	// A read entirely inside a gap.
+	if n, err := s.ReadAt(buf, 200); err != nil || n != 200 || !bytes.Equal(buf, make([]byte, 200)) {
+		t.Fatalf("in-gap read: n=%d err=%v", n, err)
+	}
+	// The last file, then EOF past Len.
+	last := make([]byte, 20)
+	n, err := s.ReadAt(last, 3*pl)
+	if n != 10 || err != io.EOF || !bytes.Equal(last[:10], ref[3*pl:3*pl+10]) {
+		t.Fatalf("last file read: n=%d err=%v", n, err)
+	}
+	// Piece-sized reads across the span match want, piece by piece.
+	for off := int64(0); off < s.Len(); off += pl {
+		piece := make([]byte, pl)
+		n, err := s.ReadAt(piece, off)
+		wantN := int(min(pl, s.Len()-off))
+		if n != wantN || (err != nil && err != io.EOF) || !bytes.Equal(piece[:n], want[off:off+int64(n)]) {
+			t.Fatalf("piece at %d: n=%d err=%v", off, n, err)
+		}
+	}
+}
+
+// torrentSpanFiles takes each file's offset from the metainfo. For a v2
+// torrent that is piece-aligned, not the running sum of lengths.
+func TestTorrentSpanFiles_V2OffsetsArePieceAligned(t *testing.T) {
+	info := &metainfo.Info{
+		Name:        "v2",
+		PieceLength: 4096,
+		MetaVersion: 2,
+		FileTree: metainfo.FileTree{Dir: map[string]metainfo.FileTree{
+			"a.bin": {File: metainfo.FileTreeFile{Length: 100}},
+			"b.bin": {File: metainfo.FileTreeFile{Length: 5000}},
+			"c.bin": {File: metainfo.FileTreeFile{Length: 10}},
+		}},
+	}
+	files, err := torrentSpanFiles(info, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("files = %d", len(files))
+	}
+	wantOff := []int64{0, 4096, 3 * 4096}
+	for i, f := range files {
+		if f.offset != wantOff[i] {
+			t.Errorf("file %d offset = %d, want %d (piece-aligned)", i, f.offset, wantOff[i])
+		}
+	}
+	s := newLazySpan(files, FileCacheConfig{})
+	defer s.Close()
+	if s.Len() != 3*4096+10 {
+		t.Errorf("Len = %d, want %d", s.Len(), 3*4096+10)
+	}
+	// A v1 torrent stays contiguous.
+	v1 := &metainfo.Info{Name: "v1", PieceLength: 4096, Pieces: makeDummyPieces(3),
+		Files: []metainfo.FileInfo{{Path: []string{"a"}, Length: 100}, {Path: []string{"b"}, Length: 5000}}}
+	f1, err := torrentSpanFiles(v1, t.TempDir())
+	if err != nil || f1[0].offset != 0 || f1[1].offset != 100 {
+		t.Fatalf("v1 offsets: %v %+v", err, f1)
+	}
+}
+
+// End to end through the storage with a v2 layout, the way production
+// broke on 2026-09-21: pieces written by the client land in the right
+// files, every piece (including those that straddle a pad gap) reads back
+// in full, and the last piece of the span reads without EOF at n=0.
+func TestMMapStorage_V2PiecesLandInTheRightFiles(t *testing.T) {
+	const pieceLen = 4096
+	info := &metainfo.Info{
+		Name:        "v2",
+		PieceLength: pieceLen,
+		MetaVersion: 2,
+		FileTree: metainfo.FileTree{Dir: map[string]metainfo.FileTree{
+			"a.bin": {File: metainfo.FileTreeFile{Length: 100}},           // piece 0 (+ pad)
+			"b.bin": {File: metainfo.FileTreeFile{Length: pieceLen + 10}}, // pieces 1, 2 (+ pad)
+			"c.bin": {File: metainfo.FileTreeFile{Length: 50}},            // piece 3, short
+		}},
+	}
+	numPieces := info.NumPieces()
+	if numPieces != 4 {
+		t.Fatalf("NumPieces = %d, want 4 (piece-aligned files)", numPieces)
+	}
+	var infoHash metainfo.Hash
+	copy(infoHash[:], "v2pieces1234567890ab")
+	dir := t.TempDir()
+	files, err := torrentSpanFiles(info, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	span := newLazySpan(files, FileCacheConfig{MaxOpen: 1, MmapMin: 1024})
+	ts := &mmapTorrentStorage{
+		infoHash: infoHash,
+		span:     span,
+		pc:       storage.NewMapPieceCompletion(),
+		lru:      NewPieceLRU(int64(numPieces) * pieceLen),
+		info:     info,
+		closeCh:  make(chan struct{}),
+		evicted:  make([]atomic.Bool, numPieces),
+	}
+	defer ts.Close()
+
+	// What the swarm would send: for each piece, the file bytes at their
+	// aligned positions and zeros in the pad regions.
+	total := span.Len()
+	wire := make([]byte, total)
+	for i := range wire {
+		wire[i] = byte(i*31 + 7)
+	}
+	for _, f := range files {
+		end := f.offset + f.length
+		for i := end; i < total && i < end+pieceLen; i++ {
+			if (i - end) < (pieceLen-(f.length%pieceLen))%pieceLen {
+				wire[i] = 0
+			}
+		}
+	}
+	for i := 0; i < numPieces; i++ {
+		p := info.Piece(i)
+		if _, err := ts.Piece(p).WriteAt(wire[p.Offset():p.Offset()+p.Length()], 0); err != nil {
+			t.Fatalf("write piece %d: %v", i, err)
+		}
+	}
+	// On disk, each file is exactly its own bytes at its own offset.
+	for _, f := range files {
+		got, err := os.ReadFile(f.path)
+		if err != nil || !bytes.Equal(got, wire[f.offset:f.offset+f.length]) {
+			t.Fatalf("file at %d: err=%v content differs=%v", f.offset, err, !bytes.Equal(got, wire[f.offset:f.offset+f.length]))
+		}
+	}
+	// Every piece reads back in full; the last one with n == its length.
+	for i := 0; i < numPieces; i++ {
+		p := info.Piece(i)
+		buf := make([]byte, p.Length())
+		n, err := ts.Piece(p).ReadAt(buf, 0)
+		if int64(n) != p.Length() || (err != nil && err != io.EOF) {
+			t.Fatalf("read piece %d: n=%d err=%v, want n=%d", i, n, err, p.Length())
+		}
+		if !bytes.Equal(buf, wire[p.Offset():p.Offset()+p.Length()]) {
+			t.Fatalf("piece %d content differs", i)
+		}
 	}
 }

@@ -443,5 +443,6 @@ func spanForLens(t *testing.T, lens ...int64) *lazySpan {
 	for i, l := range lens {
 		files[i] = spanFile{path: filepath.Join(dir, fmt.Sprintf("f%d", i)), length: l}
 	}
+	contiguous(files)
 	return newLazySpan(files, FileCacheConfig{})
 }

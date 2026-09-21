@@ -120,18 +120,25 @@ func (c FileCacheConfig) withDefaults() FileCacheConfig {
 // ErrSpanClosed is returned by reads and writes after Close.
 var ErrSpanClosed = errors.New("storage span closed")
 
-// newLazySpan lays out files (paths relative to nothing — they are given
-// absolute) and opens none of them.
+// newLazySpan takes files with their offsets already set and opens none of
+// them. Files must be in offset order. offset is the file's TorrentOffset
+// as the metainfo reports it, NOT the sum of the lengths before it: v2 and
+// hybrid torrents align every file to a piece boundary, so there are gaps
+// between files (the v1 pad files). Summing lengths shifted every file
+// after the first and served the wrong bytes (2026-09-21, hybrid torrent
+// 3e773d6b). Gaps read as zeros and swallow writes.
 func newLazySpan(files []spanFile, cfg FileCacheConfig) *lazySpan {
 	cfg = cfg.withDefaults()
-	var off int64
+	var total int64
 	for i := range files {
-		files[i].offset = off
-		off += files[i].length
+		if i > 0 && files[i].offset < files[i-1].offset+files[i-1].length {
+			panic(fmt.Sprintf("span files out of order: file %d at %d overlaps file %d ending at %d", i, files[i].offset, i-1, files[i-1].offset+files[i-1].length))
+		}
+		total = max(total, files[i].offset+files[i].length)
 	}
 	return &lazySpan{
 		files:      files,
-		total:      off,
+		total:      total,
 		maxOpen:    cfg.MaxOpen,
 		mmapMin:    cfg.MmapMin,
 		mmapMax:    cfg.MmapMax,
@@ -186,7 +193,14 @@ func (s *lazySpan) ReadAt(b []byte, off int64) (n int, err error) {
 	if off < 0 {
 		return 0, errors.New("negative offset")
 	}
+	end := min(off+int64(len(b)), s.total)
+	cur := off
 	for _, r := range s.locate(off, int64(len(b))) {
+		// A gap before this file (pad region of a v2 layout) reads as zeros.
+		if start := s.files[r.fileIndex].offset + r.offset; start > cur {
+			n += zero(b[n : n+int(start-cur)])
+			cur = start
+		}
 		e, aerr := s.acquire(r.fileIndex)
 		if aerr != nil {
 			return n, aerr
@@ -203,14 +217,26 @@ func (s *lazySpan) ReadAt(b []byte, off int64) (n int, err error) {
 		}
 		s.release(e)
 		n += rn
+		cur += int64(rn)
 		if err != nil {
 			return n, err
 		}
+	}
+	if cur < end {
+		n += zero(b[n : n+int(end-cur)])
 	}
 	if n < len(b) {
 		err = io.EOF
 	}
 	return n, err
+}
+
+// zero clears b and returns its length.
+func zero(b []byte) int {
+	for i := range b {
+		b[i] = 0
+	}
+	return len(b)
 }
 
 // WriteAt implements io.WriterAt over the span.
@@ -223,7 +249,15 @@ func (s *lazySpan) WriteAt(b []byte, off int64) (n int, err error) {
 	if off < 0 {
 		return 0, errors.New("negative offset")
 	}
+	end := min(off+int64(len(b)), s.total)
+	cur := off
 	for _, r := range s.locate(off, int64(len(b))) {
+		// Bytes aimed at a gap (pad region) have nowhere to go; they count
+		// as written, as the pad file they stand for would hold zeros.
+		if start := s.files[r.fileIndex].offset + r.offset; start > cur {
+			n += int(start - cur)
+			cur = start
+		}
 		e, aerr := s.acquire(r.fileIndex)
 		if aerr != nil {
 			return n, aerr
@@ -237,9 +271,13 @@ func (s *lazySpan) WriteAt(b []byte, off int64) (n int, err error) {
 		}
 		s.release(e)
 		n += wn
+		cur += int64(wn)
 		if err != nil {
 			return n, err
 		}
+	}
+	if cur < end {
+		n += int(end - cur)
 	}
 	if n < len(b) {
 		err = io.ErrShortWrite

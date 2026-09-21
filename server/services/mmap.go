@@ -589,6 +589,8 @@ func torrentSpanFiles(md *metainfo.Info, location string) ([]spanFile, error) {
 		files = append(files, spanFile{
 			path:   filepath.Join(location, "content", hexHash[:2], hexHash),
 			length: miFile.Length,
+			// The metainfo's own offset: piece-aligned in v2/hybrid torrents.
+			offset: miFile.TorrentOffset,
 		})
 	}
 	return files, nil
