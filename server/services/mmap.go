@@ -322,7 +322,12 @@ func (me mmapStoragePiece) ReadAt(b []byte, off int64) (int, error) {
 	if n > 0 && me.t.lru != nil {
 		me.t.madviseSpanRange(me.p.Offset()+off, int64(n))
 	}
-	if err != nil && (err != io.EOF || n == 0) {
+	if err != nil && (err != io.EOF || n == 0) && !errors.Is(err, ErrSpanClosed) {
+		// ErrSpanClosed is not logged: anacrolix sweeps every piece with a
+		// 32 KB read right after Drop (1,586 lines in two seconds for one
+		// warm torrent, 2026-09-21); those reads have no reader behind them
+		// and say nothing new. A closed span under an HTTP reader shows up
+		// as "reading from closed torrent" and the recovered panic instead.
 		// anacrolix logs storage read errors to a logger this service
 		// discards, and a read that returns nothing twice ends in a panic
 		// inside its reader (updatePieceCompletion, "0 N"); the error
