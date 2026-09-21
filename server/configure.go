@@ -25,6 +25,7 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterVaultFlags(app.Flags)
 	app.Flags = s.RegisterWebSeederFlags(app.Flags)
 	app.Flags = s.RegisterLingerFlags(app.Flags)
+	app.Flags = s.RegisterCacheEventsFlags(app.Flags)
 	// app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
 	configureDiagnose(app)
@@ -42,6 +43,11 @@ func run(c *cli.Context) error {
 		return err
 	}
 	defer torrentClient.Close()
+
+	// Setting CacheEvents (off without NATS; see services/cache_events.go)
+	cacheEvents := s.NewCacheEvents(c)
+	defer cacheEvents.Close()
+	torrentClient.SetCacheEvents(cacheEvents)
 
 	// Setting HTTPClient
 	cl := &http.Client{

@@ -102,6 +102,7 @@ func (m *metricsDialer) DialerNetwork() string {
 
 type TorrentClient struct {
 	cl                         *torrent.Client
+	cacheEvents                *CacheEvents // set before the first Get; nil publishes nothing
 	storageImpl                *mmapClientImpl
 	mux                        sync.Mutex
 	err                        error
@@ -395,6 +396,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 		cfg.Logger = l
 	}
 	s.storageImpl = NewMMap(s.dataDir, s.perTorrentCacheBudget, s.fileCache)
+	s.storageImpl.events = s.cacheEvents
 	cfg.DefaultStorage = s.storageImpl
 	if s.ua != "" {
 		cfg.HTTPUserAgent = s.ua
@@ -553,4 +555,11 @@ func (s *TorrentClient) Close() {
 		log.Infof("closing TorrentClient")
 		s.cl.Close()
 	}
+}
+
+// SetCacheEvents makes the storage report completed and evicted files. It has
+// to be called before the client is first built (Get): the storage is created
+// there, and torrents opened before it would stay silent.
+func (s *TorrentClient) SetCacheEvents(e *CacheEvents) {
+	s.cacheEvents = e
 }

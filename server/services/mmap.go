@@ -30,6 +30,7 @@ const evictShards = 1024
 
 type mmapClientImpl struct {
 	baseDir   string
+	events    *CacheEvents // nil: nothing is published
 	budget    int64
 	fileCache FileCacheConfig
 	cl        *torrent.Client // set after torrent.NewClient(), used for eviction VerifyData
@@ -69,7 +70,7 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 	// anacrolix client lock, so its cost is paid by every other request on
 	// the pod — with 184k files the eager open took ~7 s and failed anyway.
 	span := newLazySpan(files, s.fileCache)
-	pc := pieceCompletionForDir(dir, info, infoHash)
+	pc := pieceCompletionForDir(dir, info, infoHash, s.events)
 
 	// Only enable LRU eviction if the torrent is larger than the cache budget.
 	// Small torrents fit entirely in cache — no eviction overhead needed.
@@ -585,8 +586,8 @@ func torrentSpanFiles(md *metainfo.Info, location string) ([]spanFile, error) {
 	return files, nil
 }
 
-func pieceCompletionForDir(dir string, info *metainfo.Info, hash metainfo.Hash) (ret storage.PieceCompletion) {
-	ret, err := NewPieceCompletion(dir, info, hash)
+func pieceCompletionForDir(dir string, info *metainfo.Info, hash metainfo.Hash, events *CacheEvents) (ret storage.PieceCompletion) {
+	ret, err := NewPieceCompletion(dir, info, hash, events)
 	if err != nil {
 		stdlog.Printf("couldn't open piece completion db in %q: %s", dir, err)
 		ret = storage.NewMapPieceCompletion()

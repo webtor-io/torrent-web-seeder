@@ -139,8 +139,29 @@ func (s *completions) GetCompletedFiles() []string {
 	return files
 }
 
+// fileIndexes maps the paths this file speaks in (info.Name, then the file's
+// own path) to positions in the torrent's file order. A single-file torrent is
+// its one file, index 0.
+func fileIndexes(info *metainfo.Info) map[string]int {
+	if len(info.Files) == 0 {
+		return map[string]int{info.Name: 0}
+	}
+	m := make(map[string]int, len(info.Files))
+	for i, f := range info.Files {
+		m[info.Name+"/"+strings.Join(f.Path, "/")] = i
+	}
+	return m
+}
+
 type pieceCompletion struct {
-	mu          sync.Mutex
+	mu sync.Mutex
+	// events hears of a file becoming complete and ceasing to be (see
+	// cache_events.go); nil publishes nothing. announced is what it has been
+	// told and not yet taken back: the completion loop below reports every
+	// complete file on every tick, and a consumer wants the transition.
+	events      *CacheEvents
+	fileIdx     map[string]int
+	announced   map[string]bool
 	closed      bool
 	done        chan struct{}
 	db          *sqlite.Conn
@@ -151,7 +172,7 @@ type pieceCompletion struct {
 
 var _ storage.PieceCompletion = (*pieceCompletion)(nil)
 
-func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash) (ret *pieceCompletion, err error) {
+func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash, events *CacheEvents) (ret *pieceCompletion, err error) {
 	p := filepath.Join(dir, ".torrent.db")
 	db, err := sqlite.OpenConn(p, 0)
 	if err != nil {
@@ -199,6 +220,9 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash) (re
 		hash:        hash,
 		completions: completions,
 		done:        make(chan struct{}),
+		events:      events,
+		fileIdx:     fileIndexes(info),
+		announced:   make(map[string]bool),
 	}
 	go func() {
 		// No local dedup map — always call CompleteFile() so that after
@@ -267,32 +291,75 @@ func (s *pieceCompletion) Set(pk metainfo.PieceKey, b bool) error {
 // UncompleteFiles removes entries from the file_completion table.
 // Called during piece eviction to invalidate file-level cache.
 func (s *pieceCompletion) UncompleteFiles(paths []string) error {
+	gone, err := s.uncompleteFiles(paths)
+	// Published after the lock is released, never under it: a publish can
+	// block on a stalled socket, and this mutex is on the path of every
+	// piece's Set.
+	for _, idx := range gone {
+		s.events.Uncached(s.hash.HexString(), idx)
+	}
+	return err
+}
+
+func (s *pieceCompletion) uncompleteFiles(paths []string) (gone []int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return errors.New("closed")
+		return nil, errors.New("closed")
 	}
 	for _, p := range paths {
 		err := sqlitex.Exec(s.db, `delete from file_completion where "path"=?`, nil, p)
 		if err != nil {
-			return err
+			return gone, err
+		}
+		// Only what was announced is taken back. A single-file torrent
+		// larger than its cache budget lands here on EVERY evicted piece
+		// without ever having been complete -- one event per piece per
+		// stream, for nothing.
+		if s.announced[p] {
+			delete(s.announced, p)
+			gone = append(gone, s.indexOf(p))
 		}
 	}
-	return nil
+	return gone, nil
+}
+
+func (s *pieceCompletion) indexOf(path string) int {
+	if i, ok := s.fileIdx[path]; ok {
+		return i
+	}
+	return -1
 }
 
 func (s *pieceCompletion) CompleteFile(path string) error {
+	announce, err := s.completeFile(path)
+	if announce {
+		s.events.Cached(s.hash.HexString(), s.indexOf(path))
+	}
+	return err
+}
+
+func (s *pieceCompletion) completeFile(path string) (announce bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return errors.New("closed")
+		return false, errors.New("closed")
 	}
-	return sqlitex.Exec(
+	err = sqlitex.Exec(
 		s.db,
 		`insert or replace into file_completion("path") values(?)`,
 		nil,
 		path,
 	)
+	// Once per completion, not once per tick. A torrent loaded again after a
+	// restart or an unload announces its complete files anew: that is the
+	// consumer's sign they are still here, and it costs one event per file
+	// per load.
+	if err == nil && !s.announced[path] {
+		s.announced[path] = true
+		announce = true
+	}
+	return announce, err
 }
 
 func (s *pieceCompletion) Close() (err error) {
