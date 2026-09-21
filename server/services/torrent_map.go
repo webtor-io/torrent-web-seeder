@@ -79,31 +79,93 @@ func init() {
 }
 
 type TorrentMap struct {
-	tc     *TorrentClient
-	tsm    *TorrentStoreMap
-	fsm    *FileStoreMap
-	timers map[string]*time.Timer
-	ttl    time.Duration
-	mux    sync.Mutex
+	tc      *TorrentClient
+	tsm     *TorrentStoreMap
+	fsm     *FileStoreMap
+	entries map[string]*torrentEntry
+	ttl     time.Duration
+	mux     sync.Mutex
+}
+
+// torrentEntry is a loaded torrent's lease: the TTL timer and the number of
+// requests currently being served from it.
+type torrentEntry struct {
+	timer  *time.Timer
+	active int
+	drop   func()
 }
 
 func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap) *TorrentMap {
 	return &TorrentMap{
-		tc:     tc,
-		tsm:    tsm,
-		fsm:    fsm,
-		timers: map[string]*time.Timer{},
-		ttl:    time.Duration(600) * time.Second,
+		tc:      tc,
+		tsm:     tsm,
+		fsm:     fsm,
+		entries: map[string]*torrentEntry{},
+		ttl:     time.Duration(600) * time.Second,
 	}
 }
 
 func (s *TorrentMap) Touch(h string) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	ti, ok := s.timers[h]
-	if ok {
-		ti.Reset(s.ttl)
+	if e, ok := s.entries[h]; ok {
+		e.timer.Reset(s.ttl)
 	}
+}
+
+// Hold keeps torrent h loaded until the returned release is called, however
+// long that takes. The TTL used to be refreshed only by bytes written to the
+// response (TouchWriter), so a stream stalled on a dead swarm for ten
+// minutes had its torrent dropped underneath the reader: with the eager
+// span that ended the stream as a silent EOF, with lazySpan it is
+// ErrSpanClosed, which anacrolix retries into a recovered panic
+// (updatePieceCompletion "0 N", 81 a day after 749bb2c). A torrent nobody
+// is reading still expires ttl after its last touch or release.
+func (s *TorrentMap) Hold(h string) (release func()) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	e, ok := s.entries[h]
+	if !ok {
+		return func() {}
+	}
+	e.active++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mux.Lock()
+			defer s.mux.Unlock()
+			e.active--
+			if e.active == 0 {
+				e.timer.Reset(s.ttl)
+			}
+		})
+	}
+}
+
+// track registers a freshly added torrent with a TTL and its drop action.
+// Called with mux held.
+func (s *TorrentMap) track(h string, drop func()) {
+	e := &torrentEntry{drop: drop}
+	e.timer = time.AfterFunc(s.ttl, func() { s.expire(h, e) })
+	s.entries[h] = e
+}
+
+// expire runs when h's TTL fires: drops the torrent unless a request is
+// being served from it, in which case the lease is extended by another ttl.
+func (s *TorrentMap) expire(h string, e *torrentEntry) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if cur, ok := s.entries[h]; !ok || cur != e {
+		return
+	}
+	if e.active > 0 {
+		log.Infof("torrent kept infohash=%v (%d active requests)", h, e.active)
+		e.timer.Reset(s.ttl)
+		return
+	}
+	delete(s.entries, h)
+	log.Infof("torrent dropped infohash=%v", h)
+	e.drop()
 }
 
 // Peek returns the torrent if this client already holds it — loaded by a
@@ -177,9 +239,9 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 	if err != nil {
 		return nil, err
 	}
-	ti, ok := s.timers[h]
+	e, ok := s.entries[h]
 	if ok {
-		ti.Reset(s.ttl)
+		e.timer.Reset(s.ttl)
 	} else {
 		log.Infof("torrent added infohash=%v", h)
 		promActiveTorrentCount.Inc()
@@ -230,17 +292,10 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 				}
 			}
 		}()
-		ti := time.NewTimer(s.ttl)
-		s.timers[h] = ti
-		go func(h string, ti *time.Timer) {
-			<-ti.C
-			s.mux.Lock()
-			defer s.mux.Unlock()
-			delete(s.timers, h)
-			log.Infof("torrent dropped infohash=%v", h)
+		s.track(h, func() {
 			t.Drop()
 			promActiveTorrentCount.Dec()
-		}(h, ti)
+		})
 	}
 	return t, nil
 }

@@ -209,6 +209,10 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	// Fallback to torrent
 	logWithField.Info("serve file from torrent")
 	tw, reader, err := s.getTorrentReader(r.Context(), w, h, p)
+	if err == nil && reader != nil {
+		// The torrent stays loaded for as long as this request reads it.
+		defer s.tm.Hold(h)()
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "PermissionDenied") {
 			logWithField.WithError(err).Warn("permission denied")
