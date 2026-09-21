@@ -322,14 +322,17 @@ func (me mmapStoragePiece) ReadAt(b []byte, off int64) (int, error) {
 	if n > 0 && me.t.lru != nil {
 		me.t.madviseSpanRange(me.p.Offset()+off, int64(n))
 	}
-	if err != nil && err != io.EOF {
+	if err != nil && (err != io.EOF || n == 0) {
 		// anacrolix logs storage read errors to a logger this service
-		// discards, and a read that fails twice ends in a panic inside its
-		// reader (updatePieceCompletion, "0 N"); the error itself was
-		// invisible — 2026-09-21. Say what the storage answered.
+		// discards, and a read that returns nothing twice ends in a panic
+		// inside its reader (updatePieceCompletion, "0 N"); the error
+		// itself was invisible — 2026-09-21. An EOF with zero bytes is
+		// such an answer too (readOnceAt treats n == 0 as failure), so it
+		// is logged; a short read at the true end of a piece is not.
 		log.WithError(err).WithFields(log.Fields{
 			"infohash": me.t.infoHash.HexString(),
 			"piece":    me.p.Index(),
+			"plen":     me.p.Length(),
 			"off":      off,
 			"len":      len(b),
 			"n":        n,

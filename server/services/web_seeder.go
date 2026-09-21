@@ -28,8 +28,16 @@ const (
 	MaxReadaheadFlag  = "max-readahead"
 )
 
+const StreamStallTimeoutFlag = "stream-stall-timeout"
+
 func RegisterWebSeederFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
+		cli.DurationFlag{
+			Name:   StreamStallTimeoutFlag,
+			Usage:  "cancel a file stream that has made no progress for this long (client gone, swarm dead); 0 disables",
+			Value:  10 * time.Minute,
+			EnvVar: "STREAM_STALL_TIMEOUT",
+		},
 		cli.StringFlag{
 			Name:   MaxReadaheadFlag,
 			Usage:  "max readahead",
@@ -40,6 +48,7 @@ func RegisterWebSeederFlags(f []cli.Flag) []cli.Flag {
 }
 
 type WebSeeder struct {
+	stallTimeout time.Duration
 	tm           *TorrentMap
 	st           *StatWeb
 	wu           *Warmup
@@ -52,8 +61,9 @@ type WebSeeder struct {
 	linger       *Linger
 }
 
-func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, tom *TouchMap, st *StatWeb, wu *Warmup, v *Vault, cl *http.Client, maxReadahead int64, linger *Linger) *WebSeeder {
+func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, tom *TouchMap, st *StatWeb, wu *Warmup, v *Vault, cl *http.Client, maxReadahead int64, linger *Linger, stallTimeout time.Duration) *WebSeeder {
 	return &WebSeeder{
+		stallTimeout: stallTimeout,
 		tm:           tm,
 		st:           st,
 		wu:           wu,
@@ -208,10 +218,20 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 
 	// Fallback to torrent
 	logWithField.Info("serve file from torrent")
-	tw, reader, err := s.getTorrentReader(r.Context(), w, h, p)
+	// The torrent reader takes this context: without it (context.Background
+	// until 2026-09-21) a read on a swarm with no data blocked for as long
+	// as the process lived, and 46 such handlers on one pod were older than
+	// two hours. It is cancelled when the client goes away and when the
+	// stream makes no progress for stallTimeout (see watchStall).
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	tw, reader, err := s.getTorrentReader(ctx, w, h, p)
 	if err == nil && reader != nil {
 		// The torrent stays loaded for as long as this request reads it.
 		defer s.tm.Hold(h)()
+		if t, ok := tw.(*TouchWriter); ok {
+			go watchStall(ctx, cancel, t.LastWrite, s.stallTimeout, logWithField)
+		}
 	}
 	if err != nil {
 		if strings.Contains(err.Error(), "PermissionDenied") {
@@ -234,6 +254,35 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	defer reader.Close()
 
 	serveWithValidators(tw, r, p, lastMod, etag, reader)
+}
+
+// watchStall cancels a stream that has made no progress for timeout: a
+// request whose client is gone or whose swarm is dead would otherwise hold
+// its torrent (and a goroutine) until the process restarts. Progress is the
+// response's last Write; a stream that just started counts from start.
+func watchStall(ctx context.Context, cancel context.CancelFunc, lastWrite func() time.Time, timeout time.Duration, logger *log.Entry) {
+	if timeout <= 0 {
+		return
+	}
+	start := time.Now()
+	tick := time.NewTicker(min(timeout/4, 30*time.Second))
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			last := lastWrite()
+			if last.IsZero() {
+				last = start
+			}
+			if idle := time.Since(last); idle > timeout {
+				logger.WithField("idle", idle.Round(time.Second)).Warn("stream stalled, cancelling")
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 // serveWithValidators publishes the resource validators and hands the request
@@ -343,6 +392,7 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 	for _, f := range t.Files() {
 		if samePath(f.Path(), p) {
 			torReader := f.NewReader()
+			torReader.SetContext(ctx)
 			torReader.SetResponsive()
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
 			// Wrapped so the request's end does not drop the pieces this

@@ -5,12 +5,26 @@ import (
 	"github.com/pkg/errors"
 	"net"
 	"net/http"
+	"sync/atomic"
+	"time"
 )
 
 type TouchWriter struct {
 	http.ResponseWriter
 	tm *TorrentMap
 	h  string
+	// lastWrite is the unix-nano time of the last Write; the stall guard
+	// reads it to tell a stream that is still moving from one that is not.
+	lastWrite atomic.Int64
+}
+
+// LastWrite returns when the response last made progress (zero: never).
+func (w *TouchWriter) LastWrite() time.Time {
+	ns := w.lastWrite.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
 }
 
 func NewTouchWriter(w http.ResponseWriter, tm *TorrentMap, h string) *TouchWriter {
@@ -27,6 +41,7 @@ func (w *TouchWriter) WriteHeader(statusCode int) {
 
 func (w *TouchWriter) Write(p []byte) (int, error) {
 	w.tm.Touch(w.h)
+	w.lastWrite.Store(time.Now().UnixNano())
 	return w.ResponseWriter.Write(p)
 }
 
