@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
 	"net"
 	"net/http"
 	"runtime/debug"
@@ -48,11 +49,21 @@ func NewWeb(c *cli.Context, ws *WebSeeder) *Web {
 	}
 }
 
+var promRecoveredPanics = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "torrent_web_seeder_recovered_panics_total",
+	Help: "HTTP handlers that panicked and were answered with a 500 by RecoverMiddleware",
+})
+
+func init() {
+	prometheus.MustRegister(promRecoveredPanics)
+}
+
 // RecoverMiddleware is a middleware that recovers from panics and logs the error.
 func RecoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
+				promRecoveredPanics.Inc()
 				// Log the error and stack trace
 				log.WithFields(log.Fields{
 					"error": fmt.Sprintf("%v", err),

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -394,6 +395,10 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 		l := tlog.NewLogger()
 		l.SetHandlers(tlog.DiscardHandler)
 		cfg.Logger = l
+		// The library's warnings and errors (storage read failures ahead of
+		// the "0 N" reader panic, tracker/dial trouble) go to logrus; its
+		// Info/Debug stay discarded with cfg.Logger. See anacrolix_log.go.
+		cfg.Slogger = slog.New(newAnacrolixLogHandler(slog.LevelWarn))
 	}
 	s.storageImpl = NewMMap(s.dataDir, s.perTorrentCacheBudget, s.fileCache)
 	s.storageImpl.events = s.cacheEvents

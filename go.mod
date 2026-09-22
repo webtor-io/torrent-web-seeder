@@ -36,6 +36,7 @@ require (
 	github.com/go-llsqlite/adapter v0.2.0
 	github.com/nats-io/nats.go v1.48.0
 	github.com/prometheus/client_golang v1.23.2
+	github.com/prometheus/client_model v0.6.2
 	github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108
 	google.golang.org/protobuf v1.36.11
 )
@@ -106,7 +107,6 @@ require (
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v4 v4.1.3 // indirect
 	github.com/pion/webrtc/v4 v4.1.8 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/protolambda/ctxlock v0.1.0 // indirect
