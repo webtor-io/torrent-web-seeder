@@ -262,3 +262,44 @@ func TestPieceLRU_ProtectedPiecesNotEvictedWhenNotNeeded(t *testing.T) {
 		}
 	}
 }
+
+// The cache is full of completed-file pieces (protected) that nobody has
+// read for a while; a piece just completed for a live stream must not be
+// the one evicted — that was the thrash of 2026-09-22.
+func TestPieceLRU_FreshPieceOutlivesIdleProtectedOnes(t *testing.T) {
+	lru := NewPieceLRU(90)
+	lru.SetProtectedFunc(func(index int) bool { return index < 3 })
+	lru.Recover(map[int]int64{0: 30, 1: 30, 2: 30}) // old, protected, at budget
+
+	toEvict := lru.Add(7, 30) // the stream's piece, just completed
+	if len(toEvict) != 1 {
+		t.Fatalf("toEvict = %v, want exactly one idle protected piece", toEvict)
+	}
+	if toEvict[0] == 7 {
+		t.Fatal("evicted the piece that was just completed (thrash)")
+	}
+	if toEvict[0] >= 3 {
+		t.Fatalf("evicted %d, want one of the idle protected pieces 0-2", toEvict[0])
+	}
+	lru.Remove(toEvict[0])
+
+	// Nothing about the fresh piece changes on the next completion either.
+	toEvict = lru.Add(8, 30)
+	for _, idx := range toEvict {
+		if idx == 7 || idx == 8 {
+			t.Fatalf("evicted a fresh piece %d while idle pieces remained: %v", idx, toEvict)
+		}
+	}
+}
+
+// Recent pieces are still evictable when there is nothing else left: the
+// budget wins over recency, oldest recent piece first.
+func TestPieceLRU_RecentPiecesEvictedLastNotNever(t *testing.T) {
+	lru := NewPieceLRU(60)
+	lru.Add(1, 30)
+	lru.Add(2, 30)
+	toEvict := lru.Add(3, 30) // all three are fresh; 90 > 60
+	if len(toEvict) != 1 || toEvict[0] != 1 {
+		t.Fatalf("toEvict = %v, want [1] (the oldest of the recent pieces)", toEvict)
+	}
+}

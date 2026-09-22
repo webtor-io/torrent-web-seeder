@@ -7,8 +7,10 @@ import (
 )
 
 const (
-	// evictionProtectionWindow is used to set old lastAccess on recovered pieces
-	// so they are immediately evictable at startup.
+	// evictionProtectionWindow: a piece touched within it is what somebody is
+	// reading right now, and it is evicted only after every older piece is
+	// gone, protected or not. Recovered pieces get a lastAccess older than
+	// this so they are immediately evictable at startup.
 	evictionProtectionWindow = 30 * time.Second
 )
 
@@ -23,10 +25,10 @@ type pieceEntry struct {
 // when the per-torrent cache budget is exceeded.
 type PieceLRU struct {
 	mu          sync.Mutex
-	entries     map[int]*pieceEntry // pieceIndex → entry
-	lruList     *list.List          // front = MRU, back = LRU
-	used        int64               // current bytes used
-	budget      int64               // max bytes (0 = unlimited)
+	entries     map[int]*pieceEntry  // pieceIndex → entry
+	lruList     *list.List           // front = MRU, back = LRU
+	used        int64                // current bytes used
+	budget      int64                // max bytes (0 = unlimited)
 	isProtected func(index int) bool // optional: returns true if piece should not be evicted (e.g. belongs to completed file)
 }
 
@@ -147,12 +149,21 @@ func (l *PieceLRU) Recover(completePieces map[int]int64) {
 }
 
 // computeEvictions returns piece indices to evict (from LRU end) to bring used <= budget.
-// Two-pass strategy:
-//   - Pass 1: evict pieces NOT belonging to completed files (safe, no race with file cache).
-//   - Pass 2: if still over budget, evict completed-file pieces (file_completion will be cleaned up by caller).
+// Candidates, each group in LRU order, later groups only if the budget still is not met:
+//  1. idle pieces NOT belonging to completed files;
+//  2. idle completed-file pieces (file_completion is cleaned up by the caller);
+//  3. recently accessed pieces not belonging to completed files;
+//  4. recently accessed completed-file pieces.
 //
-// LRU ordering naturally protects actively-read pieces — they are at the front
-// (recently Touched), eviction happens from the back.
+// "Idle" is older than evictionProtectionWindow. The split is not cosmetic.
+// Once the cache is full of pieces of completed files (a 400 GB series
+// watched episode by episode), the one piece that is NOT protected is the
+// piece that just finished for the stream being watched, and the old
+// protected-last order evicted exactly it — on every completion. The
+// reader then found a hole, re-requested the piece, it completed, was
+// evicted again: 2,000 evictions and a 150 KB/s stream on one pod,
+// 2026-09-22 (torrent 372e1b23). The stream's own piece has to outlive
+// pieces nobody has touched for half an hour, protected or not.
 //
 // Must be called with l.mu held.
 func (l *PieceLRU) computeEvictions() []int {
@@ -160,29 +171,30 @@ func (l *PieceLRU) computeEvictions() []int {
 		return nil
 	}
 
-	var toEvict []int
-	var protectedCandidates []*pieceEntry
-	simUsed := l.used
-
-	// Pass 1: evict non-protected pieces first (from LRU end).
-	for el := l.lruList.Back(); el != nil && simUsed > l.budget; el = el.Prev() {
+	cutoff := time.Now().Add(-evictionProtectionWindow)
+	var groups [4][]*pieceEntry
+	for el := l.lruList.Back(); el != nil; el = el.Prev() {
 		e := el.Value.(*pieceEntry)
+		g := 0
+		if e.lastAccess.After(cutoff) {
+			g += 2
+		}
 		if l.isProtected != nil && l.isProtected(e.index) {
-			protectedCandidates = append(protectedCandidates, e)
-			continue
+			g++
 		}
-		toEvict = append(toEvict, e.index)
-		simUsed -= e.size
+		groups[g] = append(groups[g], e)
 	}
 
-	// Pass 2: if still over budget, evict protected (completed-file) pieces.
-	for _, e := range protectedCandidates {
-		if simUsed <= l.budget {
-			break
+	var toEvict []int
+	simUsed := l.used
+	for _, group := range groups {
+		for _, e := range group {
+			if simUsed <= l.budget {
+				return toEvict
+			}
+			toEvict = append(toEvict, e.index)
+			simUsed -= e.size
 		}
-		toEvict = append(toEvict, e.index)
-		simUsed -= e.size
 	}
-
 	return toEvict
 }
