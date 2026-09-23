@@ -70,6 +70,16 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 	// anacrolix client lock, so its cost is paid by every other request on
 	// the pod — with 184k files the eager open took ~7 s and failed anyway.
 	span := newLazySpan(files, s.fileCache)
+	// The completion db lives in the torrent's dir, which GetDir only names:
+	// the span creates it on the first write, after this point. The first
+	// open of a torrent on a pod therefore failed with SQLITE_CANTOPEN and
+	// fell back to an in-memory completion (8.9k of 20.4k adds on
+	// 2026-09-23), so nothing that session downloaded was recorded. Since
+	// addTorrent skips the initial piece check, a missing row has to mean
+	// "never downloaded", and every session must be recorded.
+	if err = os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
 	pc := pieceCompletionForDir(dir, info, infoHash, s.events)
 
 	// Only enable LRU eviction if the torrent is larger than the cache budget.

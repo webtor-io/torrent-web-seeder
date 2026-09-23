@@ -213,6 +213,25 @@ func (s *TorrentMap) MetaInfo(h string) (*metainfo.MetaInfo, error) {
 	return mi, nil
 }
 
+// addTorrent adds mi to cl the way cl.AddTorrent does, minus the library's
+// initial piece check. That check hashes every piece whose completion is not
+// known, and pieceCompletion knows only the pieces it has a row for, so on
+// add the library read and hashed every piece never downloaded: the whole
+// torrent, from empty storage. On 2026-09-23 a 93k-piece torrent held a pod
+// at its 5-core limit for 10 minutes, and when it was dropped the pieces
+// still queued logged ~350k "storage span closed" warnings. A piece that does
+// have a row needs no check: the row says whether it is complete. The price
+// is that data on disk whose row was lost gets downloaded again.
+func addTorrent(cl *torrent.Client, mi *metainfo.MetaInfo) (*torrent.Torrent, error) {
+	spec, err := torrent.TorrentSpecFromMetaInfoErr(mi)
+	if err != nil {
+		return nil, err
+	}
+	spec.DisableInitialPieceCheck = true
+	t, _, err := cl.AddTorrentSpec(spec)
+	return t, err
+}
+
 func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -235,7 +254,7 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 		return nil, nil
 
 	}
-	t, err = cl.AddTorrent(mi)
+	t, err = addTorrent(cl, mi)
 	if err != nil {
 		return nil, err
 	}

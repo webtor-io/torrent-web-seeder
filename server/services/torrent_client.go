@@ -117,6 +117,7 @@ type TorrentClient struct {
 	noUpload                   bool
 	seed                       bool
 	dUTP                       bool
+	dIPv6                      bool
 	dWebTorrent                bool
 	dWebseeds                  bool
 	establishedConnsPerTorrent int
@@ -143,6 +144,7 @@ const (
 	NoUploadFlag                   = "no-upload"
 	SeedFlag                       = "seed"
 	DisableUtpFlag                 = "disable-utp"
+	DisableIPv6Flag                = "disable-ipv6"
 	DisableWebTorrentFlag          = "disable-webtorrent"
 	DisableWebseedsFlag            = "disable-webseeds"
 	EstablishedConnsPerTorrentFlag = "established-conns-per-torrent"
@@ -212,6 +214,11 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Name:   DisableUtpFlag,
 			Usage:  "disables utp",
 			EnvVar: "DISABLE_UTP",
+		},
+		cli.BoolFlag{
+			Name:   DisableIPv6Flag,
+			Usage:  "disables IPv6: no IPv6 listening, peers or tracker announces (for networks without an IPv6 route)",
+			EnvVar: "DISABLE_IPV6",
 		},
 		cli.IntFlag{
 			Name:   EstablishedConnsPerTorrentFlag,
@@ -355,6 +362,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		proxy:                      c.String(HttpProxyFlag),
 		ua:                         c.String(TorrentClientUserAgentFlag),
 		dUTP:                       c.Bool(DisableUtpFlag),
+		dIPv6:                      c.Bool(DisableIPv6Flag),
 		dWebTorrent:                c.Bool(DisableWebTorrentFlag),
 		dWebseeds:                  c.Bool(DisableWebseedsFlag),
 		establishedConnsPerTorrent: c.Int(EstablishedConnsPerTorrentFlag),
@@ -387,7 +395,6 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 func (s *TorrentClient) get() (*torrent.Client, error) {
 	log.Infof("initializing TorrentClient dataDir=%v", s.dataDir)
 	cfg := torrent.NewDefaultClientConfig()
-	// cfg.DisableIPv6 = true
 	if s.torrentClientDebug {
 		cfg.Logger = tlog.Default.WithNames("main", "client")
 		cfg.Debug = true
@@ -409,6 +416,11 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.NoUpload = s.noUpload
 	cfg.Seed = s.seed
 	cfg.DisableUTP = s.dUTP
+	// Without an IPv6 route every IPv6 tracker announce fails at once with
+	// "sendto: network is unreachable" and is retried: 175-275k warnings an
+	// hour across the prod seeders on 2026-09-23, whose pods have only a
+	// link-local IPv6 address.
+	cfg.DisableIPv6 = s.dIPv6
 	cfg.DisableWebtorrent = s.dWebTorrent
 	cfg.DisableWebseeds = s.dWebseeds
 	if s.proxy != "" {
