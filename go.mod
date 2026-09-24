@@ -20,7 +20,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli v1.22.17
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
-	github.com/webtor-io/common-services v0.0.0-20250112153432-554128b56bd5
+	github.com/webtor-io/common-services v0.0.0-20260924165121-39d5e0fb95a0
 	github.com/webtor-io/torrent-store v1.0.0
 	go.etcd.io/bbolt v1.4.3 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
@@ -30,6 +30,7 @@ require (
 )
 
 require (
+	github.com/anacrolix/generics v0.2.0
 	github.com/anacrolix/missinggo/v2 v2.10.0
 	github.com/anacrolix/torrent v1.60.1-0.20250925080637-414bd5781457
 	github.com/edsrzf/mmap-go v1.2.0
@@ -46,7 +47,6 @@ require (
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/anacrolix/dht/v2 v2.23.0 // indirect
 	github.com/anacrolix/envpprof v1.5.0 // indirect
-	github.com/anacrolix/generics v0.2.0 // indirect
 	github.com/anacrolix/go-libutp v1.3.2 // indirect
 	github.com/anacrolix/missinggo v1.3.0 // indirect
 	github.com/anacrolix/missinggo/perf v1.0.0 // indirect
@@ -107,10 +107,10 @@ require (
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v4 v4.1.3 // indirect
 	github.com/pion/webrtc/v4 v4.1.8 // indirect
-	github.com/prometheus/common v0.66.1 // indirect
-	github.com/prometheus/procfs v0.17.0 // indirect
+	github.com/prometheus/common v0.67.2 // indirect
+	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/protolambda/ctxlock v0.1.0 // indirect
-	github.com/redis/go-redis/v9 v9.14.0 // indirect
+	github.com/redis/go-redis/v9 v9.16.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/dnscache v0.0.0-20230804202142-fc85eb664529 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect

@@ -10,6 +10,7 @@ import (
 	logrusmiddleware "github.com/bakins/logrus-middleware"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	cs "github.com/webtor-io/common-services"
 )
 
 const (
@@ -18,6 +19,7 @@ const (
 )
 
 func RegisterWebFlags(f []cli.Flag) []cli.Flag {
+	f = cs.RegisterShutdownFlags(f)
 	return append(f,
 		cli.StringFlag{
 			Name:   WebHostFlag,
@@ -38,7 +40,7 @@ type Web struct {
 	ws   *WebSeeder
 	host string
 	port int
-	ln   net.Listener
+	gs   *cs.GracefulServer
 }
 
 func NewWeb(c *cli.Context, ws *WebSeeder) *Web {
@@ -46,6 +48,7 @@ func NewWeb(c *cli.Context, ws *WebSeeder) *Web {
 		host: c.String(WebHostFlag),
 		port: c.Int(WebPortFlag),
 		ws:   ws,
+		gs:   cs.NewGracefulServer(cs.ShutdownTimeout(c)),
 	}
 }
 
@@ -82,9 +85,8 @@ func (s *Web) Serve() error {
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil
+		return err
 	}
-	s.ln = ln
 
 	mux := http.NewServeMux()
 	logger := log.New()
@@ -93,12 +95,12 @@ func (s *Web) Serve() error {
 	}
 	mux.Handle("/", l.Handler(RecoverMiddleware(s.ws), ""))
 	log.Infof("serving Web at %v", fmt.Sprintf("%s:%d", s.host, s.port))
-	return http.Serve(s.ln, mux)
-
+	return s.gs.Serve(&http.Server{Handler: mux}, ln)
 }
 
+// Close drains in-flight requests (WEB_SHUTDOWN_TIMEOUT) before returning.
+// Closing only the listener let a terminating pod exit mid-response. It must
+// run before the torrent client and stores are closed: run() defers it last.
 func (s *Web) Close() {
-	if s.ln != nil {
-		_ = s.ln.Close()
-	}
+	s.gs.Close()
 }
