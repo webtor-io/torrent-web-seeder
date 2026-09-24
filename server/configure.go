@@ -26,6 +26,7 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterWebSeederFlags(app.Flags)
 	app.Flags = s.RegisterLingerFlags(app.Flags)
 	app.Flags = s.RegisterCacheEventsFlags(app.Flags)
+	app.Flags = s.RegisterDebugStatusFlags(app.Flags)
 	// app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
 	configureDiagnose(app)
@@ -107,6 +108,13 @@ func run(c *cli.Context) error {
 	web := s.NewWeb(c, webSeeder)
 	services = append(services, web)
 	defer web.Close()
+
+	// Setting the torrent client status page (127.0.0.1 only)
+	debugStatus := s.NewDebugStatus(c, torrentClient)
+	if debugStatus != nil {
+		services = append(services, debugStatus)
+		defer debugStatus.Close()
+	}
 
 	// Setting Probe
 	probe := cs.NewProbe(c)
