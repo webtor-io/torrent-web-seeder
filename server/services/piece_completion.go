@@ -262,6 +262,21 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash, eve
 	return
 }
 
+// Get answers from the db alone: a piece with no row is known and not
+// complete. Every hash result is written (MarkComplete / MarkNotComplete) and
+// OpenTorrent creates the db's dir before opening it, so no row means the
+// piece was never downloaded on this node. A failed query is not that: it
+// stays Ok=false and returns its error.
+//
+// Ok=false means "unknown" to the library, and an unknown piece is hashed
+// before it is ever requested (Torrent.queueInitialPieceCheck,
+// Piece.ignoreForRequests). Answering unknown for a missing row made every
+// add hash the whole never-downloaded torrent: a 93k-piece one held a pod at
+// its 5-core limit for 10 minutes on 2026-09-23. With the initial check
+// skipped as well (8f0cf39) nothing ever settled it, the pieces were never
+// requested, and a torrent new to a pod stalled at 0 bytes: on 2026-09-24
+// first-byte observations fell from 61-102 to 13-32 per 10 minutes and every
+// self-hosted smoke scenario that reads from the seeder timed out.
 func (s *pieceCompletion) Get(pk metainfo.PieceKey) (c storage.Completion, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -269,10 +284,13 @@ func (s *pieceCompletion) Get(pk metainfo.PieceKey) (c storage.Completion, err e
 		s.db, `select complete from piece_completion where "index"=?`,
 		func(stmt *sqlite.Stmt) error {
 			c.Complete = stmt.ColumnInt(0) != 0
-			c.Ok = true
 			return nil
 		},
 		pk.Index)
+	if err != nil {
+		return storage.Completion{}, err
+	}
+	c.Ok = true
 	return
 }
 

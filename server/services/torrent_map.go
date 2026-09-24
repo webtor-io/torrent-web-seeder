@@ -213,23 +213,20 @@ func (s *TorrentMap) MetaInfo(h string) (*metainfo.MetaInfo, error) {
 	return mi, nil
 }
 
-// addTorrent adds mi to cl the way cl.AddTorrent does, minus the library's
-// initial piece check. That check hashes every piece whose completion is not
-// known, and pieceCompletion knows only the pieces it has a row for, so on
-// add the library read and hashed every piece never downloaded: the whole
-// torrent, from empty storage. On 2026-09-23 a 93k-piece torrent held a pod
-// at its 5-core limit for 10 minutes, and when it was dropped the pieces
-// still queued logged ~350k "storage span closed" warnings. A piece that does
-// have a row needs no check: the row says whether it is complete. The price
-// is that data on disk whose row was lost gets downloaded again.
+// addTorrent is how Get adds a torrent; the tests add through it too, so they
+// exercise what production does. It is cl.AddTorrent, initial piece check
+// included, and must stay so.
+//
+// The check hashes only pieces whose completion is unknown. pieceCompletion
+// knows every piece (a missing row is "not complete", see its Get), so with
+// it the check hashes nothing. What still answers unknown is the in-memory
+// completion OpenTorrent falls back to when the db cannot be opened, and for
+// that the check is the only way a piece becomes requestable: the library
+// never requests an unknown piece. 8f0cf39 set DisableInitialPieceCheck here
+// while Get still answered unknown for a missing row, and on 2026-09-24 no
+// torrent new to a pod got a byte.
 func addTorrent(cl *torrent.Client, mi *metainfo.MetaInfo) (*torrent.Torrent, error) {
-	spec, err := torrent.TorrentSpecFromMetaInfoErr(mi)
-	if err != nil {
-		return nil, err
-	}
-	spec.DisableInitialPieceCheck = true
-	t, _, err := cl.AddTorrentSpec(spec)
-	return t, err
+	return cl.AddTorrent(mi)
 }
 
 func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error) {

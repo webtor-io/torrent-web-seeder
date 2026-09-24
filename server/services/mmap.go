@@ -74,9 +74,10 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 	// the span creates it on the first write, after this point. The first
 	// open of a torrent on a pod therefore failed with SQLITE_CANTOPEN and
 	// fell back to an in-memory completion (8.9k of 20.4k adds on
-	// 2026-09-23), so nothing that session downloaded was recorded. Since
-	// addTorrent skips the initial piece check, a missing row has to mean
-	// "never downloaded", and every session must be recorded.
+	// 2026-09-23), so nothing that session downloaded was recorded.
+	// pieceCompletion.Get reads a missing row as "never downloaded", which
+	// holds only if every session is recorded; and the fallback knows no
+	// piece at all, so the library hashes the whole torrent on add.
 	if err = os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
