@@ -32,6 +32,14 @@ func (s *completions) Complete(index int) {
 	s.completed = s.completedCount == len(s.pieces)
 }
 
+// isCompleted is for the completion loop, which runs beside the hashers that
+// call Complete and Uncomplete: the flag is read under the same lock.
+func (s *completions) isCompleted() bool {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	return s.completed
+}
+
 // Uncomplete marks a piece as incomplete and invalidates file-level completion
 // for any files that include this piece.
 func (s *completions) Uncomplete(index int) []string {
@@ -236,7 +244,7 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash, eve
 					return
 				}
 			}
-			if completions.completed {
+			if completions.isCompleted() {
 				return
 			}
 			// Selectable sleep so Close() unblocks us immediately. The
