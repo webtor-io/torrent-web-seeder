@@ -101,6 +101,37 @@ func (m *metricsDialer) DialerNetwork() string {
 	return m.network
 }
 
+// newPeerClient creates a client whose peer dialers are its own listen
+// sockets, TCP and uTP, each wrapped in a metricsDialer so that every real
+// dial is counted. It overrides cfg.DialForPeerConns, which would register
+// the same sockets unwrapped.
+//
+// The dials used to be counted by two dialers added next to the sockets: a
+// plain "tcp" and a plain "udp" net.Dialer. The library races all dialers
+// and runs the handshake on the first connection returned. A UDP dial sends
+// nothing and returns at once, so the bare UDP socket won nearly every race.
+// No peer speaks BitTorrent over bare UDP (over UDP it is uTP), so the
+// handshake waited out HANDSHAKE_TIMEOUT before the library turned to the
+// TCP or uTP connection that had been ready all along, retrying it without
+// the preferred header obfuscation. 66% of the prod first peers landed in the
+// 2.9-4.3 s bucket at a 3 s timeout (2026-09-25, 17.3k torrents a day). In a
+// local A/B with the prod flags on public torrents the first peer came at p50
+// 3.2 s with the UDP dialer and 0.8 s without it, 24 runs each. The extra
+// "tcp" dialer opened a second connection to every peer.
+func newPeerClient(cfg *torrent.ClientConfig) (*torrent.Client, error) {
+	cfg.DialForPeerConns = false
+	cl, err := torrent.NewClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range cl.Listeners() {
+		if d, ok := l.(torrent.Dialer); ok {
+			cl.AddDialer(&metricsDialer{network: d.DialerNetwork(), dialer: d})
+		}
+	}
+	return cl, nil
+}
+
 type TorrentClient struct {
 	cl                         *torrent.Client
 	cacheEvents                *CacheEvents // set before the first Get; nil publishes nothing
@@ -494,20 +525,12 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 		}
 		return conn, err
 	}
-	cl, err := torrent.NewClient(cfg)
+	cl, err := newPeerClient(cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create new torrent client")
 	}
 	// Wire client reference to storage for eviction VerifyData calls.
 	s.storageImpl.SetClient(cl)
-	cl.AddDialer(&metricsDialer{
-		network: "tcp",
-		dialer:  torrent.NetworkDialer{Network: "tcp", Dialer: *torrent.DefaultNetDialer},
-	})
-	cl.AddDialer(&metricsDialer{
-		network: "udp",
-		dialer:  torrent.NetworkDialer{Network: "udp", Dialer: *torrent.DefaultNetDialer},
-	})
 	log.Infof("TorrentClient started")
 	// The client used to close 60 s after its last torrent was dropped. On
 	// a pod that serves a torrent every few minutes that meant 485 closes a
