@@ -56,6 +56,7 @@ func init() {
 	prometheus.MustRegister(promHandshakeSuccess)
 	prometheus.MustRegister(promEstablishedConns)
 	prometheus.MustRegister(promHalfOpenConns)
+	prometheus.MustRegister(promSwarm)
 }
 
 type metricsDialer struct {
@@ -134,7 +135,9 @@ func newPeerClient(cfg *torrent.ClientConfig) (*torrent.Client, error) {
 
 type TorrentClient struct {
 	cl                         *torrent.Client
-	cacheEvents                *CacheEvents // set before the first Get; nil publishes nothing
+	swarm                      *swarmStats                 // exports the clients' peer traffic
+	testConfig                 func(*torrent.ClientConfig) // tests point the client at loopback; nil in the service
+	cacheEvents                *CacheEvents                // set before the first Get; nil publishes nothing
 	storageImpl                *mmapClientImpl
 	mux                        sync.Mutex
 	err                        error
@@ -388,6 +391,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		cacheBudget = int64(cb)
 	}
 	return &TorrentClient{
+		swarm:                      promSwarm,
 		rLimit:                     dr,
 		dataDir:                    c.String(DataDirFlag),
 		proxy:                      c.String(HttpProxyFlag),
@@ -525,10 +529,14 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 		}
 		return conn, err
 	}
+	if s.testConfig != nil {
+		s.testConfig(cfg)
+	}
 	cl, err := newPeerClient(cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create new torrent client")
 	}
+	s.swarm.attach(cl)
 	// Wire client reference to storage for eviction VerifyData calls.
 	s.storageImpl.SetClient(cl)
 	log.Infof("TorrentClient started")
@@ -562,21 +570,28 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 				if s.clientIdleTimeout <= 0 || time.Since(idleSince) < s.clientIdleTimeout {
 					continue
 				}
-				s.mux.Lock()
-				if s.cl != cl {
-					s.mux.Unlock()
-					return
-				}
-				s.cl.Close()
-				s.cl = nil
-				s.inited = false
-				s.mux.Unlock()
-				log.Infof("closing TorrentClient")
+				s.closeIdle(cl)
 				return
 			}
 		}
 	}()
 	return cl, nil
+}
+
+// closeIdle closes cl if it is still the current client; the next Get builds a
+// new one.
+func (s *TorrentClient) closeIdle(cl *torrent.Client) {
+	s.mux.Lock()
+	if s.cl != cl {
+		s.mux.Unlock()
+		return
+	}
+	s.cl.Close()
+	s.swarm.retire(cl)
+	s.cl = nil
+	s.inited = false
+	s.mux.Unlock()
+	log.Infof("closing TorrentClient")
 }
 
 func (s *TorrentClient) Get() (*torrent.Client, error) {
@@ -594,6 +609,7 @@ func (s *TorrentClient) Close() {
 	if s.cl != nil {
 		log.Infof("closing TorrentClient")
 		s.cl.Close()
+		s.swarm.retire(s.cl)
 	}
 }
 
