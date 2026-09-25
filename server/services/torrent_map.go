@@ -142,6 +142,14 @@ func (s *TorrentMap) Hold(h string) (release func()) {
 	}
 }
 
+// reading reports whether a request is being served from torrent h.
+func (s *TorrentMap) reading(h string) bool {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	e, ok := s.entries[h]
+	return ok && e.active > 0
+}
+
 // track registers a freshly added torrent with a TTL and its drop action.
 // Called with mux held.
 func (s *TorrentMap) track(h string, drop func()) {
@@ -261,6 +269,7 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 	} else {
 		log.Infof("torrent added infohash=%v", h)
 		promActiveTorrentCount.Inc()
+		go defaultChokeRedial.watch(t, func() bool { return s.reading(h) })
 		startTime := time.Now()
 		go func() {
 			const tickDuration = time.Millisecond * 50
