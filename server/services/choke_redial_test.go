@@ -150,11 +150,11 @@ func TestChokeRedial_LeavesAnUnreadTorrentAlone(t *testing.T) {
 	}
 }
 
-// A peer that never unchokes is redialled at most once per cooldown, not on
-// every tick.
+// A peer that serves each new connection one chunk and then chokes it is
+// redialled at most once per cooldown, not on every tick.
 func TestChokeRedial_CooldownPerPeer(t *testing.T) {
 	data, mi := addTestPayload(t)
-	peer := newChokingPeer(t, data, mi, 0)
+	peer := newChokingPeer(t, data, mi, 1)
 	tor, err := addTorrent(mmapClient(t, t.TempDir(), false), mi)
 	if err != nil {
 		t.Fatal(err)
@@ -170,5 +170,25 @@ func TestChokeRedial_CooldownPerPeer(t *testing.T) {
 	n := testutil.ToFloat64(promChokedRedials) - before
 	if limit := float64(window/c.cooldown) + 1; n < 1 || n > limit {
 		t.Errorf("%v redials in %v, want 1..%v (one per %v)", n, window, limit, c.cooldown)
+	}
+}
+
+// A peer that never gave a connection any data is not redialled: a fresh
+// connection would be choked just the same, and redialling it is churn. On
+// 2026-09-25 most redials in prod were of such peers, again every 2 minutes.
+func TestChokeRedial_NeverServedIsNotRedialled(t *testing.T) {
+	data, mi := addTestPayload(t)
+	peer := newChokingPeer(t, data, mi, 0)
+	tor, err := addTorrent(mmapClient(t, t.TempDir(), false), mi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := testutil.ToFloat64(promChokedRedials)
+	go testChokeRedial.watch(tor, func() bool { return true })
+	tor.AddPeers([]torrent.PeerInfo{{Addr: peer.ln.Addr(), Trusted: true}})
+	tor.DownloadAll()
+	time.Sleep(2 * time.Second)
+	if n := testutil.ToFloat64(promChokedRedials) - before; n != 0 {
+		t.Errorf("%v redials of a peer that never sent data, want 0", n)
 	}
 }

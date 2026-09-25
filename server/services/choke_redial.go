@@ -22,7 +22,8 @@ type chokeRedial struct {
 	tick time.Duration
 	// No useful data for this long, while someone is reading, is a stall.
 	stall time.Duration
-	// A peer choking us for this long is redialled.
+	// A peer choking us for this long, after it had served this connection,
+	// is redialled.
 	choked time.Duration
 	// Not more often than this per peer IP, so a peer does not see a
 	// reconnect flood.
@@ -80,6 +81,13 @@ func (c chokeRedial) watch(t *torrent.Torrent, reading func() bool) {
 			}
 			st := pc.Stats()
 			if !st.PeerChoking || now.Sub(st.PeerChokingSince) < c.choked {
+				continue
+			}
+			// Only a peer that did serve this connection is known to unchoke
+			// a fresh one. One that never sent a byte chokes the new
+			// connection just the same: redialling it every cooldown was most
+			// of the 5.2k redials per 10 min on 2026-09-25.
+			if st.BytesReadUsefulData.Int64() == 0 {
 				continue
 			}
 			ip := peerIP(pc)
