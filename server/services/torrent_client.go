@@ -606,10 +606,12 @@ func (s *TorrentClient) Get() (*torrent.Client, error) {
 }
 
 func (s *TorrentClient) Close() {
-	if s.cl != nil {
+	// Read s.cl once: an idle close can set it to nil meanwhile, and the
+	// client retired has to be the one closed here.
+	if cl := s.cl; cl != nil {
 		log.Infof("closing TorrentClient")
-		s.cl.Close()
-		s.swarm.retire(s.cl)
+		cl.Close()
+		s.swarm.retire(cl)
 	}
 }
 

@@ -1,8 +1,11 @@
 package services
 
 import (
+	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,6 +174,50 @@ func TestSwarmStats_RetireTwiceCountsOnce(t *testing.T) {
 	s.retire(a)
 	if got := s.totals(); got != want {
 		t.Fatalf("totals %+v after a second retire, want %+v", got, want)
+	}
+}
+
+// Scrapes run while clients are built, count and are retired. retire takes a
+// client out of the live set and folds its counts into closed in one critical
+// section, so no scrape falls in between and sees the client's counts nowhere.
+func TestSwarmStats_ScrapesNeverGoDownAcrossRetire(t *testing.T) {
+	s := newSwarmStats()
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	drops := make(chan string, 1)
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var last swarmTotals
+			for !stop.Load() {
+				got := s.totals()
+				if !got.atLeast(last) {
+					select {
+					case drops <- fmt.Sprintf("%+v after %+v", got, last):
+					default:
+					}
+					return
+				}
+				last = got
+			}
+		}()
+	}
+	for i := 0; i < 5000 && len(drops) == 0; i++ {
+		c := &fakeConnStats{}
+		s.attach(c)
+		c.addEach(1)
+		s.retire(c)
+	}
+	stop.Store(true)
+	wg.Wait()
+	select {
+	case d := <-drops:
+		t.Fatalf("a scrape went down: %s", d)
+	default:
+	}
+	if got, want := s.totals(), (swarmTotals{5000, 5000, 5000, 5000, 5000, 5000, 5000}); got != want {
+		t.Fatalf("totals %+v, want %+v", got, want)
 	}
 }
 
