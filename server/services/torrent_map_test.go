@@ -56,18 +56,29 @@ func TestPeerTimeline(t *testing.T) {
 	if d := tl.connectedFor(t0); d != 0 {
 		t.Fatalf("no peer ever: %v, want 0", d)
 	}
-	tl.observe(2, t0)
-	tl.observe(5, t0.Add(3*time.Second)) // more peers do not restart it
+	tl.observe(2, 0, t0)
+	tl.observe(5, 0, t0.Add(3*time.Second)) // more peers do not restart it
 	if d := tl.connectedFor(t0.Add(25 * time.Second)); d != 25*time.Second {
 		t.Fatalf("peers since t0: %v at t0+25s, want 25s", d)
 	}
-	tl.observe(0, t0.Add(26*time.Second))
+	tl.observe(0, 0, t0.Add(26*time.Second))
 	if d := tl.connectedFor(t0.Add(27 * time.Second)); d != 0 {
 		t.Fatalf("after the last peer left: %v, want 0", d)
 	}
-	tl.observe(1, t0.Add(30*time.Second))
+	tl.observe(1, 0, t0.Add(30*time.Second))
 	if d := tl.connectedFor(t0.Add(31 * time.Second)); d != time.Second {
 		t.Fatalf("a new peer after a break: %v, want 1s (the streak restarts)", d)
+	}
+	// A seeder joins the partial peers: availability is known by it, and
+	// the streak starts again only when it goes — the partial peers'
+	// union is not believed while the seeder may be redialling.
+	tl.observe(3, 1, t0.Add(60*time.Second))
+	if d := tl.connectedFor(t0.Add(61 * time.Second)); d != 0 {
+		t.Fatalf("with a seeder connected: %v, want 0", d)
+	}
+	tl.observe(2, 0, t0.Add(62*time.Second))
+	if d := tl.connectedFor(t0.Add(63 * time.Second)); d != time.Second {
+		t.Fatalf("partial peers left after the seeder went: %v, want 1s (the streak restarts)", d)
 	}
 	var none *peerTimeline
 	if d := none.connectedFor(t0); d != 0 {
@@ -76,7 +87,8 @@ func TestPeerTimeline(t *testing.T) {
 }
 
 // Get starts the torrent's watcher, which keeps the timeline: set once a
-// peer connects, cleared when the last one goes.
+// peer connects, cleared while a seeder is connected and when the last peer
+// goes.
 func TestTorrentMap_GetKeepsPeerTimeline(t *testing.T) {
 	data, mi := availabilityTestPayload(t)
 	src := filepath.Join(t.TempDir(), "pack.torrent")
@@ -118,6 +130,13 @@ func TestTorrentMap_GetKeepsPeerTimeline(t *testing.T) {
 	tor.DownloadPieces(8, 9)
 	tor.AddClientPeer(peer)
 	waitFor(t, "the timeline to start", func() bool { return tl.connectedFor(time.Now()) > 0 })
+	// A seeder joins: the watcher passes the connected seeder count, which
+	// stops the clock until the seeder goes.
+	seeder := swarmPeer(t, data, mi, len(data), 9)
+	tor.AddClientPeer(seeder)
+	waitFor(t, "the seeder to stop the timeline", func() bool { return tl.connectedFor(time.Now()) == 0 })
+	seeder.Close()
+	waitFor(t, "the timeline to restart on the partial peer", func() bool { return tl.connectedFor(time.Now()) > 0 })
 	peer.Close()
 	waitFor(t, "the timeline to stop", func() bool { return tl.connectedFor(time.Now()) == 0 })
 }

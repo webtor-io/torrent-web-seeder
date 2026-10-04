@@ -309,7 +309,7 @@ func statMap(cl *torrent.Client, h string, tl *peerTimeline) *TorrentMap {
 
 func timelineSince(d time.Duration) *peerTimeline {
 	tl := &peerTimeline{}
-	tl.observe(1, time.Now().Add(-d))
+	tl.observe(1, 0, time.Now().Add(-d))
 	return tl
 }
 

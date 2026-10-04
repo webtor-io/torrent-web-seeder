@@ -98,18 +98,27 @@ type torrentEntry struct {
 	peers *peerTimeline
 }
 
-// peerTimeline is since when a loaded torrent has had connected peers without
-// a break: the clock of availability_known (availabilitySettle). The library
-// does not say when a connection was made, and a clock started by the stat
-// itself would restart whenever someone opens the page.
+// peerTimeline is since when a loaded torrent has had connected peers, none
+// of them a seeder, without a break: the clock of availability_known
+// (availabilitySettle). The library does not say when a connection was made,
+// and a clock started by the stat itself would restart whenever someone
+// opens the page.
+//
+// A connected seeder stops the clock: it makes availability known by itself
+// (computeAvailability), and the streak starts when the last one goes. The
+// peers left have announced long ago, but a seeder is often gone only for a
+// moment: chokeRedial drops a choking peer and dials it again
+// (PeerConn.Redial: dropConnection, then addPeer), and until it is back the
+// partial peers' union shows the reader's pieces as on nobody — "nobody has
+// the piece you wait for" next to a seeder that is reconnecting.
 type peerTimeline struct {
-	since atomic.Int64 // UnixNano; 0 while no peer is connected
+	since atomic.Int64 // UnixNano; 0 while no peer, or a seeder, is connected
 }
 
-// observe records the active peer count at now. One writer: the torrent's
-// watcher, every 50 ms.
-func (p *peerTimeline) observe(activePeers int, now time.Time) {
-	if activePeers == 0 {
+// observe records the active peer and connected seeder counts at now. One
+// writer: the torrent's watcher, every 50 ms.
+func (p *peerTimeline) observe(activePeers, seeders int, now time.Time) {
+	if activePeers == 0 || seeders > 0 {
 		p.since.Store(0)
 		return
 	}
@@ -118,8 +127,9 @@ func (p *peerTimeline) observe(activePeers int, now time.Time) {
 	}
 }
 
-// connectedFor is how long the torrent has had peers without a break at now:
-// zero with no peer, and for a torrent nobody tracks (nil).
+// connectedFor is how long the torrent has had peers and no seeder without a
+// break at now: zero with no peer, with a seeder, and for a torrent nobody
+// tracks (nil).
 func (p *peerTimeline) connectedFor(now time.Time) time.Duration {
 	if p == nil {
 		return 0
@@ -335,7 +345,7 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 				case <-ticker.C:
 					stats := t.Stats()
 					activePeers := stats.ActivePeers
-					tl.observe(activePeers, time.Now())
+					tl.observe(activePeers, stats.ConnectedSeeders, time.Now())
 					bytesRead := stats.ConnStats.BytesRead.Int64()
 					if bytesRead == lastBytesRead {
 						if activePeers == 0 {

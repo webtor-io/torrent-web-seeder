@@ -219,8 +219,9 @@ type StatReply struct {
 	// early union paints holes that are not there. True at once when a
 	// connected peer is a seeder or a web seed serves the whole torrent, or
 	// when nothing in the scope is missing (complete here or claimed);
-	// otherwise once the torrent has had peers for 20 s without a break (a
-	// peer that joins later is unread for its round trip). False while a web
+	// otherwise once the torrent has had peers and no seeder for 20 s without
+	// a break (a peer that joins later is unread for its round trip; a seeder
+	// that leaves restarts the 20 s, since a redialled one is back in seconds). False while a web
 	// seed claims only part of the torrent (which part is not readable) and
 	// something is missing. Data is refreshed at most once a second per path
 	// (about every 2 s for a lone StatStream), so the flip lands 20–23 s after

@@ -40,9 +40,10 @@ import (
 //     then paints holes that the next second fills.
 //
 // The clock is the torrent's, not a connection's: TorrentMap's watcher
-// records since when the torrent has had at least one peer (peerTimeline),
-// so a chain of short-lived connections with no moment at zero peers counts
-// as one streak. The library does expose per-connection moments —
+// records since when the torrent has had at least one peer and no connected
+// seeder (peerTimeline), so a chain of short-lived connections with no
+// moment at zero peers counts as one streak, and a seeder leaving — perhaps
+// only for a redial — starts a new one. The library does expose per-connection moments —
 // Callbacks.CompletedHandshake and PeerConnAdded for when a connection was
 // made, Callbacks.ReadMessage for its first message — and "every connection
 // has sent its first message" would be the exact rule. It is not used:
