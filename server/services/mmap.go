@@ -469,6 +469,21 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 	mu := ts.pieceLock(idx)
 	mu.Lock()
 
+	// Only a piece the LRU still holds is cached. Eviction lists are
+	// computed under lru.mu and carried out after it is released, and
+	// several are computed at once (MarkComplete on five hashers, the
+	// sweep), so one piece lands in two of them; ltshr 2026-10-02 evicted
+	// 32254 three times within a second, "freed 0 bytes" on 10% of all
+	// evictions that week. By the second punch the piece may be downloading
+	// again: the punch erased chunks the library had marked written, the
+	// next chunk cleared the evicted flag, and a responsive reader served
+	// the hole as data. The shard lock makes this check and the Remove
+	// below one step for any two evictions of the piece.
+	if !ts.lru.Has(idx) {
+		mu.Unlock()
+		return
+	}
+
 	if err := ts.pc.Set(pk, false); err != nil {
 		mu.Unlock()
 		log.WithError(err).Errorf("failed to mark piece %d incomplete during eviction", idx)

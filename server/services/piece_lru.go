@@ -104,6 +104,14 @@ func (l *PieceLRU) removeLocked(index int) {
 	delete(l.entries, index)
 }
 
+// Has reports whether a piece is tracked: complete and on disk.
+func (l *PieceLRU) Has(index int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.entries[index]
+	return ok
+}
+
 // Used returns current disk usage in bytes.
 func (l *PieceLRU) Used() int64 {
 	l.mu.Lock()

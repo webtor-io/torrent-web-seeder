@@ -398,7 +398,8 @@ func samePath(filePath, requested string) bool {
 //
 // 105705c made downloads responsive again after a waiting reader hung on an
 // evicted piece the library never requested again. evictPiece now tells the
-// library the piece is gone (refreshCompletion).
+// library the piece is gone (refreshCompletion), and a waiting reader gets an
+// evicted piece back (TestEvictedPieceRedownload_ReaderNeverSeesHoles).
 func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string, responsive bool) (http.ResponseWriter, io.ReadSeekCloser, error) {
 	t, err := s.tm.Get(ctx, h)
 	if err != nil {
