@@ -184,9 +184,12 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	// token, and are not redirected: Vault checking its copy must get the
 	// torrent's bytes, not that copy back. The role skips this redirect and
 	// nothing else. Any pod can forge it (no NetworkPolicy), which only
-	// moves its read here. ?stats, ?warmup and ?done keep counting Vault's
-	// copy for every role (availableWithoutTorrent): they serve no bytes,
-	// and Vault does not call them.
+	// moves its read here; so can any client through a thp older than
+	// ef5fd98, which passes the client's X-Role on. thp therefore goes out
+	// before this seeder, in production and in self-hosted. ?stats,
+	// ?warmup and ?done keep counting Vault's copy for every role
+	// (availableWithoutTorrent): they serve no bytes, and Vault does not
+	// call them.
 	if s.v != nil && r.Header.Get("X-Role") != "vault" {
 		served, err := s.redirectFromVault(w, r, h, p)
 		if err != nil {
