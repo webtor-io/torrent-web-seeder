@@ -157,9 +157,12 @@ are not there. The rule:
   the torrent's watcher in `TorrentMap` every 50 ms. A seeder leaving
   restarts the 20 s: the choke redial drops a seeder and dials it again, and
   until it is back the partial peers' union would show the pieces being read
-  as on nobody. The clock is the torrent's: a chain of
-  short-lived connections with no moment at zero peers counts as one streak,
-  and a peer that joins later is unread for its round trip. 20 s is a product
+  as on nobody. The clock is the torrent's: a chain of short-lived
+  connections counts as one streak, and so does a gap of under 10 s with no
+  peer at all (`peerGapGrace`: the choke redial can drop every connection of
+  a small stuck swarm at once, and a break there would hide its holes for
+  another 20 s every couple of minutes). A peer that joins later, or comes
+  back after such a gap, is unread for its round trip. 20 s is a product
   delay covering the first seconds' burst of connections, not a protocol
   constant. The library does expose per-connection moments
   (`Callbacks.CompletedHandshake`, `PeerConnAdded`, and `ReadMessage` for the

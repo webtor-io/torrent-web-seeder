@@ -111,25 +111,48 @@ type torrentEntry struct {
 // (PeerConn.Redial: dropConnection, then addPeer), and until it is back the
 // partial peers' union shows the reader's pieces as on nobody — "nobody has
 // the piece you wait for" next to a seeder that is reconnecting.
+//
+// No peer at all breaks the streak only after peerGapGrace.
 type peerTimeline struct {
-	since atomic.Int64 // UnixNano; 0 while no peer, or a seeder, is connected
+	since atomic.Int64 // UnixNano; 0 while there is no streak
+	// zeroSince is when the peer count fell to zero (UnixNano), 0 while
+	// peers are connected. Only the watcher touches it.
+	zeroSince int64
 }
+
+// peerGapGrace is how long a torrent may have no peer connected before its
+// streak breaks. chokeRedial drops up to five connections in one pass; in a
+// small swarm stuck on pieces nobody has, every peer chokes us and is
+// redialled at once, the count sits at zero until a redial lands, and a
+// break there would hide the holes for another 20 s every couple of
+// minutes. Prod's dial (7 s nominal) and handshake (3 s) timeouts bound a
+// redial. The cost: peers that come back after a gap are unread for their
+// round trip, as a peer joining a running streak is. While nothing is
+// connected computeAvailability does not settle anyway.
+const peerGapGrace = 10 * time.Second
 
 // observe records the active peer and connected seeder counts at now. One
 // writer: the torrent's watcher, every 50 ms.
 func (p *peerTimeline) observe(activePeers, seeders int, now time.Time) {
-	if activePeers == 0 || seeders > 0 {
+	switch {
+	case seeders > 0:
 		p.since.Store(0)
-		return
-	}
-	if p.since.Load() == 0 {
-		p.since.Store(now.UnixNano())
+		p.zeroSince = 0
+	case activePeers > 0:
+		p.zeroSince = 0
+		if p.since.Load() == 0 {
+			p.since.Store(now.UnixNano())
+		}
+	case p.zeroSince == 0:
+		p.zeroSince = now.UnixNano()
+	case now.Sub(time.Unix(0, p.zeroSince)) >= peerGapGrace:
+		p.since.Store(0)
 	}
 }
 
 // connectedFor is how long the torrent has had peers and no seeder without a
-// break at now: zero with no peer, with a seeder, and for a torrent nobody
-// tracks (nil).
+// break at now (a gap shorter than peerGapGrace is not one): zero with a
+// seeder, after a break, and for a torrent nobody tracks (nil).
 func (p *peerTimeline) connectedFor(now time.Time) time.Duration {
 	if p == nil {
 		return 0

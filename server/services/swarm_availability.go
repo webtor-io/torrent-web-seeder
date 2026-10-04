@@ -41,12 +41,13 @@ import (
 //
 // The clock is the torrent's, not a connection's: TorrentMap's watcher
 // records since when the torrent has had at least one peer and no connected
-// seeder (peerTimeline), so a chain of short-lived connections with no
-// moment at zero peers counts as one streak, and a seeder leaving — perhaps
-// only for a redial — starts a new one. The library does expose per-connection moments —
-// Callbacks.CompletedHandshake and PeerConnAdded for when a connection was
-// made, Callbacks.ReadMessage for its first message — and "every connection
-// has sent its first message" would be the exact rule. It is not used:
+// seeder (peerTimeline), so a chain of short-lived connections counts as one
+// streak, a gap of no peer shorter than peerGapGrace too, and a seeder
+// leaving — perhaps only for a redial — starts a new one. The library does
+// expose per-connection moments — Callbacks.CompletedHandshake and
+// PeerConnAdded for when a connection was made, Callbacks.ReadMessage for its
+// first message — and "every connection has sent its first message" would be
+// the exact rule. It is not used:
 // ReadMessage runs under the client lock for every message on every
 // connection, the data path of every stream, to answer a question asked once
 // a second by a status page; and under churn at the connection limit there
@@ -121,8 +122,8 @@ type availabilityInput struct {
 	// not all. Which ones is not readable through the library's API, so they
 	// make availability unknown unless nothing is missing anyway.
 	partialWebseeds int
-	// peersFor is how long the torrent has had at least one connected peer
-	// without a break (zero when none now).
+	// peersFor is how long the torrent has had connected peers and no
+	// seeder without a break (peerTimeline.connectedFor).
 	peersFor time.Duration
 }
 

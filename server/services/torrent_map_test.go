@@ -61,12 +61,22 @@ func TestPeerTimeline(t *testing.T) {
 	if d := tl.connectedFor(t0.Add(25 * time.Second)); d != 25*time.Second {
 		t.Fatalf("peers since t0: %v at t0+25s, want 25s", d)
 	}
+	// A gap shorter than peerGapGrace — a redial round that dropped every
+	// connection — is not a break.
 	tl.observe(0, 0, t0.Add(26*time.Second))
-	if d := tl.connectedFor(t0.Add(27 * time.Second)); d != 0 {
-		t.Fatalf("after the last peer left: %v, want 0", d)
+	tl.observe(0, 0, t0.Add(26*time.Second+peerGapGrace-time.Millisecond))
+	tl.observe(1, 0, t0.Add(26*time.Second+peerGapGrace))
+	if d := tl.connectedFor(t0.Add(40 * time.Second)); d != 40*time.Second {
+		t.Fatalf("after a gap of just under peerGapGrace: %v, want 40s (no break)", d)
 	}
-	tl.observe(1, 0, t0.Add(30*time.Second))
-	if d := tl.connectedFor(t0.Add(31 * time.Second)); d != time.Second {
+	// One of peerGapGrace is.
+	tl.observe(0, 0, t0.Add(41*time.Second))
+	tl.observe(0, 0, t0.Add(41*time.Second+peerGapGrace))
+	if d := tl.connectedFor(t0.Add(52 * time.Second)); d != 0 {
+		t.Fatalf("after a gap of peerGapGrace: %v, want 0", d)
+	}
+	tl.observe(1, 0, t0.Add(53*time.Second))
+	if d := tl.connectedFor(t0.Add(54 * time.Second)); d != time.Second {
 		t.Fatalf("a new peer after a break: %v, want 1s (the streak restarts)", d)
 	}
 	// A seeder joins the partial peers: availability is known by it, and
@@ -87,8 +97,8 @@ func TestPeerTimeline(t *testing.T) {
 }
 
 // Get starts the torrent's watcher, which keeps the timeline: set once a
-// peer connects, cleared while a seeder is connected and when the last peer
-// goes.
+// peer connects, cleared while a seeder is connected. The last peer going
+// clears it only after peerGapGrace; TestPeerTimeline checks that.
 func TestTorrentMap_GetKeepsPeerTimeline(t *testing.T) {
 	data, mi := availabilityTestPayload(t)
 	src := filepath.Join(t.TempDir(), "pack.torrent")
@@ -137,8 +147,6 @@ func TestTorrentMap_GetKeepsPeerTimeline(t *testing.T) {
 	waitFor(t, "the seeder to stop the timeline", func() bool { return tl.connectedFor(time.Now()) == 0 })
 	seeder.Close()
 	waitFor(t, "the timeline to restart on the partial peer", func() bool { return tl.connectedFor(time.Now()) > 0 })
-	peer.Close()
-	waitFor(t, "the timeline to stop", func() bool { return tl.connectedFor(time.Now()) == 0 })
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
