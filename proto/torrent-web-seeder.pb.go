@@ -137,7 +137,7 @@ func (x Piece_Priority) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Piece_Priority.Descriptor instead.
 func (Piece_Priority) EnumDescriptor() ([]byte, []int) {
-	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{2, 0}
+	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{3, 0}
 }
 
 // Stat request message
@@ -200,9 +200,60 @@ type StatReply struct {
 	// piece-completion db) for a torrent nobody is currently streaming or
 	// downloading. A cold reply has no peers by definition — the seeder did
 	// not join the swarm to answer it.
-	Live          bool `protobuf:"varint,8,opt,name=live,proto3" json:"live"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Live bool `protobuf:"varint,8,opt,name=live,proto3" json:"live"`
+	// Swarm availability of the reply's scope: the whole torrent (empty path),
+	// the file, or the directory's piece span — the same pieces as `pieces`,
+	// at the same positions. Set on live replies; a cold reply (live=false)
+	// leaves them zero, availability_known false. "Has" below means "has
+	// announced": a peer's claims are all the protocol shows, and a BEP 16
+	// super-seeder announces nothing up front and reveals pieces one at a
+	// time, so a full copy behind it looks like holes that fill as data comes.
+	//
+	// availability is the fraction of the scope's pieces that are complete
+	// here or claimed by at least one connected peer; 1 when a connected peer
+	// or a web seed claims every piece. While availability_known is false it
+	// is a lower bound.
+	Availability float32 `protobuf:"fixed32,9,opt,name=availability,proto3" json:"availability"`
+	// availability_known is false while the connected peers' piece sets may
+	// not all be in: a peer is connected before it sends its bitfield, so an
+	// early union paints holes that are not there. True at once when a
+	// connected peer is a seeder or a web seed serves the whole torrent, or
+	// when nothing in the scope is missing (complete here or claimed);
+	// otherwise once the torrent has had peers for 20 s without a break (a
+	// peer that joins later is unread for its round trip). False while a web
+	// seed claims only part of the torrent (which part is not readable) and
+	// something is missing. Data is refreshed at most once a second per path
+	// (about every 2 s for a lone StatStream), so the flip lands 20–23 s after
+	// the first peer.
+	AvailabilityKnown bool `protobuf:"varint,10,opt,name=availability_known,json=availabilityKnown,proto3" json:"availability_known"`
+	// missing are the pieces neither complete here nor claimed by any
+	// connected peer, as sorted half-open runs [start, end) of positions.
+	// Empty unless availability_known. At most 512 runs: past that, runs
+	// separated by the smallest gaps are merged, so a merged run also covers
+	// pieces that are complete here or claimed by a peer, any number of them;
+	// draw completion (pieces[].complete) over the hatch. In a StatStream
+	// frame it is sent only when it changed: see missing_unchanged.
+	Missing []*PieceRange `protobuf:"bytes,11,rep,name=missing,proto3" json:"missing"`
+	// wanted_missing is how many wanted pieces (priority above NONE) that are
+	// not complete have no source among the connected peers. 0 unless
+	// availability_known. Wanted includes sticky priorities nobody may be
+	// waiting on: a warm-up's HIGH stays until the piece completes or the
+	// torrent unloads, a closed reader's window stays NORMAL for 90 s, and a
+	// whole-torrent reply counts every file's. Pair it with a lack of
+	// progress, or use reader_missing, before calling a transfer stuck.
+	WantedMissing int32 `protobuf:"varint,12,opt,name=wanted_missing,json=wantedMissing,proto3" json:"wanted_missing"`
+	// reader_missing is how many of the wanted_missing pieces an open reader
+	// (a stream or a download in progress) is on or reading ahead into
+	// (priority READAHEAD or above): above 0, a reader is or soon will be
+	// waiting on a piece no connected peer has. 0 unless availability_known.
+	ReaderMissing int32 `protobuf:"varint,13,opt,name=reader_missing,json=readerMissing,proto3" json:"reader_missing"`
+	// missing_unchanged is set only in StatStream frames: true when the frame
+	// leaves missing out because it is the same as in the last frame sent —
+	// keep the runs you have. False in every frame that carries missing,
+	// including one where it became empty, and in Stat replies.
+	MissingUnchanged bool `protobuf:"varint,14,opt,name=missing_unchanged,json=missingUnchanged,proto3" json:"missing_unchanged"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *StatReply) Reset() {
@@ -291,6 +342,101 @@ func (x *StatReply) GetLive() bool {
 	return false
 }
 
+func (x *StatReply) GetAvailability() float32 {
+	if x != nil {
+		return x.Availability
+	}
+	return 0
+}
+
+func (x *StatReply) GetAvailabilityKnown() bool {
+	if x != nil {
+		return x.AvailabilityKnown
+	}
+	return false
+}
+
+func (x *StatReply) GetMissing() []*PieceRange {
+	if x != nil {
+		return x.Missing
+	}
+	return nil
+}
+
+func (x *StatReply) GetWantedMissing() int32 {
+	if x != nil {
+		return x.WantedMissing
+	}
+	return 0
+}
+
+func (x *StatReply) GetReaderMissing() int32 {
+	if x != nil {
+		return x.ReaderMissing
+	}
+	return 0
+}
+
+func (x *StatReply) GetMissingUnchanged() bool {
+	if x != nil {
+		return x.MissingUnchanged
+	}
+	return false
+}
+
+// A half-open run [start, end) of piece positions.
+type PieceRange struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Start         int64                  `protobuf:"varint,1,opt,name=start,proto3" json:"start"`
+	End           int64                  `protobuf:"varint,2,opt,name=end,proto3" json:"end"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PieceRange) Reset() {
+	*x = PieceRange{}
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PieceRange) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PieceRange) ProtoMessage() {}
+
+func (x *PieceRange) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PieceRange.ProtoReflect.Descriptor instead.
+func (*PieceRange) Descriptor() ([]byte, []int) {
+	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PieceRange) GetStart() int64 {
+	if x != nil {
+		return x.Start
+	}
+	return 0
+}
+
+func (x *PieceRange) GetEnd() int64 {
+	if x != nil {
+		return x.End
+	}
+	return 0
+}
+
 type Piece struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Position      int64                  `protobuf:"varint,1,opt,name=position,proto3" json:"position"`
@@ -302,7 +448,7 @@ type Piece struct {
 
 func (x *Piece) Reset() {
 	*x = Piece{}
-	mi := &file_proto_torrent_web_seeder_proto_msgTypes[2]
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -314,7 +460,7 @@ func (x *Piece) String() string {
 func (*Piece) ProtoMessage() {}
 
 func (x *Piece) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_web_seeder_proto_msgTypes[2]
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -327,7 +473,7 @@ func (x *Piece) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Piece.ProtoReflect.Descriptor instead.
 func (*Piece) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{2}
+	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Piece) GetPosition() int64 {
@@ -360,7 +506,7 @@ type FilesRequest struct {
 
 func (x *FilesRequest) Reset() {
 	*x = FilesRequest{}
-	mi := &file_proto_torrent_web_seeder_proto_msgTypes[3]
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -372,7 +518,7 @@ func (x *FilesRequest) String() string {
 func (*FilesRequest) ProtoMessage() {}
 
 func (x *FilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_web_seeder_proto_msgTypes[3]
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -385,7 +531,7 @@ func (x *FilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilesRequest.ProtoReflect.Descriptor instead.
 func (*FilesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{3}
+	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{4}
 }
 
 type File struct {
@@ -397,7 +543,7 @@ type File struct {
 
 func (x *File) Reset() {
 	*x = File{}
-	mi := &file_proto_torrent_web_seeder_proto_msgTypes[4]
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -409,7 +555,7 @@ func (x *File) String() string {
 func (*File) ProtoMessage() {}
 
 func (x *File) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_web_seeder_proto_msgTypes[4]
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -422,7 +568,7 @@ func (x *File) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use File.ProtoReflect.Descriptor instead.
 func (*File) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{4}
+	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *File) GetPath() string {
@@ -442,7 +588,7 @@ type FilesReply struct {
 
 func (x *FilesReply) Reset() {
 	*x = FilesReply{}
-	mi := &file_proto_torrent_web_seeder_proto_msgTypes[5]
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -454,7 +600,7 @@ func (x *FilesReply) String() string {
 func (*FilesReply) ProtoMessage() {}
 
 func (x *FilesReply) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_web_seeder_proto_msgTypes[5]
+	mi := &file_proto_torrent_web_seeder_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -467,7 +613,7 @@ func (x *FilesReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilesReply.ProtoReflect.Descriptor instead.
 func (*FilesReply) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{5}
+	return file_proto_torrent_web_seeder_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *FilesReply) GetFiles() []*File {
@@ -483,7 +629,7 @@ const file_proto_torrent_web_seeder_proto_rawDesc = "" +
 	"\n" +
 	"\x1eproto/torrent-web-seeder.proto\"!\n" +
 	"\vStatRequest\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\"\xe4\x02\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\xd9\x04\n" +
 	"\tStatReply\x12\x14\n" +
 	"\x05total\x18\x01 \x01(\x03R\x05total\x12\x1c\n" +
 	"\tcompleted\x18\x02 \x01(\x03R\tcompleted\x12\x14\n" +
@@ -492,7 +638,14 @@ const file_proto_torrent_web_seeder_proto_rawDesc = "" +
 	"\x06pieces\x18\x05 \x03(\v2\x06.PieceR\x06pieces\x12\x18\n" +
 	"\aseeders\x18\x06 \x01(\x05R\aseeders\x12\x1a\n" +
 	"\bleechers\x18\a \x01(\x05R\bleechers\x12\x12\n" +
-	"\x04live\x18\b \x01(\bR\x04live\"x\n" +
+	"\x04live\x18\b \x01(\bR\x04live\x12\"\n" +
+	"\favailability\x18\t \x01(\x02R\favailability\x12-\n" +
+	"\x12availability_known\x18\n" +
+	" \x01(\bR\x11availabilityKnown\x12%\n" +
+	"\amissing\x18\v \x03(\v2\v.PieceRangeR\amissing\x12%\n" +
+	"\x0ewanted_missing\x18\f \x01(\x05R\rwantedMissing\x12%\n" +
+	"\x0ereader_missing\x18\r \x01(\x05R\rreaderMissing\x12+\n" +
+	"\x11missing_unchanged\x18\x0e \x01(\bR\x10missingUnchanged\"x\n" +
 	"\x06Status\x12\x12\n" +
 	"\x0eINITIALIZATION\x10\x00\x12\v\n" +
 	"\aSEEDING\x10\x01\x12\b\n" +
@@ -501,7 +654,11 @@ const file_proto_torrent_web_seeder_proto_rawDesc = "" +
 	"TERMINATED\x10\x03\x12\x15\n" +
 	"\x11WAITING_FOR_PEERS\x10\x04\x12\r\n" +
 	"\tRESTORING\x10\x05\x12\r\n" +
-	"\tBACKINGUP\x10\x06\"\xba\x01\n" +
+	"\tBACKINGUP\x10\x06\"4\n" +
+	"\n" +
+	"PieceRange\x12\x14\n" +
+	"\x05start\x18\x01 \x01(\x03R\x05start\x12\x10\n" +
+	"\x03end\x18\x02 \x01(\x03R\x03end\"\xba\x01\n" +
 	"\x05Piece\x12\x1a\n" +
 	"\bposition\x18\x01 \x01(\x03R\bposition\x12\x1a\n" +
 	"\bcomplete\x18\x02 \x01(\bR\bcomplete\x12+\n" +
@@ -541,33 +698,35 @@ func file_proto_torrent_web_seeder_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_torrent_web_seeder_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_proto_torrent_web_seeder_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_proto_torrent_web_seeder_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_proto_torrent_web_seeder_proto_goTypes = []any{
 	(StatReply_Status)(0), // 0: StatReply.Status
 	(Piece_Priority)(0),   // 1: Piece.Priority
 	(*StatRequest)(nil),   // 2: StatRequest
 	(*StatReply)(nil),     // 3: StatReply
-	(*Piece)(nil),         // 4: Piece
-	(*FilesRequest)(nil),  // 5: FilesRequest
-	(*File)(nil),          // 6: File
-	(*FilesReply)(nil),    // 7: FilesReply
+	(*PieceRange)(nil),    // 4: PieceRange
+	(*Piece)(nil),         // 5: Piece
+	(*FilesRequest)(nil),  // 6: FilesRequest
+	(*File)(nil),          // 7: File
+	(*FilesReply)(nil),    // 8: FilesReply
 }
 var file_proto_torrent_web_seeder_proto_depIdxs = []int32{
 	0, // 0: StatReply.status:type_name -> StatReply.Status
-	4, // 1: StatReply.pieces:type_name -> Piece
-	1, // 2: Piece.priority:type_name -> Piece.Priority
-	6, // 3: FilesReply.files:type_name -> File
-	2, // 4: TorrentWebSeeder.Stat:input_type -> StatRequest
-	2, // 5: TorrentWebSeeder.StatStream:input_type -> StatRequest
-	5, // 6: TorrentWebSeeder.Files:input_type -> FilesRequest
-	3, // 7: TorrentWebSeeder.Stat:output_type -> StatReply
-	3, // 8: TorrentWebSeeder.StatStream:output_type -> StatReply
-	7, // 9: TorrentWebSeeder.Files:output_type -> FilesReply
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	5, // 1: StatReply.pieces:type_name -> Piece
+	4, // 2: StatReply.missing:type_name -> PieceRange
+	1, // 3: Piece.priority:type_name -> Piece.Priority
+	7, // 4: FilesReply.files:type_name -> File
+	2, // 5: TorrentWebSeeder.Stat:input_type -> StatRequest
+	2, // 6: TorrentWebSeeder.StatStream:input_type -> StatRequest
+	6, // 7: TorrentWebSeeder.Files:input_type -> FilesRequest
+	3, // 8: TorrentWebSeeder.Stat:output_type -> StatReply
+	3, // 9: TorrentWebSeeder.StatStream:output_type -> StatReply
+	8, // 10: TorrentWebSeeder.Files:output_type -> FilesReply
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_proto_torrent_web_seeder_proto_init() }
@@ -581,7 +740,7 @@ func file_proto_torrent_web_seeder_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_torrent_web_seeder_proto_rawDesc), len(file_proto_torrent_web_seeder_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

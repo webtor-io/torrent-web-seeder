@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -93,6 +94,41 @@ type torrentEntry struct {
 	timer  *time.Timer
 	active int
 	drop   func()
+	// peers is kept by the torrent's watcher (Get); stats read it.
+	peers *peerTimeline
+}
+
+// peerTimeline is since when a loaded torrent has had connected peers without
+// a break: the clock of availability_known (availabilitySettle). The library
+// does not say when a connection was made, and a clock started by the stat
+// itself would restart whenever someone opens the page.
+type peerTimeline struct {
+	since atomic.Int64 // UnixNano; 0 while no peer is connected
+}
+
+// observe records the active peer count at now. One writer: the torrent's
+// watcher, every 50 ms.
+func (p *peerTimeline) observe(activePeers int, now time.Time) {
+	if activePeers == 0 {
+		p.since.Store(0)
+		return
+	}
+	if p.since.Load() == 0 {
+		p.since.Store(now.UnixNano())
+	}
+}
+
+// connectedFor is how long the torrent has had peers without a break at now:
+// zero with no peer, and for a torrent nobody tracks (nil).
+func (p *peerTimeline) connectedFor(now time.Time) time.Duration {
+	if p == nil {
+		return 0
+	}
+	since := p.since.Load()
+	if since == 0 {
+		return 0
+	}
+	return now.Sub(time.Unix(0, since))
 }
 
 func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap) *TorrentMap {
@@ -183,26 +219,37 @@ func (s *TorrentMap) expire(h string, e *torrentEntry) {
 // and kept the torrent alive, which is exactly what a headless farm hitting
 // a handful of hashes was buying from us.
 func (s *TorrentMap) Peek(h string) *torrent.Torrent {
+	t, _ := s.peek(h)
+	return t
+}
+
+// peek is Peek with the torrent's peer timeline, read under the same lock;
+// the timeline is nil for a torrent the map does not track.
+func (s *TorrentMap) peek(h string) (*torrent.Torrent, *peerTimeline) {
 	if len(h) != 40 {
-		return nil
+		return nil, nil
 	}
 	ih, err := hex.DecodeString(h)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	cl, err := s.tc.Get()
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var mh metainfo.Hash
 	copy(mh[:], ih)
 	t, ok := cl.Torrent(mh)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	return t
+	var tl *peerTimeline
+	if e, ok := s.entries[h]; ok {
+		tl = e.peers
+	}
+	return t, tl
 }
 
 // MetaInfo returns the torrent's metainfo from the file store or the
@@ -271,6 +318,7 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 		promActiveTorrentCount.Inc()
 		go defaultChokeRedial.watch(t, func() bool { return s.reading(h) })
 		startTime := time.Now()
+		tl := &peerTimeline{}
 		go func() {
 			const tickDuration = time.Millisecond * 50
 			ticker := time.NewTicker(tickDuration)
@@ -287,6 +335,7 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 				case <-ticker.C:
 					stats := t.Stats()
 					activePeers := stats.ActivePeers
+					tl.observe(activePeers, time.Now())
 					bytesRead := stats.ConnStats.BytesRead.Int64()
 					if bytesRead == lastBytesRead {
 						if activePeers == 0 {
@@ -321,6 +370,7 @@ func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error
 			t.Drop()
 			promActiveTorrentCount.Dec()
 		})
+		s.entries[h].peers = tl
 	}
 	return t, nil
 }

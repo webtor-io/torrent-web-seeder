@@ -40,6 +40,64 @@ message StatReply {
   // downloading. A cold reply has no peers by definition — the seeder did
   // not join the swarm to answer it.
   bool  live          = 8;
+
+  // Swarm availability of the reply's scope: the whole torrent (empty path),
+  // the file, or the directory's piece span — the same pieces as `pieces`,
+  // at the same positions. Set on live replies; a cold reply (live=false)
+  // leaves them zero, availability_known false. "Has" below means "has
+  // announced": a peer's claims are all the protocol shows, and a BEP 16
+  // super-seeder announces nothing up front and reveals pieces one at a
+  // time, so a full copy behind it looks like holes that fill as data comes.
+  //
+  // availability is the fraction of the scope's pieces that are complete
+  // here or claimed by at least one connected peer; 1 when a connected peer
+  // or a web seed claims every piece. While availability_known is false it
+  // is a lower bound.
+  float availability        = 9;
+  // availability_known is false while the connected peers' piece sets may
+  // not all be in: a peer is connected before it sends its bitfield, so an
+  // early union paints holes that are not there. True at once when a
+  // connected peer is a seeder or a web seed serves the whole torrent, or
+  // when nothing in the scope is missing (complete here or claimed);
+  // otherwise once the torrent has had peers for 20 s without a break (a
+  // peer that joins later is unread for its round trip). False while a web
+  // seed claims only part of the torrent (which part is not readable) and
+  // something is missing. Data is refreshed at most once a second per path
+  // (about every 2 s for a lone StatStream), so the flip lands 20–23 s after
+  // the first peer.
+  bool  availability_known  = 10;
+  // missing are the pieces neither complete here nor claimed by any
+  // connected peer, as sorted half-open runs [start, end) of positions.
+  // Empty unless availability_known. At most 512 runs: past that, runs
+  // separated by the smallest gaps are merged, so a merged run also covers
+  // pieces that are complete here or claimed by a peer, any number of them;
+  // draw completion (pieces[].complete) over the hatch. In a StatStream
+  // frame it is sent only when it changed: see missing_unchanged.
+  repeated PieceRange missing = 11;
+  // wanted_missing is how many wanted pieces (priority above NONE) that are
+  // not complete have no source among the connected peers. 0 unless
+  // availability_known. Wanted includes sticky priorities nobody may be
+  // waiting on: a warm-up's HIGH stays until the piece completes or the
+  // torrent unloads, a closed reader's window stays NORMAL for 90 s, and a
+  // whole-torrent reply counts every file's. Pair it with a lack of
+  // progress, or use reader_missing, before calling a transfer stuck.
+  int32 wanted_missing      = 12;
+  // reader_missing is how many of the wanted_missing pieces an open reader
+  // (a stream or a download in progress) is on or reading ahead into
+  // (priority READAHEAD or above): above 0, a reader is or soon will be
+  // waiting on a piece no connected peer has. 0 unless availability_known.
+  int32 reader_missing      = 13;
+  // missing_unchanged is set only in StatStream frames: true when the frame
+  // leaves missing out because it is the same as in the last frame sent —
+  // keep the runs you have. False in every frame that carries missing,
+  // including one where it became empty, and in Stat replies.
+  bool  missing_unchanged   = 14;
+}
+
+// A half-open run [start, end) of piece positions.
+message PieceRange {
+  int64 start = 1;
+  int64 end   = 2;
 }
 
 message Piece {

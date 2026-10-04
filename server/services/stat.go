@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/anacrolix/torrent"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -52,7 +54,12 @@ type Stat struct {
 	pb.UnimplementedTorrentWebSeederServer
 	tm      *TorrentMap
 	cache   lazymap.LazyMap[*pb.StatReply]
+	swarms  lazymap.LazyMap[*swarmSnapshot]
 	dataDir string
+	// swarmReads counts readSwarm calls: the cost guards (no read with a
+	// connected seeder, one read per torrent per second whatever the number
+	// of paths) are invisible in the replies, so tests count.
+	swarmReads atomic.Int64
 }
 
 func NewStat(tm *TorrentMap, dataDir string) *Stat {
@@ -65,10 +72,102 @@ func NewStat(tm *TorrentMap, dataDir string) *Stat {
 			// seconds read as "stuck" next to a 1 s countdown. torrentStat is
 			// a walk over the piece bitfield; per torrent, shared by every
 			// subscriber through this cache.
+			//
+			// The expiry timer starts when a computation ends and a hit does
+			// not touch it, while StatStream's ticker is phase-locked to its
+			// first computation: the tick after a computation still hits,
+			// the next one recomputes. A lone subscriber gets fresh numbers
+			// every ~2 s, not every second; several subscribers or paths out
+			// of phase get up to one computation a second.
 			Expire:      1 * time.Second,
 			StoreErrors: true,
 			ErrorExpire: time.Second,
 		}),
+		// Per torrent, not per path: every scope asked about a torrent (a
+		// season pack's episodes, the root directory) shares one read of
+		// its peers a second. Filled only from statUncached, so only while
+		// someone is looking.
+		swarms: lazymap.New[*swarmSnapshot](&lazymap.Config{
+			Expire: 1 * time.Second,
+		}),
+	}
+}
+
+// swarmSnapshot is what one torrent's connected peers and web seeds have,
+// read at most once a second (Stat.swarms) and shared by every scope asked
+// about the torrent in that second. Read-only once built.
+type swarmSnapshot struct {
+	// union is the union of the connected peers' piece sets,
+	// torrent-indexed; nil when they were not read (webseedSeeders > 0).
+	union           *roaring.Bitmap
+	connected       int
+	webseedSeeders  int
+	partialWebseeds int
+	peersFor        time.Duration
+}
+
+// readSwarm reads t's web seeds and peers through the library's public API.
+// Each call below is a read lock on the client lock — one RWMutex for every
+// torrent on the pod: WebseedPeerConns, Peer.Stats per web seed, PeerConns,
+// and PeerConn.PeerPieces per peer, which also clones the peer's bitmap
+// (Peer.newPeerPieces). So 2 + web seeds + connected peers acquisitions;
+// prod runs with web seeds disabled, where it is 2 + peers. Each clone is
+// folded into one union and dropped, so a snapshot holds one bitmap however
+// many peers there are, and each scope's computation is O(scope), not
+// O(peers × torrent). Callers skip it when a connected seeder is counted.
+func readSwarm(t *torrent.Torrent, tl *peerTimeline) *swarmSnapshot {
+	sw := &swarmSnapshot{peersFor: tl.connectedFor(time.Now())}
+	// A web seed's piece set is readable as a count (Peer.Stats →
+	// remotePieceCount of webseedPeer.peerPieces, the web seed client's
+	// Pieces): every piece once the info is known (webseed.Client.SetInfo),
+	// or none for a directory URL without a trailing '/', which the library
+	// never requests from. The library counts it into every piece's
+	// availability the same way (webseedPeer.onGotInfo), and so does this —
+	// a web seed whose URL is dead claims every piece all the same, as a
+	// peer's HAVE_ALL can be false.
+	n := t.NumPieces()
+	for _, ws := range t.WebseedPeerConns() {
+		switch c := ws.Stats().RemotePieceCount; {
+		case c >= n:
+			sw.webseedSeeders++
+		case c > 0:
+			sw.partialWebseeds++
+		}
+	}
+	if sw.webseedSeeders > 0 {
+		return sw
+	}
+	conns := t.PeerConns()
+	sw.connected = len(conns)
+	sw.union = roaring.New()
+	for _, pc := range conns {
+		sw.union.Or(pc.PeerPieces())
+	}
+	return sw
+}
+
+// fillAvailability sets rep's swarm fields for the scope whose first piece is
+// torrent piece offset; complete, wanted and reading are per scope piece,
+// seeders is the torrent's ConnectedSeeders.
+func (s *Stat) fillAvailability(rep *pb.StatReply, t *torrent.Torrent, tl *peerTimeline, seeders, offset int, complete, wanted, reading []bool) {
+	in := availabilityInput{offset: offset, complete: complete, wanted: wanted, reading: reading, seeders: seeders}
+	if seeders == 0 {
+		sw, _ := s.swarms.Get(t.InfoHash().HexString(), func() (*swarmSnapshot, error) {
+			s.swarmReads.Add(1)
+			return readSwarm(t, tl), nil
+		})
+		in.seeders, in.connected, in.partialWebseeds, in.peersFor = sw.webseedSeeders, sw.connected, sw.partialWebseeds, sw.peersFor
+		if sw.union != nil {
+			in.peers = []*roaring.Bitmap{sw.union}
+		}
+	}
+	a := computeAvailability(in)
+	rep.Availability = a.fraction
+	rep.AvailabilityKnown = a.known
+	rep.WantedMissing = int32(a.wantedMissing)
+	rep.ReaderMissing = int32(a.readerMissing)
+	for _, r := range a.missing {
+		rep.Missing = append(rep.Missing, &pb.PieceRange{Start: int64(r.start), End: int64(r.end)})
 	}
 }
 
@@ -82,7 +181,7 @@ func fileBytesCompleted(f *torrent.File) int64 {
 	return res
 }
 
-func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
+func (s *Stat) torrentStat(t *torrent.Torrent, tl *peerTimeline) (*pb.StatReply, error) {
 	completed := t.BytesCompleted()
 	rStatus := pb.StatReply_SEEDING
 	if completed == 0 {
@@ -90,6 +189,7 @@ func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 	}
 	numPieces := t.NumPieces()
 	pieces := make([]*pb.Piece, 0, numPieces)
+	complete, wanted, reading := make([]bool, numPieces), make([]bool, numPieces), make([]bool, numPieces)
 	for i := 0; i < numPieces; i++ {
 		p := t.Piece(i)
 		ps := p.State()
@@ -100,12 +200,13 @@ func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 			pr = pb.Piece_HIGH
 		}
 		pieces = append(pieces, &pb.Piece{Position: int64(i), Complete: ps.Complete, Priority: pr})
+		complete[i], wanted[i], reading[i] = ps.Complete, ps.Priority > torrent.PiecePriorityNone, ps.Priority >= torrent.PiecePriorityReadahead
 	}
 	stats := t.Stats()
 	peers := stats.ActivePeers
 	seeders := stats.ConnectedSeeders
 	leechers := peers - seeders
-	return &pb.StatReply{
+	rep := &pb.StatReply{
 		Completed: completed,
 		Total:     t.Info().TotalLength(),
 		Peers:     int32(peers),
@@ -114,10 +215,12 @@ func (s *Stat) torrentStat(t *torrent.Torrent) (*pb.StatReply, error) {
 		Leechers:  int32(leechers),
 		Pieces:    pieces,
 		Live:      true,
-	}, nil
+	}
+	s.fillAvailability(rep, t, tl, seeders, 0, complete, wanted, reading)
+	return rep, nil
 }
 
-func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, error) {
+func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File, tl *peerTimeline) (*pb.StatReply, error) {
 	completed := fileBytesCompleted(f)
 	rStatus := pb.StatReply_SEEDING
 	if completed == 0 {
@@ -125,6 +228,7 @@ func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, err
 	}
 	state := f.State()
 	pieces := make([]*pb.Piece, 0, len(state))
+	complete, wanted, reading := make([]bool, len(state)), make([]bool, len(state)), make([]bool, len(state))
 	for i, p := range state {
 		pr := pb.Piece_NONE
 		if p.Priority == torrent.PiecePriorityNormal {
@@ -133,12 +237,13 @@ func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, err
 			pr = pb.Piece_HIGH
 		}
 		pieces = append(pieces, &pb.Piece{Position: int64(i), Complete: p.Complete, Priority: pr})
+		complete[i], wanted[i], reading[i] = p.Complete, p.Priority > torrent.PiecePriorityNone, p.Priority >= torrent.PiecePriorityReadahead
 	}
 	stats := t.Stats()
 	peers := stats.ActivePeers
 	seeders := stats.ConnectedSeeders
 	leechers := peers - seeders
-	return &pb.StatReply{
+	rep := &pb.StatReply{
 		Completed: completed,
 		Total:     f.FileInfo().Length,
 		Peers:     int32(peers),
@@ -147,7 +252,15 @@ func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File) (*pb.StatReply, err
 		Leechers:  int32(leechers),
 		Pieces:    pieces,
 		Live:      true,
-	}, nil
+	}
+	// Position 0 is the piece the file starts in, the same piece File.State
+	// starts from (offset / piece length).
+	var first int
+	if pl := t.Info().PieceLength; pl > 0 {
+		first = int(f.Offset() / pl)
+	}
+	s.fillAvailability(rep, t, tl, seeders, first, complete, wanted, reading)
+	return rep, nil
 }
 
 func findFile(t *torrent.Torrent, path string) *torrent.File {
@@ -192,7 +305,7 @@ func dirPieceRange(pieceLen, offset, length int64) (begin, end int) {
 // torrents a day answered 500 — every single-root-directory torrent whose
 // resource page asked for the root item's stats), and the badge read
 // "status unavailable".
-func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File) (*pb.StatReply, error) {
+func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File, tl *peerTimeline) (*pb.StatReply, error) {
 	var completed, total int64
 	first, last := int64(-1), int64(0)
 	for _, f := range files {
@@ -214,6 +327,7 @@ func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File) (*pb.StatReply
 		end = n
 	}
 	pieces := make([]*pb.Piece, 0, end-begin)
+	complete, wanted, reading := make([]bool, end-begin), make([]bool, end-begin), make([]bool, end-begin)
 	for i := begin; i < end; i++ {
 		ps := t.Piece(i).State()
 		pr := pb.Piece_NONE
@@ -223,11 +337,12 @@ func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File) (*pb.StatReply
 			pr = pb.Piece_HIGH
 		}
 		pieces = append(pieces, &pb.Piece{Position: int64(i - begin), Complete: ps.Complete, Priority: pr})
+		complete[i-begin], wanted[i-begin], reading[i-begin] = ps.Complete, ps.Priority > torrent.PiecePriorityNone, ps.Priority >= torrent.PiecePriorityReadahead
 	}
 	stats := t.Stats()
 	peers := stats.ActivePeers
 	seeders := stats.ConnectedSeeders
-	return &pb.StatReply{
+	rep := &pb.StatReply{
 		Completed: completed,
 		Total:     total,
 		Peers:     int32(peers),
@@ -236,7 +351,9 @@ func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File) (*pb.StatReply
 		Leechers:  int32(peers - seeders),
 		Pieces:    pieces,
 		Live:      true,
-	}, nil
+	}
+	s.fillAvailability(rep, t, tl, seeders, begin, complete, wanted, reading)
+	return rep, nil
 }
 
 func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
@@ -248,12 +365,12 @@ func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatRe
 	// Look, do not touch: a torrent nobody is streaming stays unloaded and
 	// its numbers come from disk (coldStat). Peek never joins the swarm or
 	// extends the TTL — that is for serveFile and warm-up to do.
-	t := s.tm.Peek(h)
+	t, tl := s.tm.peek(h)
 	if t == nil {
 		return s.coldStat(h, in.GetPath())
 	}
 	if in.GetPath() == "" {
-		return s.torrentStat(t)
+		return s.torrentStat(t, tl)
 	}
 	f := findFile(t, in.GetPath())
 	if f == nil {
@@ -262,11 +379,11 @@ func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatRe
 		// directory) — aggregate its files. Only a path matching nothing
 		// is NotFound.
 		if files := dirFiles(t, in.GetPath()); len(files) > 0 {
-			return s.dirStat(t, files)
+			return s.dirStat(t, files, tl)
 		}
 		return nil, status.Errorf(codes.NotFound, "unable to find file for path=%v", in.GetPath())
 	}
-	return s.fileStat(t, f)
+	return s.fileStat(t, f, tl)
 }
 
 func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
@@ -293,6 +410,68 @@ func diff(a []*pb.Piece, b []*pb.Piece) []*pb.Piece {
 		d = append(d, aa)
 	}
 	return d
+}
+
+// statChanged reports whether rep has anything a client draws that prev
+// (the last reply sent; nil before the first) did not: the counters, the
+// swarm split, any piece's state (diffPieces) — a priority bump, a piece now
+// being fetched, used to be invisible until a piece completed — or the swarm
+// availability. A torrent stuck with peers changes nothing but the last.
+func statChanged(rep, prev *pb.StatReply, diffPieces []*pb.Piece) bool {
+	return prev == nil ||
+		rep.GetCompleted() != prev.GetCompleted() ||
+		rep.GetPeers() != prev.GetPeers() ||
+		rep.GetSeeders() != prev.GetSeeders() ||
+		rep.GetLeechers() != prev.GetLeechers() ||
+		rep.GetLive() != prev.GetLive() ||
+		len(diffPieces) > 0 ||
+		rep.GetAvailability() != prev.GetAvailability() ||
+		rep.GetAvailabilityKnown() != prev.GetAvailabilityKnown() ||
+		rep.GetWantedMissing() != prev.GetWantedMissing() ||
+		rep.GetReaderMissing() != prev.GetReaderMissing() ||
+		!samePieceRanges(rep.GetMissing(), prev.GetMissing())
+}
+
+func samePieceRanges(a, b []*pb.PieceRange) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].GetStart() != b[i].GetStart() || a[i].GetEnd() != b[i].GetEnd() {
+			return false
+		}
+	}
+	return true
+}
+
+// statFrame is what StatStream sends for rep after prev (the last reply
+// sent; nil before the first): pieces as the diff against it, the counters
+// whole, and missing whole but only when it changed. A frame sent because
+// pieces completed would otherwise repeat up to 512 unchanged ranges (~14.5
+// KB against ~240 B for a one-piece diff); instead it leaves missing empty
+// and sets missing_unchanged, which is false in every frame that carries
+// missing — including one where it became empty — and in Stat replies.
+func statFrame(rep, prev *pb.StatReply, diffPieces []*pb.Piece) *pb.StatReply {
+	f := &pb.StatReply{
+		Completed:         rep.GetCompleted(),
+		Peers:             rep.GetPeers(),
+		Seeders:           rep.GetSeeders(),
+		Leechers:          rep.GetLeechers(),
+		Status:            rep.GetStatus(),
+		Total:             rep.GetTotal(),
+		Pieces:            diffPieces,
+		Live:              rep.GetLive(),
+		Availability:      rep.GetAvailability(),
+		AvailabilityKnown: rep.GetAvailabilityKnown(),
+		WantedMissing:     rep.GetWantedMissing(),
+		ReaderMissing:     rep.GetReaderMissing(),
+	}
+	if prev != nil && samePieceRanges(rep.GetMissing(), prev.GetMissing()) {
+		f.MissingUnchanged = true
+	} else {
+		f.Missing = rep.GetMissing()
+	}
+	return f
 }
 
 func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStreamServer) error {
@@ -349,34 +528,16 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 				errCh <- err
 				return
 			}
-			// Send when anything a client draws has changed: the counters,
-			// the swarm split, or any piece's state — a priority bump (piece
-			// now being fetched) used to be invisible until a piece completed.
 			var diffPieces []*pb.Piece
 			if prevRep == nil {
 				diffPieces = rep.GetPieces()
 			} else {
 				diffPieces = diff(rep.GetPieces(), prevRep.GetPieces())
 			}
-			if prevRep == nil ||
-				rep.GetCompleted() != prevRep.GetCompleted() ||
-				rep.GetPeers() != prevRep.GetPeers() ||
-				rep.GetSeeders() != prevRep.GetSeeders() ||
-				rep.GetLeechers() != prevRep.GetLeechers() ||
-				rep.GetLive() != prevRep.GetLive() ||
-				len(diffPieces) > 0 {
+			if statChanged(rep, prevRep, diffPieces) {
+				frame := statFrame(rep, prevRep, diffPieces)
 				prevRep = rep
-				diffRep := &pb.StatReply{
-					Completed: rep.GetCompleted(),
-					Peers:     rep.GetPeers(),
-					Seeders:   rep.GetSeeders(),
-					Leechers:  rep.GetLeechers(),
-					Status:    rep.GetStatus(),
-					Total:     rep.GetTotal(),
-					Pieces:    diffPieces,
-					Live:      rep.GetLive(),
-				}
-				if err := stream.Send(diffRep); err != nil {
+				if err := stream.Send(frame); err != nil {
 					// Send losing the peer is the same non-event as the
 					// context being cancelled — it just happens to be
 					// noticed by the write rather than by the select.
