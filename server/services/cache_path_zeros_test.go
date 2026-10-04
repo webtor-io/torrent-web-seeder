@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,8 +19,10 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	logrusmiddleware "github.com/bakins/logrus-middleware"
 	sqlite "github.com/go-llsqlite/adapter"
 	"github.com/go-llsqlite/adapter/sqlitex"
+	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
 
@@ -694,6 +698,53 @@ func TestStatsAskThePieces(t *testing.T) {
 	ws().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+zHash+"/pack/b.mkv?stats", nil))
 	if w.Code == http.StatusNotFound {
 		t.Error("?stats on b answers 404 with piece 1 incomplete")
+	}
+}
+
+// TestStatsOfAFileWithAHoleLeaveTheTorrentUnloaded: since 3fb8c9d a file
+// whose row lies over an incomplete piece gets the ?stats stream instead of a
+// 404. The stream looks at the torrent and does not load it (statUncached
+// peeks; coldStat reads the db): a page view must not join the swarm.
+func TestStatsOfAFileWithAHoleLeaveTheTorrentUnloaded(t *testing.T) {
+	dataDir := zSeed(t)
+	zExec(t, dataDir, `update piece_completion set complete = 0 where "index" = 1`)
+	torrents := zTorrents(t)
+	tc := &TorrentClient{
+		swarm:              newSwarmStats(),
+		rLimit:             -1,
+		maxUnverifiedBytes: -1,
+		dataDir:            dataDir,
+		testConfig:         func(cfg *torrent.ClientConfig) { loopbackConfig(cfg) },
+	}
+	t.Cleanup(tc.Close)
+	tm := NewTorrentMap(tc, nil, &FileStoreMap{p: torrents})
+	ws := &WebSeeder{
+		tm:   tm,
+		fcm:  zFCM(dataDir),
+		tfcm: NewTorrentFileCountMap(&FileStoreMap{p: torrents}, nil),
+		st:   NewStatWeb(NewStat(tm, dataDir)),
+	}
+	logger := log.New()
+	logger.SetOutput(io.Discard)
+	h := (&logrusmiddleware.Middleware{Logger: logger}).Handler(ws, "")
+
+	// The stream runs until the viewer leaves.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+zHash+"/pack/b.mkv?stats", nil).WithContext(ctx))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "event: statupdate") {
+		t.Fatalf("?stats on b: %d, %q", w.Code, w.Body.String())
+	}
+	if tm.Peek(zHash) != nil {
+		t.Error("?stats on b loaded the torrent")
+	}
+	cl, err := tc.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(cl.Torrents()); n != 0 {
+		t.Errorf("the client has %d torrents after ?stats", n)
 	}
 }
 
