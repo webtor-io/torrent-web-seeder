@@ -411,10 +411,17 @@ func (me mmapStoragePiece) pieceKey() metainfo.PieceKey {
 	return metainfo.PieceKey{InfoHash: me.t.infoHash, Index: me.p.Index()}
 }
 
+// Completion is piece_completion, shared by every pod on the node, except
+// for a piece this pod punched: another pod's re-download marks it complete
+// there, and taking that would leave the hole here for good (no download
+// here, so no WriteAt to clear the flag; every read ErrPieceEvicted).
 func (sp mmapStoragePiece) Completion() storage.Completion {
 	c, err := sp.t.pc.Get(sp.pieceKey())
 	if err != nil {
 		panic(err)
+	}
+	if sp.t.isEvicted(sp.p.Index()) {
+		c.Complete = false
 	}
 	return c
 }

@@ -225,3 +225,76 @@ func (p evictHookPiece) MarkNotComplete() error {
 	}
 	return p.PieceImpl.MarkNotComplete()
 }
+
+// evicted[] is pod-local, piece_completion is node-wide. Pod A evicts piece
+// p while alone. Pod B loads the torrent afterwards and downloads p:
+// piece_completion[p] = 1. A's library then re-reads p's completion from
+// storage -- its reader does that for every piece of its readahead window
+// after any read error (fork reader.go:386-388); Piece.UpdateCompletion
+// stands in for it here. Taking B's 1 would mark p complete on A, so A would
+// never download it again, never clear its flag, and answer every read of p
+// with ErrPieceEvicted for as long as it held the torrent.
+func TestForeignCompletionOverLocalEvictedFlag(t *testing.T) {
+	t.Run("B re-downloads", func(t *testing.T) { testForeignCompletion(t, true) })
+	t.Run("control: nobody re-downloads", func(t *testing.T) { testForeignCompletion(t, false) })
+}
+
+func testForeignCompletion(t *testing.T, bDownloads bool) {
+	const (
+		pieceLen = 64 << 10
+		pieces   = 8
+		p        = 1
+	)
+	data, mi := multiChunkPayload(t, pieceLen, pieces)
+	seeder := seedingClient(t, data, mi)
+	want := data[p*pieceLen : (p+1)*pieceLen]
+	dir := t.TempDir()
+
+	stA := NewMMap(dir, pieces*pieceLen-1, FileCacheConfig{})
+	hook := &evictHook{ClientImpl: stA, piece: -1, failed: make(chan struct{}), release: make(chan struct{})}
+	cfgA := addTestConfig(t.TempDir())
+	cfgA.DefaultStorage = hook
+	clA, err := torrent.NewClient(cfgA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stA.SetClient(clA)
+	t.Cleanup(func() { clA.Close() })
+	torA, err := clA.AddTorrent(mi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	torA.AddClientPeer(seeder)
+	if got := readPiece(t, torA, p, pieceLen, false, 20*time.Second); !bytes.Equal(got, want) {
+		t.Fatal("pod A first download differs")
+	}
+	if !hook.ts.evictPiece(p) || torA.PieceState(p).Complete {
+		t.Fatal("pod A could not evict the piece while alone")
+	}
+
+	if bDownloads {
+		stB := NewMMap(dir, 0, FileCacheConfig{})
+		cfgB := addTestConfig(t.TempDir())
+		cfgB.DefaultStorage = stB
+		clB, err := torrent.NewClient(cfgB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stB.SetClient(clB)
+		t.Cleanup(func() { clB.Close() })
+		torB, err := clB.AddTorrent(mi)
+		if err != nil {
+			t.Fatal(err)
+		}
+		torB.AddClientPeer(seeder)
+		if got := readPiece(t, torB, p, pieceLen, false, 20*time.Second); !bytes.Equal(got, want) {
+			t.Fatal("pod B download differs")
+		}
+	}
+
+	torA.Piece(p).UpdateCompletion()
+	if got := readPieceWithin(torA, p, pieceLen, false, 5*time.Second); !bytes.Equal(got, want) {
+		t.Errorf("pod A reads %d of %d bytes of piece %d (A complete: %v, A evicted flag: %v)",
+			len(got), pieceLen, p, torA.PieceState(p).Complete, hook.ts.isEvicted(p))
+	}
+}
