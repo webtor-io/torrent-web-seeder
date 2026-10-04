@@ -231,9 +231,10 @@ func (p evictHookPiece) MarkNotComplete() error {
 // piece_completion[p] = 1. A's library then re-reads p's completion from
 // storage -- its reader does that for every piece of its readahead window
 // after any read error (fork reader.go:386-388); Piece.UpdateCompletion
-// stands in for it here. Taking B's 1 would mark p complete on A, so A would
-// never download it again, never clear its flag, and answer every read of p
-// with ErrPieceEvicted for as long as it held the torrent.
+// stands in for it here. A takes B's 1 and reads B's bytes from the shared
+// disk. Keeping its flag, it answered every read of p with ErrPieceEvicted for
+// as long as it held the torrent; calling p incomplete instead, it downloaded
+// p again and wrote over the bytes B had verified.
 func TestForeignCompletionOverLocalEvictedFlag(t *testing.T) {
 	t.Run("B re-downloads", func(t *testing.T) { testForeignCompletion(t, true) })
 	t.Run("control: nobody re-downloads", func(t *testing.T) { testForeignCompletion(t, false) })
@@ -268,6 +269,19 @@ func testForeignCompletion(t *testing.T, bDownloads bool) {
 	if got := readPiece(t, torA, p, pieceLen, false, 20*time.Second); !bytes.Equal(got, want) {
 		t.Fatal("pod A first download differs")
 	}
+	// Everything the read at the end reaches (p and on, within the budget),
+	// and nothing wanted after: that read can then download nothing but p.
+	torA.DownloadPieces(p, pieces)
+	for i, deadline := p, time.Now().Add(20*time.Second); i < pieces; {
+		if torA.PieceState(i).Complete {
+			i++
+		} else if time.Now().After(deadline) {
+			t.Fatalf("pod A did not download piece %d", i)
+		} else {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	torA.CancelPieces(p, pieces)
 	if !hook.ts.evictPiece(p) || torA.PieceState(p).Complete {
 		t.Fatal("pod A could not evict the piece while alone")
 	}
@@ -292,9 +306,62 @@ func testForeignCompletion(t *testing.T, bDownloads bool) {
 		}
 	}
 
+	stats := torA.Stats()
+	before := stats.ChunksReadUseful.Int64()
 	torA.Piece(p).UpdateCompletion()
 	if got := readPieceWithin(torA, p, pieceLen, false, 5*time.Second); !bytes.Equal(got, want) {
 		t.Errorf("pod A reads %d of %d bytes of piece %d (A complete: %v, A evicted flag: %v)",
 			len(got), pieceLen, p, torA.PieceState(p).Complete, hook.ts.isEvicted(p))
 	}
+	stats = torA.Stats()
+	chunks := stats.ChunksReadUseful.Int64() - before
+	if bDownloads && chunks != 0 {
+		t.Errorf("pod A downloaded %d chunks over piece %d, which pod B had verified", chunks, p)
+	}
+	if !bDownloads && chunks == 0 {
+		t.Error("control: pod A read its evicted piece without downloading it")
+	}
+}
+
+// Completion clears the flag only for a piece the db calls complete, and
+// reads the two as one step against a punch of this pod's. Between the two, a
+// punch sets the db to 0 and the flag; Completion would hold the 1 it read
+// before, take the flag for one left by an earlier punch, and clear it over
+// the hole just punched.
+func TestCompletionKeepsTheFlagOfAHole(t *testing.T) {
+	impl := zOpen(t, zSeed(t), nil)
+	t.Cleanup(func() { _ = impl.Close() })
+	ts := zStorage(impl)
+	punched := make(chan struct{})
+	var once sync.Once
+	ts.pc = getHookPC{ts.pc, func() {
+		once.Do(func() {
+			go func() { ts.evictPiece(1); close(punched) }()
+			select {
+			case <-punched:
+			case <-time.After(200 * time.Millisecond): // blocked by the shard lock
+			}
+		})
+	}}
+	impl.Piece(zInfo().Piece(1)).Completion()
+	<-punched
+	if !ts.isEvicted(1) {
+		t.Fatal("punched under Completion: piece 1 is a hole and its evicted flag is clear")
+	}
+	impl.Piece(zInfo().Piece(1)).Completion()
+	if !ts.isEvicted(1) {
+		t.Error("Completion of the incomplete piece 1 cleared its evicted flag")
+	}
+}
+
+// getHookPC runs afterGet after each Get.
+type getHookPC struct {
+	storage.PieceCompletion
+	afterGet func()
+}
+
+func (p getHookPC) Get(pk metainfo.PieceKey) (storage.Completion, error) {
+	c, err := p.PieceCompletion.Get(pk)
+	p.afterGet()
+	return c, err
 }

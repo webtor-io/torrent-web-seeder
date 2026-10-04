@@ -411,17 +411,27 @@ func (me mmapStoragePiece) pieceKey() metainfo.PieceKey {
 	return metainfo.PieceKey{InfoHash: me.t.infoHash, Index: me.p.Index()}
 }
 
-// Completion is piece_completion, shared by every pod on the node, except
-// for a piece this pod punched: another pod's re-download marks it complete
-// there, and taking that would leave the hole here for good (no download
-// here, so no WriteAt to clear the flag; every read ErrPieceEvicted).
+// Completion is piece_completion, shared by every pod on the node. A piece
+// this pod punched and the db calls complete was verified since by another
+// pod, on the same disk: a punch runs only while nobody else holds the dir
+// (whileAlone) and marks the piece 0 first, and this pod punches the piece
+// again only once its LRU has it back. So the flag goes and the bytes are
+// read. Kept, the flag answered every read with ErrPieceEvicted for as long
+// as the pod held the torrent (no download here, so no WriteAt to clear it);
+// reporting the piece incomplete instead had the pod download it again and
+// write over the other pod's verified bytes. The shard lock keeps the db and
+// the flag from being read across a punch of this pod's.
 func (sp mmapStoragePiece) Completion() storage.Completion {
+	idx := sp.p.Index()
+	mu := sp.t.pieceLock(idx)
+	mu.RLock()
+	defer mu.RUnlock()
 	c, err := sp.t.pc.Get(sp.pieceKey())
 	if err != nil {
 		panic(err)
 	}
-	if sp.t.isEvicted(sp.p.Index()) {
-		c.Complete = false
+	if c.Complete && sp.t.isEvicted(idx) {
+		sp.t.setEvicted(idx, false)
 	}
 	return c
 }
