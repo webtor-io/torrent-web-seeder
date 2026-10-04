@@ -55,6 +55,14 @@ func TestColdReply(t *testing.T) {
 		if rep.GetPeers() != 0 || rep.GetSeeders() != 0 {
 			t.Errorf("%q: cold reply invented peers", c.path)
 		}
+		// web-ui takes availability whenever availability_known is set,
+		// live or not: a cold reply that set it would hatch a torrent nobody
+		// has joined the swarm of.
+		if rep.GetAvailabilityKnown() || rep.GetAvailability() != 0 || len(rep.GetMissing()) != 0 ||
+			rep.GetWantedMissing() != 0 || rep.GetReaderMissing() != 0 {
+			t.Errorf("%q: cold reply claims swarm availability: known=%v availability=%v missing=%v wanted_missing=%d reader_missing=%d, want all zero",
+				c.path, rep.GetAvailabilityKnown(), rep.GetAvailability(), rangesOf(rep), rep.GetWantedMissing(), rep.GetReaderMissing())
+		}
 		if got := rep.GetPieces()[0].GetComplete(); got != c.firstDone {
 			t.Errorf("%q: first piece complete=%v want %v", c.path, got, c.firstDone)
 		}
