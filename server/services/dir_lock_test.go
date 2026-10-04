@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"net/http"
@@ -139,5 +140,78 @@ func TestCachePathStalledStreamLetsGoOfTheDir(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("a stalled cache-path stream still holds the dir 5 s after its 200 ms stall timeout")
 		}
+	}
+}
+
+// parkUncached lets resource.cached through and parks resource.uncached until
+// released, as a NATS publish on a stalled socket would: nats.go writes to the
+// socket synchronously once its buffer is full, for up to its one-minute
+// flusher timeout.
+type parkUncached struct {
+	cached  chan string
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *parkUncached) Publish(subject string, data []byte) error {
+	if subject == cachedSubject {
+		p.cached <- subject + " " + string(data)
+		return nil
+	}
+	p.once.Do(func() { close(p.entered) })
+	<-p.release
+	return nil
+}
+
+// An eviction holds the torrent's dir exclusive, and every other pod's
+// OpenTorrent of the torrent waits for it in lockDir -- under the library's
+// client lock (setInfo), so that pod's whole client waits with it. Nothing in
+// there may wait on the network. The Uncached publish of the evicted piece's
+// file did.
+func TestEvictionPublishesOutsideTheDir(t *testing.T) {
+	dataDir := zSeed(t)
+	info := zInfo()
+	pub := &parkUncached{cached: make(chan string, 16), entered: make(chan struct{}), release: make(chan struct{})}
+	impl := zOpen(t, dataDir, pub)
+	defer impl.Close()
+	defer close(pub.release)         // before Close, which waits for the eviction
+	for got := ""; got != cachedD; { // b announced: its eviction publishes
+		select {
+		case got = <-pub.cached:
+		case <-time.After(10 * time.Second):
+			t.Fatal("completion loop never announced d")
+		}
+	}
+
+	zTouch(t, impl, info, 0)
+	zTouch(t, impl, info, 3)
+	go func() { // c's piece arrives; the LRU evicts piece 1, b's tail
+		p := info.Piece(2)
+		sp := impl.Piece(p)
+		_, _ = sp.WriteAt(zData()[p.Offset():p.Offset()+p.Length()], 0)
+		_ = sp.MarkComplete()
+	}()
+	select {
+	case <-pub.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("eviction of piece 1 never published Uncached(b)")
+	}
+
+	opened := make(chan error, 1)
+	go func() {
+		pod2, err := NewMMap(dataDir, 0, FileCacheConfig{}).OpenTorrent(context.Background(), info, zIH)
+		if err == nil {
+			err = pod2.Close()
+		}
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("another pod's OpenTorrent waited 2 s for the dir while the eviction's Uncached publish was stuck")
 	}
 }

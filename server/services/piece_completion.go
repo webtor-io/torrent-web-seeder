@@ -346,16 +346,20 @@ func (s *pieceCompletion) Set(pk metainfo.PieceKey, b bool) error {
 }
 
 // UncompleteFiles removes entries from the file_completion table.
-// Called during piece eviction to invalidate file-level cache.
-func (s *pieceCompletion) UncompleteFiles(paths []string) error {
+// Called during piece eviction to invalidate file-level cache. The files it
+// takes back are published by publish, which the caller runs once it holds no
+// lock: a publish can block on a stalled socket (nats.go writes synchronously
+// once its buffer is full, for up to a minute). Not under this mutex, which is
+// on the path of every piece's Set; not under eviction's exclusive hold of the
+// torrent's dir, which every other pod's OpenTorrent waits for under its
+// client lock.
+func (s *pieceCompletion) UncompleteFiles(paths []string) (publish func(), err error) {
 	gone, err := s.uncompleteFiles(paths)
-	// Published after the lock is released, never under it: a publish can
-	// block on a stalled socket, and this mutex is on the path of every
-	// piece's Set.
-	for _, idx := range gone {
-		s.events.Uncached(s.hash.HexString(), idx)
-	}
-	return err
+	return func() {
+		for _, idx := range gone {
+			s.events.Uncached(s.hash.HexString(), idx)
+		}
+	}, err
 }
 
 func (s *pieceCompletion) uncompleteFiles(paths []string) (gone []int, err error) {

@@ -78,18 +78,22 @@ func TestCacheEventsTransitions(t *testing.T) {
 
 	// Eviction of a piece of a file never announced says nothing -- the
 	// single-file-over-budget case, one call per evicted piece.
-	if err := pc.UncompleteFiles([]string{"pack/a.mkv"}); err != nil {
+	publish, err := pc.UncompleteFiles([]string{"pack/a.mkv"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	publish()
 	if got := rec.take(); len(got) != 0 {
 		t.Fatalf("never announced: got %v", got)
 	}
 
 	// The announced one is taken back, once.
 	for i := 0; i < 2; i++ {
-		if err := pc.UncompleteFiles([]string{"pack/sub/b.mkv"}); err != nil {
+		publish, err := pc.UncompleteFiles([]string{"pack/sub/b.mkv"})
+		if err != nil {
 			t.Fatal(err)
 		}
+		publish()
 	}
 	if got, want := rec.take(), []string{`resource.uncached {"resource_id":"` + evHash + `","file_idx":1}`}; !equalStrings(got, want) {
 		t.Fatalf("uncached: got %v, want %v", got, want)
@@ -110,9 +114,11 @@ func TestCacheEventsOffAndUnknownPath(t *testing.T) {
 	if err := pc.CompleteFile("pack/a.mkv"); err != nil {
 		t.Fatal(err)
 	}
-	if err := pc.UncompleteFiles([]string{"pack/a.mkv"}); err != nil {
+	publish, err := pc.UncompleteFiles([]string{"pack/a.mkv"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	publish()
 	var off *CacheEvents
 	off.Cached(evHash, 0)
 	off.Close()

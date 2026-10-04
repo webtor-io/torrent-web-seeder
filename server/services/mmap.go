@@ -489,7 +489,8 @@ func (ts *mmapTorrentStorage) evictOverBudget() {
 // next MarkComplete or sweep tries again.
 func (ts *mmapTorrentStorage) evictPiece(idx int) bool {
 	punched := false
-	if !ts.whileAlone(func() { punched = ts.punchPiece(idx) }) {
+	var publish func()
+	if !ts.whileAlone(func() { punched, publish = ts.punchPiece(idx) }) {
 		promCacheEvictionsDeferred.Inc()
 		return false
 	}
@@ -514,15 +515,22 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) bool {
 		// call does neither — no hash, no queue, nothing to drop.
 		ts.refreshCompletion(idx)
 	}
+	// Outside whileAlone and after the refresh: it may wait on the network
+	// (see UncompleteFiles).
+	if publish != nil {
+		publish()
+	}
 	return true
 }
 
 // punchPiece punches holes in the mmap'd files where piece idx lies and
-// marks it incomplete; it reports whether it did. Holds the piece shard's
+// marks it incomplete; it reports whether it did, and returns the publish of
+// the files that are no longer complete for the caller to run outside all
+// locks (see UncompleteFiles). Holds the piece shard's
 // eviction lock for the entire mutating section so concurrent ReadAt calls
 // cannot observe the transient state where mmap pages have been zeroed but
 // completion still reports the piece as available.
-func (ts *mmapTorrentStorage) punchPiece(idx int) bool {
+func (ts *mmapTorrentStorage) punchPiece(idx int) (bool, func()) {
 	piece := ts.info.Piece(idx)
 	pk := metainfo.PieceKey{InfoHash: ts.infoHash, Index: idx}
 
@@ -541,13 +549,13 @@ func (ts *mmapTorrentStorage) punchPiece(idx int) bool {
 	// below one step for any two evictions of the piece.
 	if !ts.lru.Has(idx) {
 		mu.Unlock()
-		return false
+		return false, nil
 	}
 
 	if err := ts.pc.Set(pk, false); err != nil {
 		mu.Unlock()
 		log.WithError(err).Errorf("failed to mark piece %d incomplete during eviction", idx)
-		return false
+		return false, nil
 	}
 	// Flag first, punch second. Readers cannot currently observe the
 	// difference — the shard write lock held across this whole section
@@ -556,7 +564,7 @@ func (ts *mmapTorrentStorage) punchPiece(idx int) bool {
 	// correct if the punch ever moves out from under the lock, not because
 	// it closes a window today.
 	ts.setEvicted(idx, true)
-	ts.uncompleteAffectedFiles(idx)
+	publish := ts.uncompleteAffectedFiles(idx)
 
 	for _, region := range ts.pieceFileRegions(piece) {
 		region := region
@@ -590,7 +598,7 @@ func (ts *mmapTorrentStorage) punchPiece(idx int) bool {
 
 	log.Infof("evicted piece %d, freed %d bytes, used=%d budget=%d",
 		idx, freedBytes, ts.lru.Used(), ts.lru.budget)
-	return true
+	return true, publish
 }
 
 // refreshCompletion updates anacrolix's cached completion for a piece from
@@ -609,8 +617,9 @@ func (ts *mmapTorrentStorage) refreshCompletion(idx int) {
 }
 
 // uncompleteAffectedFiles finds files that include the given piece index
-// and removes them from the file_completion table.
-func (ts *mmapTorrentStorage) uncompleteAffectedFiles(pieceIndex int) {
+// and removes them from the file_completion table. It returns the publish of
+// that for the caller to run outside its locks, or nil.
+func (ts *mmapTorrentStorage) uncompleteAffectedFiles(pieceIndex int) func() {
 	var affectedFiles []string
 	if len(ts.info.Files) == 0 {
 		// Single-file torrent.
@@ -628,16 +637,20 @@ func (ts *mmapTorrentStorage) uncompleteAffectedFiles(pieceIndex int) {
 		}
 	}
 	if len(affectedFiles) == 0 {
-		return
+		return nil
 	}
 	type fileUncompleter interface {
-		UncompleteFiles(paths []string) error
+		UncompleteFiles(paths []string) (func(), error)
 	}
-	if fu, ok := ts.pc.(fileUncompleter); ok {
-		if err := fu.UncompleteFiles(affectedFiles); err != nil {
-			log.WithError(err).Error("failed to uncomplete files during eviction")
-		}
+	fu, ok := ts.pc.(fileUncompleter)
+	if !ok {
+		return nil
 	}
+	publish, err := fu.UncompleteFiles(affectedFiles)
+	if err != nil {
+		log.WithError(err).Error("failed to uncomplete files during eviction")
+	}
+	return publish
 }
 
 // torrentSpanFiles lays the torrent's files out under location as

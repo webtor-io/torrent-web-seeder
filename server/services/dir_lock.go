@@ -51,7 +51,9 @@ func openLockFile(path string) (*os.File, error) {
 
 // whileAlone runs fn with the torrent's directory held exclusive and reports
 // whether it could; false means another holder has the directory and fn did
-// not run.
+// not run. fn punches and writes sqlite, and nothing that can wait on the
+// network: every other pod's OpenTorrent of the torrent waits for it under
+// that pod's client lock.
 //
 // The storage holds the lock shared itself, and on Linux flock changes a held
 // lock by dropping it first: after a failed upgrade the storage holds nothing
