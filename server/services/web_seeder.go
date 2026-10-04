@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -197,22 +196,23 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		log.Error(err)
 	}
 
-	cp, err := s.fcm.Get(h, p)
+	file, release, err := s.fcm.Open(h, p)
 	if err != nil {
 		logWithField.WithError(err).Error("failed to check file cache")
 		http.Error(w, "failed to check file cache", http.StatusInternalServerError)
 		return
 	}
-	if cp != "" {
+	if file != nil {
+		defer release()
 		logWithField.Info("serve file from cache")
-		file, err := os.Open(cp)
-		if err != nil {
-			logWithField.WithError(err).Error("failed to open cached file")
-			http.Error(w, "failed to open cached file", http.StatusInternalServerError)
-			return
-		}
-		defer file.Close()
-		serveWithValidators(w, r, p, lastMod, etag, file)
+		// The open file holds the torrent's directory, and with it every
+		// eviction of this torrent on the node. A client that stops reading
+		// would hold it for as long as it stays connected, so like a torrent
+		// stream this one is cut after stallTimeout without progress: release
+		// closes the file under ServeContent and the response ends short.
+		tw := NewTouchWriter(w, nil, h)
+		go watchStall(r.Context(), release, tw.LastWrite, s.stallTimeout, logWithField)
+		serveWithValidators(tw, r, p, lastMod, etag, file)
 		return
 	}
 

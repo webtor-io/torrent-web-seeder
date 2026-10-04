@@ -147,6 +147,25 @@ func (s *completions) GetCompletedFiles() []string {
 	return files
 }
 
+// filePieces maps each file's path (as fileIndexes speaks it) to the first and
+// last piece its bytes lie in; last < first for an empty file.
+func filePieces(info *metainfo.Info) map[string][2]int {
+	if len(info.Files) == 0 {
+		return map[string][2]int{info.Name: {0, info.NumPieces() - 1}}
+	}
+	m := make(map[string][2]int, len(info.Files))
+	var off int64
+	for _, f := range info.Files {
+		r := [2]int{int(off / info.PieceLength), int((off + f.Length - 1) / info.PieceLength)}
+		if f.Length == 0 {
+			r[1] = r[0] - 1
+		}
+		m[info.Name+"/"+strings.Join(f.Path, "/")] = r
+		off += f.Length
+	}
+	return m
+}
+
 // fileIndexes maps the paths this file speaks in (info.Name, then the file's
 // own path) to positions in the torrent's file order. A single-file torrent is
 // its one file, index 0.
@@ -169,6 +188,7 @@ type pieceCompletion struct {
 	// complete file on every tick, and a consumer wants the transition.
 	events      *CacheEvents
 	fileIdx     map[string]int
+	pieces      map[string][2]int // see filePieces
 	announced   map[string]bool
 	closed      bool
 	done        chan struct{}
@@ -195,6 +215,16 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash, eve
 	if err != nil {
 		_ = db.Close()
 		return
+	}
+	// The file's pieces, which the cache path checks in piece_completion
+	// before it serves the file (FileCacheMap.Open). A row written before
+	// these columns has them NULL and is not served from cache.
+	for _, col := range []string{"first_piece", "last_piece"} {
+		err = sqlitex.ExecScript(db, `alter table file_completion add column `+col)
+		if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			_ = db.Close()
+			return
+		}
 	}
 	pieces := make([]bool, info.NumPieces())
 	for i := 0; i < info.NumPieces(); i++ {
@@ -230,6 +260,7 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash, eve
 		done:        make(chan struct{}),
 		events:      events,
 		fileIdx:     fileIndexes(info),
+		pieces:      filePieces(info),
 		announced:   make(map[string]bool),
 	}
 	go func() {
@@ -371,11 +402,15 @@ func (s *pieceCompletion) completeFile(path string) (announce bool, err error) {
 	if s.closed {
 		return false, errors.New("closed")
 	}
+	var first, last any // NULL for a path the torrent does not have
+	if r, ok := s.pieces[path]; ok {
+		first, last = r[0], r[1]
+	}
 	err = sqlitex.Exec(
 		s.db,
-		`insert or replace into file_completion("path") values(?)`,
+		`insert or replace into file_completion("path", first_piece, last_piece) values(?, ?, ?)`,
 		nil,
-		path,
+		path, first, last,
 	)
 	// Once per completion, not once per tick. A torrent loaded again after a
 	// restart or an unload announces its complete files anew: that is the

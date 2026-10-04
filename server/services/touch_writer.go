@@ -40,7 +40,9 @@ func (w *TouchWriter) WriteHeader(statusCode int) {
 }
 
 func (w *TouchWriter) Write(p []byte) (int, error) {
-	w.tm.Touch(w.h)
+	if w.tm != nil { // nil: a cache-path stream, which keeps no torrent loaded
+		w.tm.Touch(w.h)
+	}
 	w.lastWrite.Store(time.Now().UnixNano())
 	return w.ResponseWriter.Write(p)
 }

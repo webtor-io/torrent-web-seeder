@@ -7,6 +7,7 @@ import (
 	"flag"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -183,6 +184,18 @@ func zFCM(dataDir string) *FileCacheMap {
 	return NewFileCacheMap(cli.NewContext(nil, fs, nil))
 }
 
+func zExec(t *testing.T, dataDir, query string, args ...any) {
+	t.Helper()
+	db, err := sqlite.OpenConn(filepath.Join(dataDir, zHash, ".torrent.db"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := sqlitex.Exec(db, query, nil, args...); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func zRow(t *testing.T, dataDir, path string) bool {
 	t.Helper()
 	db, err := sqlite.OpenConn(filepath.Join(dataDir, zHash, ".torrent.db"), 0)
@@ -209,13 +222,14 @@ func zServeB(t *testing.T, dataDir string, fcm *FileCacheMap) (body []byte, ok b
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.String(DataDirFlag, dataDir, "")
 	s := &WebSeeder{fcm: fcm, tom: NewTouchMap(cli.NewContext(nil, fs, nil))}
-	cp, err := fcm.Get(zHash, "pack/b.mkv")
+	f, release, err := fcm.Open(zHash, "pack/b.mkv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cp == "" {
+	if f == nil {
 		return nil, false
 	}
+	release()
 	w := httptest.NewRecorder()
 	s.serveFile(w, httptest.NewRequest(http.MethodGet, "/"+zHash+"/pack/b.mkv", nil), zHash, "pack/b.mkv")
 	if w.Code != http.StatusOK {
@@ -238,6 +252,116 @@ func zZeroRun(got, want []byte) (from, to int) {
 		}
 	}
 	return from, to
+}
+
+// TestCachePathCompletionLoopResurrectsEvictedFile: the completion loop takes
+// its snapshot of complete files (GetCompletedFiles), then inserts the rows
+// one by one (CompleteFile). An eviction that lands between the two deletes
+// b's row (uncompleteAffectedFiles) and punches the hole, and the loop then
+// inserts b's row back from its stale snapshot; no later tick deletes it and
+// a reload keeps it. The cache path served b with the hole as data, on every
+// request, as long as it trusted the row.
+func TestCachePathCompletionLoopResurrectsEvictedFile(t *testing.T) {
+	dataDir := zSeed(t)
+	info := zInfo()
+
+	gate := newGatePub()
+	impl := zOpen(t, dataDir, gate)
+	// The loop's first tick has taken its snapshot {a, b} and is parked
+	// inside CompleteFile(a), publishing.
+	gate.wait(t, cachedA)
+
+	// A torrent-path reader touches piece 0; c's piece arrives; the LRU is
+	// over budget and evicts the idle piece 1 -- b's tail.
+	zTouch(t, impl, info, 0)
+	zTouch(t, impl, info, 3)
+	zWritePiece(t, impl, info, 2)
+	if zRow(t, dataDir, "pack/b.mkv") {
+		t.Fatal("precondition: eviction of piece 1 must have deleted b's file_completion row")
+	}
+
+	// The loop resumes and finishes its tick from the snapshot.
+	close(gate.release)
+	gate.wait(t, cachedD)
+
+	if body, ok := zServeB(t, dataDir, zFCM(dataDir)); ok && !bytes.Equal(body, zWantB()) {
+		from, to := zZeroRun(body, zWantB())
+		t.Errorf("cache path serves b with zeroes at [%d,%d) of %d after its piece was evicted (file_completion row re-inserted by the completion loop)", from, to, len(body))
+	}
+
+	// The torrent is unloaded and opened again (another request, or another
+	// pod on the node). Its loop runs a full tick: a and d.
+	if err := impl.Close(); err != nil {
+		t.Fatal(err)
+	}
+	gate2 := newGatePub()
+	close(gate2.release)
+	impl2 := zOpen(t, dataDir, gate2)
+	defer impl2.Close()
+	gate2.wait(t, cachedD)
+
+	if body, ok := zServeB(t, dataDir, zFCM(dataDir)); ok && !bytes.Equal(body, zWantB()) {
+		from, to := zZeroRun(body, zWantB())
+		t.Errorf("after reload the stale row is still there: cache path serves b with zeroes at [%d,%d)", from, to)
+	}
+}
+
+// TestCachePathStreamOutlivesEviction: no race in the completion code at all.
+// b is complete and is being streamed from the cache path through a plain
+// *os.File. Those reads never reach the storage, so the LRU never sees b in
+// use, and its pieces stay the oldest idle ones -- the first to go when
+// another reader of the same torrent pushes the cache over budget. The
+// eviction punched the hole under the open descriptor and the stream read
+// zeroes with a 200. FileCacheMap also kept answering with the path for its
+// 60 s TTL after the row was gone.
+func TestCachePathStreamOutlivesEviction(t *testing.T) {
+	dataDir := zSeed(t)
+	info := zInfo()
+
+	gate := newGatePub()
+	close(gate.release)
+	impl := zOpen(t, dataDir, gate)
+	defer impl.Close()
+	gate.wait(t, cachedD) // first tick done: a, b, d complete, rows present
+
+	fcm := zFCM(dataDir)
+	if cp, err := fcm.Get(zHash, "pack/b.mkv"); err != nil || cp == "" {
+		t.Fatalf("precondition: b must be cached (cp=%q err=%v)", cp, err)
+	}
+	f, release, err := fcm.Open(zHash, "pack/b.mkv") // what serveFile streams from
+	if err != nil || f == nil {
+		t.Fatalf("precondition: b must be served from cache (err=%v)", err)
+	}
+	defer release()
+	head := make([]byte, 100) // the stream is under way
+	if _, err := f.ReadAt(head, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	zTouch(t, impl, info, 0) // torrent-path readers of a and d
+	zTouch(t, impl, info, 3)
+	zWritePiece(t, impl, info, 2)
+
+	tail := make([]byte, zpl-100)
+	if _, err := f.ReadAt(tail, 100); err != nil {
+		t.Fatal(err)
+	}
+	got := append(head, tail...)
+	if !bytes.Equal(got, zWantB()) {
+		from, to := zZeroRun(got, zWantB())
+		t.Errorf("open cache-path stream read zeroes at [%d,%d) of b after an eviction under it", from, to)
+	}
+
+	// The stream ends; the eviction it held off goes through.
+	release()
+	zStorage(impl).evictOverBudget()
+	if zRow(t, dataDir, "pack/b.mkv") {
+		t.Fatal("the eviction put off by the stream did not happen after it")
+	}
+	if body, ok := zServeB(t, dataDir, fcm); ok && !bytes.Equal(body, zWantB()) {
+		from, to := zZeroRun(body, zWantB())
+		t.Errorf("new request within FileCacheMap's TTL is served from cache with zeroes at [%d,%d)", from, to)
+	}
 }
 
 // TestCachePathSharedDirAcrossPods: every seeder pod on a node mounts the same
@@ -364,5 +488,41 @@ func TestCrossPodRecoveryEviction(t *testing.T) {
 	tsB.evictOverBudget()
 	if used := tsB.lru.Used(); used > 4*pieceLen {
 		t.Fatalf("pod B still over budget once alone: %d > %d", used, 4*pieceLen)
+	}
+}
+
+// TestCachePathLegacyRow: a file_completion row from before the pieces
+// columns says nothing the cache path can check, and such rows are where
+// production's zeros sat (071e75f1 on worker64: the row present, piece 9093
+// punched). The cache path leaves the file to the torrent until a completion
+// loop writes the row again.
+func TestCachePathLegacyRow(t *testing.T) {
+	dataDir := zSeed(t)
+	db := filepath.Join(dataDir, zHash)
+	// Piece 1 evicted, b's row put back: the piece marked incomplete and
+	// b's part of it zeroed, as a punch leaves it.
+	zExec(t, dataDir, `update piece_completion set complete = 0 where "index" = 1`)
+	if err := os.WriteFile(cachedFilePath(db, "pack/b.mkv"), append(zWantB()[:100], make([]byte, zpl-100)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A db no storage has opened since the columns: the old table.
+	zExec(t, dataDir, `drop table file_completion`)
+	zExec(t, dataDir, `create table file_completion("path", unique("path"))`)
+	zExec(t, dataDir, `insert into file_completion values('pack/b.mkv')`)
+	if body, ok := zServeB(t, dataDir, zFCM(dataDir)); ok {
+		from, to := zZeroRun(body, zWantB())
+		t.Errorf("legacy db: cache path serves b, zeroes at [%d,%d)", from, to)
+	}
+
+	// Opened since: the columns are there and NULL in the old row.
+	pc, err := NewPieceCompletion(db, zInfo(), zIH, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = pc.Close()
+	if body, ok := zServeB(t, dataDir, zFCM(dataDir)); ok {
+		from, to := zZeroRun(body, zWantB())
+		t.Errorf("legacy row: cache path serves b, zeroes at [%d,%d)", from, to)
 	}
 }

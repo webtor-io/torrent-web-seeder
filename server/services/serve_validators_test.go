@@ -169,16 +169,19 @@ func TestServeFileDoesNotShortCircuitConditionalRange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The cache branch asks sqlite whether the file is complete, then serves
-	// it from content/<first two hex of sha1(path)>/<sha1(path)>.
+	// The cache branch asks sqlite whether the file's pieces (here piece 0)
+	// are complete, then serves it from
+	// content/<first two hex of sha1(path)>/<sha1(path)>.
 	db, err := sqlite.OpenConn(filepath.Join(torrentDir, ".torrent.db"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sqlitex.ExecScript(db, `create table if not exists file_completion("path", unique("path"))`); err != nil {
+	if err := sqlitex.ExecScript(db, `create table file_completion("path", first_piece, last_piece, unique("path"));
+		create table piece_completion("index", complete, unique("index"));
+		insert into piece_completion values(0, 1)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := sqlitex.Exec(db, `insert or replace into file_completion("path") values(?)`, nil, path); err != nil {
+	if err := sqlitex.Exec(db, `insert into file_completion values(?, 0, 0)`, nil, path); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
