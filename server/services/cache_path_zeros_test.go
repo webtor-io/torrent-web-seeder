@@ -648,3 +648,59 @@ func TestCachePathLeavesEvictingTorrentsToTheTorrent(t *testing.T) {
 		t.Errorf("status %d, %d bytes; b's bytes: %v", w.Code, w.Body.Len(), bytes.Equal(w.Body.Bytes(), zWantB()))
 	}
 }
+
+// TestStatsAskThePieces: ?stats, ?warmup and ?done ask whether a file needs
+// the swarm (availableWithoutTorrent). A file_completion row outlives the
+// eviction of a piece under it, and the cache path no longer trusts it (see
+// Open); answering "cached" from the row turned ?stats into a 404 and ?done
+// into "cached" for a file being read from the torrent, holes and all, with
+// no availability frame to say why it stalls. The eviction gate is not part
+// of that answer: it sends a request to the torrent path, but a complete file
+// of an evicting torrent is on disk and needs no peer.
+func TestStatsAskThePieces(t *testing.T) {
+	dataDir := zSeed(t)
+	// c too, so that the root and pack/ are complete.
+	zExec(t, dataDir, `insert or replace into piece_completion("index", complete) values(2, 1)`)
+	zExec(t, dataDir, `insert or replace into file_completion("path", first_piece, last_piece) values('pack/c.mkv', 1, 2)`)
+	if err := os.WriteFile(filepath.Join(dataDir, zHash, evictGateName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	torrents := t.TempDir()
+	f, err := os.Create(filepath.Join(torrents, "pack.torrent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := zMI.Write(f); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	// A new seeder for each look: Get keeps its answer for 60 s.
+	ws := func() *WebSeeder {
+		return &WebSeeder{fcm: zFCM(dataDir), tfcm: NewTorrentFileCountMap(&FileStoreMap{p: torrents}, nil), st: NewStatWeb(nil)}
+	}
+	check := func(want bool, state string) {
+		t.Helper()
+		s := ws()
+		for _, p := range []string{"pack/b.mkv", "pack", ""} {
+			got, err := s.availableWithoutTorrent(context.Background(), zHash, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Errorf("%s: %q available without the torrent: %v, want %v", state, p, got, want)
+			}
+		}
+	}
+
+	check(true, "every piece complete, eviction gate present")
+
+	zExec(t, dataDir, `update piece_completion set complete = 0 where "index" = 1`)
+	check(false, "piece 1 incomplete under b's and c's rows")
+	// The stream itself is not this test's (StatWeb refuses a recorder);
+	// only that ?stats does not turn the viewer away.
+	w := httptest.NewRecorder()
+	ws().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+zHash+"/pack/b.mkv?stats", nil))
+	if w.Code == http.StatusNotFound {
+		t.Error("?stats on b answers 404 with piece 1 incomplete")
+	}
+}
