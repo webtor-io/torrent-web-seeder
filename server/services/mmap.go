@@ -433,6 +433,15 @@ func (sp mmapStoragePiece) Completion() storage.Completion {
 	if c.Complete && sp.t.isEvicted(idx) {
 		sp.t.setEvicted(idx, false)
 	}
+	// Another pod's MarkNotComplete leaves the piece in this pod's LRU while
+	// the library downloads it again: the LRU then punches the chunks just
+	// written, and the next WriteAt clears the flag over them. In the LRU
+	// means complete here, so an incomplete piece leaves it.
+	if !c.Complete && sp.t.lru != nil && sp.t.lru.Has(idx) {
+		sp.t.lru.Remove(idx)
+		promCacheBytesUsed.Sub(float64(sp.p.Length()))
+		promCachePieceCount.Dec()
+	}
 	return c
 }
 
