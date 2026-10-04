@@ -81,6 +81,13 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 	if err = os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
+	// Held from before the completion db is read until Close, so what this
+	// storage learns from disk stays true while it has the torrent: no other
+	// pod on the node punches a hole under it (see dir_lock.go).
+	lock, err := lockDir(dir)
+	if err != nil {
+		return
+	}
 	pc := pieceCompletionForDir(dir, info, infoHash, s.events)
 
 	// Only enable LRU eviction if the torrent is larger than the cache budget.
@@ -94,9 +101,15 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 		info:     info,
 		closeCh:  make(chan struct{}),
 		cl:       s.cl,
+		dirLock:  lock,
 	}
 
 	if evictionEnabled {
+		if t.evictGate, err = openEvictGate(dir); err != nil {
+			_ = pc.Close()
+			_ = lock.Close()
+			return
+		}
 		t.evicted = make([]atomic.Bool, info.NumPieces())
 		lru := NewPieceLRU(s.budget)
 		// Protect pieces belonging to completed files from eviction (first pass).
@@ -196,6 +209,13 @@ type mmapTorrentStorage struct {
 	// the mmap region is not punch-holed mid-read, which would otherwise
 	// hand zero-filled bytes to the HTTP client.
 	evictMu [evictShards]sync.RWMutex
+	// dirLock is the torrent dir's lock, held shared from OpenTorrent to
+	// Close; evictGate serializes upgrading it (see dir_lock.go). Both nil
+	// for a storage built by hand in a test.
+	dirLock, evictGate *os.File
+	aloneMu            sync.Mutex
+	dirClosed          bool
+	afterFailedUpgrade func() // test hook: runs in whileAlone's gap
 }
 
 // pieceLock returns the RWMutex shard for a given piece index.
@@ -278,7 +298,9 @@ func (ts *mmapTorrentStorage) Close() error {
 	if ts.pc != nil {
 		_ = ts.pc.Close()
 	}
-	return ts.span.Close()
+	err := ts.span.Close()
+	ts.unlockDir()
+	return err
 }
 
 type mmapStoragePiece struct {
@@ -414,7 +436,9 @@ func (sp mmapStoragePiece) MarkComplete() error {
 		promCacheBytesUsed.Add(float64(sp.p.Length()))
 		promCachePieceCount.Inc()
 		for _, idx := range toEvict {
-			sp.t.evictPiece(idx)
+			if !sp.t.evictPiece(idx) {
+				break
+			}
 		}
 	}
 	return nil
@@ -453,16 +477,52 @@ func (ts *mmapTorrentStorage) evictOverBudget() {
 	toEvict := ts.lru.computeEvictions()
 	ts.lru.mu.Unlock()
 	for _, idx := range toEvict {
-		ts.evictPiece(idx)
+		if !ts.evictPiece(idx) {
+			break
+		}
 	}
 }
 
-// evictPiece removes a piece from cache by punching holes in the mmap'd files
-// and marking it as incomplete. Holds the piece shard's eviction lock for the
-// entire mutating section so concurrent ReadAt calls cannot observe the
-// transient state where mmap pages have been zeroed but completion still
-// reports the piece as available.
-func (ts *mmapTorrentStorage) evictPiece(idx int) {
+// evictPiece removes a piece from cache, if nobody else holds the torrent's
+// directory, and tells the library. It returns false when the eviction was
+// put off because somebody does (see dir_lock.go); the caller stops there, the
+// next MarkComplete or sweep tries again.
+func (ts *mmapTorrentStorage) evictPiece(idx int) bool {
+	punched := false
+	if !ts.whileAlone(func() { punched = ts.punchPiece(idx) }) {
+		promCacheEvictionsDeferred.Inc()
+		return false
+	}
+	if punched {
+		// Tell anacrolix the piece is gone, so it re-requests it.
+		//
+		// This is LIVENESS, not correctness — the evicted flag checked in
+		// ReadAt is what actually stops zeroes reaching a client, and it is
+		// already set. That separation is why this runs with no storage lock
+		// and outside whileAlone: the refresh re-enters anacrolix (peer
+		// request updates, priority recalculation) and must not do so holding
+		// a lock that anacrolix's callbacks could need.
+		//
+		// pc.Set(false) alone does NOT tell anacrolix anything: reads consult
+		// Torrent._completedPieces, an in-memory bitmap that only anacrolix
+		// writes, and it never re-reads the completion store on its own.
+		//
+		// The old code queued VerifyData onto a 256-deep channel with a silent
+		// `default:` drop. Two problems: VerifyData forces a full re-hash to
+		// discover what we already know and blocks until it finishes, and a
+		// dropped notification left the piece marked complete forever. This
+		// call does neither — no hash, no queue, nothing to drop.
+		ts.refreshCompletion(idx)
+	}
+	return true
+}
+
+// punchPiece punches holes in the mmap'd files where piece idx lies and
+// marks it incomplete; it reports whether it did. Holds the piece shard's
+// eviction lock for the entire mutating section so concurrent ReadAt calls
+// cannot observe the transient state where mmap pages have been zeroed but
+// completion still reports the piece as available.
+func (ts *mmapTorrentStorage) punchPiece(idx int) bool {
 	piece := ts.info.Piece(idx)
 	pk := metainfo.PieceKey{InfoHash: ts.infoHash, Index: idx}
 
@@ -481,13 +541,13 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 	// below one step for any two evictions of the piece.
 	if !ts.lru.Has(idx) {
 		mu.Unlock()
-		return
+		return false
 	}
 
 	if err := ts.pc.Set(pk, false); err != nil {
 		mu.Unlock()
 		log.WithError(err).Errorf("failed to mark piece %d incomplete during eviction", idx)
-		return
+		return false
 	}
 	// Flag first, punch second. Readers cannot currently observe the
 	// difference — the shard write lock held across this whole section
@@ -530,26 +590,7 @@ func (ts *mmapTorrentStorage) evictPiece(idx int) {
 
 	log.Infof("evicted piece %d, freed %d bytes, used=%d budget=%d",
 		idx, freedBytes, ts.lru.Used(), ts.lru.budget)
-
-	// Tell anacrolix the piece is gone, so it re-requests it.
-	//
-	// This is LIVENESS, not correctness — the evicted flag checked in ReadAt
-	// is what actually stops zeroes reaching a client, and it is already set
-	// above. That separation is why this can run after mu.Unlock(): the
-	// refresh re-enters anacrolix (peer request updates, priority
-	// recalculation) and must not do so holding a storage lock that
-	// anacrolix's callbacks could need.
-	//
-	// pc.Set(false) alone does NOT tell anacrolix anything: reads consult
-	// Torrent._completedPieces, an in-memory bitmap that only anacrolix
-	// writes, and it never re-reads the completion store on its own.
-	//
-	// The old code queued VerifyData onto a 256-deep channel with a silent
-	// `default:` drop. Two problems: VerifyData forces a full re-hash to
-	// discover what we already know and blocks until it finishes, and a
-	// dropped notification left the piece marked complete forever. This
-	// call does neither — no hash, no queue, nothing to drop.
-	ts.refreshCompletion(idx)
+	return true
 }
 
 // refreshCompletion updates anacrolix's cached completion for a piece from
