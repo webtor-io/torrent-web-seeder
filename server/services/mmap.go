@@ -436,8 +436,21 @@ func (sp mmapStoragePiece) Completion() storage.Completion {
 	return c
 }
 
+// MarkComplete refuses a piece punched since the hash read it: the 1 over the
+// hole would read, in Completion, as another pod's verification, and the
+// zeroes as data. The library still calls the piece complete; its next read
+// gets ErrPieceEvicted, Completion says 0 and the piece is downloaded again.
+// The shard lock keeps a punch from falling between the check and the Set.
 func (sp mmapStoragePiece) MarkComplete() error {
+	idx := sp.p.Index()
+	mu := sp.t.pieceLock(idx)
+	mu.RLock()
+	if sp.t.isEvicted(idx) {
+		mu.RUnlock()
+		return ErrPieceEvicted
+	}
 	err := sp.t.pc.Set(sp.pieceKey(), true)
+	mu.RUnlock()
 	if err != nil {
 		return err
 	}

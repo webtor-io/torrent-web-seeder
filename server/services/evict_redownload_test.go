@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -364,4 +365,74 @@ func (p getHookPC) Get(pk metainfo.PieceKey) (storage.Completion, error) {
 	c, err := p.PieceCompletion.Get(pk)
 	p.afterGet()
 	return c, err
+}
+
+// Another pod's MarkNotComplete sets the db to 0 under a piece this pod still
+// has in its LRU, so this pod downloads it again; a punch of its own lands
+// after the hash has read the piece and before MarkComplete. A 1 set over that
+// hole would read, in Completion, as another pod's verification: the flag goes
+// and the piece reads as zeroes with no error (reader.go:341 resyncs
+// completion after ErrPieceEvicted, so the zeroes reach HTTP and Vault).
+// "punch during MarkComplete": the shard lock keeps a punch from falling
+// between MarkComplete's check of the flag and its Set.
+func TestMarkCompleteOverAHole(t *testing.T) {
+	t.Run("punch before MarkComplete", func(t *testing.T) { testMarkCompleteOverAHole(t, false) })
+	t.Run("punch during MarkComplete", func(t *testing.T) { testMarkCompleteOverAHole(t, true) })
+}
+
+func testMarkCompleteOverAHole(t *testing.T, during bool) {
+	impl := zOpen(t, zSeed(t), nil)
+	t.Cleanup(func() { _ = impl.Close() })
+	ts := zStorage(impl)
+	p := zInfo().Piece(1)
+	sp := impl.Piece(p)
+	if err := ts.pc.Set(metainfo.PieceKey{InfoHash: zIH, Index: 1}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sp.WriteAt(zData()[p.Offset():p.Offset()+p.Length()], 0); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, p.Length())
+	if _, err := sp.ReadAt(buf, 0); err != nil { // the hash
+		t.Fatal(err)
+	}
+	punched := make(chan struct{})
+	punch := func() {
+		if !ts.evictPiece(1) {
+			t.Error("could not evict piece 1 while alone")
+		}
+		close(punched)
+	}
+	if during {
+		ts.pc = setHookPC{ts.pc, func() {
+			go punch()
+			select {
+			case <-punched:
+			case <-time.After(200 * time.Millisecond): // blocked by the shard lock
+			}
+		}}
+	} else {
+		punch()
+	}
+	_ = sp.MarkComplete()
+	<-punched
+	c := sp.Completion()
+	n, err := sp.ReadAt(buf, 0)
+	if c.Complete || !errors.Is(err, ErrPieceEvicted) {
+		t.Errorf("punched piece 1: Completion %+v, ReadAt n=%d err=%v, zeroes %v",
+			c, n, err, bytes.Count(buf[:n], []byte{0}) == n && n > 0)
+	}
+}
+
+// setHookPC runs beforeSet before a Set of true.
+type setHookPC struct {
+	storage.PieceCompletion
+	beforeSet func()
+}
+
+func (p setHookPC) Set(pk metainfo.PieceKey, b bool) error {
+	if b {
+		p.beforeSet()
+	}
+	return p.PieceCompletion.Set(pk, b)
 }
