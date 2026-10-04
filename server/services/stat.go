@@ -474,6 +474,19 @@ func statFrame(rep, prev *pb.StatReply, diffPieces []*pb.Piece) *pb.StatReply {
 	return f
 }
 
+// nextFrame is the frame StatStream sends for rep after prev (the last reply
+// sent; nil before the first), or nil when nothing a client draws changed.
+func nextFrame(rep, prev *pb.StatReply) *pb.StatReply {
+	diffPieces := rep.GetPieces()
+	if prev != nil {
+		diffPieces = diff(rep.GetPieces(), prev.GetPieces())
+	}
+	if !statChanged(rep, prev, diffPieces) {
+		return nil
+	}
+	return statFrame(rep, prev, diffPieces)
+}
+
 func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStreamServer) error {
 	md, _ := metadata.FromIncomingContext(stream.Context())
 	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
@@ -528,14 +541,7 @@ func (s *Stat) StatStream(in *pb.StatRequest, stream pb.TorrentWebSeeder_StatStr
 				errCh <- err
 				return
 			}
-			var diffPieces []*pb.Piece
-			if prevRep == nil {
-				diffPieces = rep.GetPieces()
-			} else {
-				diffPieces = diff(rep.GetPieces(), prevRep.GetPieces())
-			}
-			if statChanged(rep, prevRep, diffPieces) {
-				frame := statFrame(rep, prevRep, diffPieces)
+			if frame := nextFrame(rep, prevRep); frame != nil {
 				prevRep = rep
 				if err := stream.Send(frame); err != nil {
 					// Send losing the peer is the same non-event as the
