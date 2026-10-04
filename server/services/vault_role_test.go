@@ -87,4 +87,24 @@ func TestVaultReadsSkipVaultsCopy(t *testing.T) {
 			}
 		})
 	}
+
+	// The role skips the redirect and nothing else: ?done, ?warmup and ?stats
+	// answer "no torrent needed" for X-Role vault too (here from the cache,
+	// which is asked before Vault).
+	for q, want := range map[string]int{"done": http.StatusOK, "warmup": http.StatusOK, "stats": http.StatusNotFound} {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/"+hash+"/"+path+"?"+q, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Role", "vault")
+		resp, err := cl.Do(req)
+		if err != nil {
+			t.Errorf("X-Role vault, ?%s: %v", q, err)
+			continue
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("X-Role vault, ?%s: status %d, want %d", q, resp.StatusCode, want)
+		}
+	}
 }
