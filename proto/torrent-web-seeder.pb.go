@@ -248,6 +248,8 @@ type StatReply struct {
 	// (a stream or a download in progress) is on or reading ahead into
 	// (priority READAHEAD or above): above 0, a reader is or soon will be
 	// waiting on a piece no connected peer has. 0 unless availability_known.
+	// Any reader of the torrent counts, not only the asker's: a whole-torrent
+	// reply counts every file's readers.
 	ReaderMissing int32 `protobuf:"varint,13,opt,name=reader_missing,json=readerMissing,proto3" json:"reader_missing"`
 	// missing_unchanged is set only in StatStream frames: true when the frame
 	// leaves missing out because it is the same as in the last frame sent —

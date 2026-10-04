@@ -13,7 +13,8 @@ import (
 // a partial copy and nobody holds the pieces being read; the status bar then
 // shows peers and no progress, and users ask why. These numbers let web-ui
 // hatch the pieces nobody connected has announced and say how much of the
-// file the connected peers announce between them.
+// torrent (or of the file or directory asked about) is here or announced by
+// a connected peer — not by the peers alone: pieces complete here count.
 //
 // The computation (computeAvailability) is pure; the glue that reads the
 // torrent (readSwarm) stays thin and hands it one union of the peers' piece
@@ -193,7 +194,9 @@ func computeAvailability(in availabilityInput) availability {
 // of the peer sets holds. The sets are only read: AndNot changes the scope
 // bitmap, built here, and not its argument. A peer that sent HAVE_ALL before
 // the torrent's info was known claims [0, 2^32); the operation touches only
-// the scope's containers, so that costs nothing extra.
+// the scope's containers, so that costs nothing extra here. readSwarm would
+// pay for it (cloning and folding such a set: ~5 ms and ~12 MB a peer) but
+// never sees one: TorrentMap adds every torrent with its info.
 func scopeHoles(peers []*roaring.Bitmap, offset, n int) *roaring.Bitmap {
 	holes := roaring.New()
 	holes.AddRange(uint64(offset), uint64(offset)+uint64(n))
