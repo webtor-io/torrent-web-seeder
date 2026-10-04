@@ -141,41 +141,34 @@ func openComplete(dir, path string) (*os.File, error) {
 // fileComplete reports whether every piece path lies in is complete in dir's
 // piece_completion.
 func fileComplete(dir, path string) (bool, error) {
+	n, err := completeFiles(dir, `"path" = ?`, path)
+	return n > 0, err
+}
+
+// completeFiles counts dir's file_completion rows matching where (one ?,
+// arg) whose pieces, first_piece to last_piece, are all complete in
+// piece_completion. A row without the range does not count (NULL compares as
+// NULL), and neither does any row of a db no storage has opened since the
+// range columns, or of none at all. One query: IsDirComplete ran two per file,
+// 35 ms for 10000 files on every ?stats or ?done of the root.
+func completeFiles(dir, where string, arg any) (n int, err error) {
 	// Read-only: no journal-mode pragma on open, no checkpoint on close.
 	db, err := sqlite.OpenConn(filepath.Join(dir, ".torrent.db"), sqlite.OpenReadOnly|sqlite.OpenNoMutex)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	defer func() { _ = db.Close() }()
-	ok, err := piecesComplete(db, path)
-	// A db no storage has opened since the range columns, or none at all.
+	err = sqlitex.Exec(db, `select count(*) from file_completion f where `+where+` and
+		(select count(*) from piece_completion p where p."index" between f.first_piece and f.last_piece and p.complete)
+		= f.last_piece - f.first_piece + 1`,
+		func(stmt *sqlite.Stmt) error {
+			n = stmt.ColumnInt(0)
+			return nil
+		}, arg)
 	if err != nil && strings.Contains(err.Error(), "no such") {
-		return false, nil
+		return 0, nil
 	}
-	return ok, err
-}
-
-// piecesComplete reports whether path has a file_completion row naming its
-// pieces and every one of them is complete in piece_completion.
-func piecesComplete(db *sqlite.Conn, path string) (bool, error) {
-	first, last, found := 0, 0, false
-	err := sqlitex.Exec(db,
-		`select first_piece, last_piece from file_completion where "path"=? and first_piece is not null and last_piece is not null`,
-		func(stmt *sqlite.Stmt) error {
-			first, last, found = stmt.ColumnInt(0), stmt.ColumnInt(1), true
-			return nil
-		}, path)
-	if err != nil || !found {
-		return false, err
-	}
-	complete := 0
-	err = sqlitex.Exec(db,
-		`select count(*) from piece_completion where "index" between ? and ? and complete`,
-		func(stmt *sqlite.Stmt) error {
-			complete = stmt.ColumnInt(0)
-			return nil
-		}, first, last)
-	return complete == last-first+1, err
+	return n, err
 }
 
 // IsDirComplete checks if all files under a directory (or all torrent files
@@ -189,46 +182,13 @@ func (s *FileCacheMap) IsDirComplete(h string, dirPath string, expectedFiles int
 	if err != nil {
 		return false, err
 	}
-	f := dir + "/.torrent.db"
-	if _, err := os.Stat(f); os.IsNotExist(err) {
+	if _, err := os.Stat(dir + "/.torrent.db"); os.IsNotExist(err) {
 		return false, nil
 	}
-	db, err := sqlite.OpenConn(f, 0)
-	if err != nil {
-		return false, err
+	pattern := "%" // root: every file
+	if dirPath != "" {
+		pattern = dirPath + "/%"
 	}
-	defer func(db *sqlite.Conn) {
-		_ = db.Close()
-	}(db)
-
-	var paths []string
-	collect := func(stmt *sqlite.Stmt) error {
-		paths = append(paths, stmt.ColumnText(0))
-		return nil
-	}
-	if dirPath == "" {
-		// Root: all completed files
-		err = sqlitex.Exec(db, `select "path" from file_completion`, collect)
-	} else {
-		// Directory: completed files with matching prefix
-		err = sqlitex.Exec(db, `select "path" from file_completion where "path" like ?`, collect, dirPath+"/%")
-	}
-	completedCount := 0
-	if err == nil && len(paths) >= expectedFiles {
-		for _, p := range paths {
-			var ok bool
-			if ok, err = piecesComplete(db, p); err != nil {
-				break
-			} else if ok {
-				completedCount++
-			}
-		}
-	}
-	if err != nil {
-		if strings.Contains(err.Error(), "no such") {
-			return false, nil
-		}
-		return false, err
-	}
-	return completedCount >= expectedFiles, nil
+	n, err := completeFiles(dir, `"path" like ?`, pattern)
+	return n >= expectedFiles, err
 }

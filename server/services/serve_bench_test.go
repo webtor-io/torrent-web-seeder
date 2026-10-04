@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+	sqlite "github.com/go-llsqlite/adapter"
+	"github.com/go-llsqlite/adapter/sqlitex"
 	"github.com/urfave/cli"
 )
 
@@ -163,4 +166,57 @@ func BenchmarkStorageReadAt(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// BenchmarkIsDirComplete is the check behind ?stats, ?warmup and ?done on the
+// root of a torrent of n one-piece files, all complete.
+func BenchmarkIsDirComplete(b *testing.B) {
+	for _, n := range []int{100, 1000, 10000} {
+		dataDir, h := benchDirComplete(b, n)
+		fcm := zFCM(dataDir)
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				if ok, err := fcm.IsDirComplete(h, "", n); !ok || err != nil {
+					b.Fatal(ok, err)
+				}
+			}
+		})
+	}
+}
+
+func benchDirComplete(b *testing.B, n int) (dataDir, h string) {
+	b.Helper()
+	const pl = 16 << 10
+	info := &metainfo.Info{Name: "dir", PieceLength: pl, Pieces: makeDummyPieces(n)}
+	for i := 0; i < n; i++ {
+		info.Files = append(info.Files, metainfo.FileInfo{Path: []string{fmt.Sprintf("f%05d", i)}, Length: pl})
+	}
+	ih := metainfo.NewHashFromHex(fmt.Sprintf("d1c0%036x", n))
+	dataDir, h = b.TempDir(), ih.HexString()
+	dir := filepath.Join(dataDir, h)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		b.Fatal(err)
+	}
+	pc, err := NewPieceCompletion(dir, info, ih, nil) // the schema
+	if err != nil {
+		b.Fatal(err)
+	}
+	_ = pc.Close()
+	db, err := sqlite.OpenConn(filepath.Join(dir, ".torrent.db"), 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+	exec := func(q string, args ...any) {
+		if err := sqlitex.Exec(db, q, nil, args...); err != nil {
+			b.Fatal(err)
+		}
+	}
+	exec(`begin`)
+	for i := 0; i < n; i++ {
+		exec(`insert into piece_completion("index", complete) values(?, 1)`, i)
+		exec(`insert into file_completion("path", first_piece, last_piece) values(?, ?, ?)`, fmt.Sprintf("dir/f%05d", i), i, i)
+	}
+	exec(`commit`)
+	return dataDir, h
 }
