@@ -9,9 +9,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 	sqlite "github.com/go-llsqlite/adapter"
@@ -38,9 +41,20 @@ import (
 // b's tail.
 const zpl = 16 << 10
 
-const zHash = "c0de000000000000000000000000000000000000"
+// zMI is zInfo's metainfo. Its infohash names the torrent's dir, so a pod
+// that loads the torrent (zPod) finds what the tests put there.
+var zMI = func() *metainfo.MetaInfo {
+	b, err := bencode.Marshal(zInfo())
+	if err != nil {
+		panic(err)
+	}
+	return &metainfo.MetaInfo{InfoBytes: b}
+}()
 
-var zIH = metainfo.NewHashFromHex(zHash)
+var (
+	zIH   = zMI.HashInfoBytes()
+	zHash = zIH.HexString()
+)
 
 func zInfo() *metainfo.Info {
 	return &metainfo.Info{
@@ -102,12 +116,12 @@ func (g *gatePub) wait(t *testing.T, want string) {
 	}
 }
 
-const (
+var (
 	cachedA = `resource.cached {"resource_id":"` + zHash + `","file_idx":0}`
 	cachedD = `resource.cached {"resource_id":"` + zHash + `","file_idx":3}`
 )
 
-func zWritePiece(t *testing.T, impl storage.TorrentImpl, info *metainfo.Info, i int) {
+func zWritePiece(t testing.TB, impl storage.TorrentImpl, info *metainfo.Info, i int) {
 	t.Helper()
 	p := info.Piece(i)
 	sp := impl.Piece(p)
@@ -136,7 +150,7 @@ func zStorage(impl storage.TorrentImpl) *mmapTorrentStorage {
 
 // zSeed is a node where an earlier session downloaded pieces 0, 1 and 3 and
 // the completion loop recorded a, b and d as complete files.
-func zSeed(t *testing.T) string {
+func zSeed(t testing.TB) string {
 	t.Helper()
 	dataDir := t.TempDir()
 	info := zInfo()
@@ -308,7 +322,9 @@ func TestCachePathCompletionLoopResurrectsEvictedFile(t *testing.T) {
 
 // TestCachePathStreamOutlivesEviction: no race in the completion code at all.
 // b is complete and is being streamed from the cache path through a plain
-// *os.File. Those reads never reach the storage, so the LRU never sees b in
+// *os.File when a pod opens the torrent with eviction on (the cache path
+// leaves a torrent that is evicted already to the torrent, so the stream began
+// before). Those reads never reach the storage, so the LRU never sees b in
 // use, and its pieces stay the oldest idle ones -- the first to go when
 // another reader of the same torrent pushes the cache over budget. The
 // eviction punched the hole under the open descriptor and the stream read
@@ -317,12 +333,6 @@ func TestCachePathCompletionLoopResurrectsEvictedFile(t *testing.T) {
 func TestCachePathStreamOutlivesEviction(t *testing.T) {
 	dataDir := zSeed(t)
 	info := zInfo()
-
-	gate := newGatePub()
-	close(gate.release)
-	impl := zOpen(t, dataDir, gate)
-	defer impl.Close()
-	gate.wait(t, cachedD) // first tick done: a, b, d complete, rows present
 
 	fcm := zFCM(dataDir)
 	if cp, err := fcm.Get(zHash, "pack/b.mkv"); err != nil || cp == "" {
@@ -337,6 +347,12 @@ func TestCachePathStreamOutlivesEviction(t *testing.T) {
 	if _, err := f.ReadAt(head, 0); err != nil {
 		t.Fatal(err)
 	}
+
+	gate := newGatePub()
+	close(gate.release)
+	impl := zOpen(t, dataDir, gate)
+	defer impl.Close()
+	gate.wait(t, cachedD) // first tick done: a, b, d complete, rows present
 
 	zTouch(t, impl, info, 0) // torrent-path readers of a and d
 	zTouch(t, impl, info, 3)
@@ -524,5 +540,111 @@ func TestCachePathLegacyRow(t *testing.T) {
 	if body, ok := zServeB(t, dataDir, zFCM(dataDir)); ok {
 		from, to := zZeroRun(body, zWantB())
 		t.Errorf("legacy row: cache path serves b, zeroes at [%d,%d)", from, to)
+	}
+
+	// A row that names its pieces, one of which is not complete (it failed a
+	// hash since). Nothing has evicted this torrent under the new code, so
+	// the eviction gate does not turn the request away; the pieces do.
+	zExec(t, dataDir, `insert or replace into file_completion("path", first_piece, last_piece) values('pack/b.mkv', 0, 1)`)
+	if body, ok := zServeB(t, dataDir, zFCM(dataDir)); ok {
+		from, to := zZeroRun(body, zWantB())
+		t.Errorf("row over an incomplete piece: cache path serves b, zeroes at [%d,%d)", from, to)
+	}
+}
+
+// zPod is a seeder pod on dataDir's node with mi's torrent loaded: a torrent
+// client whose storage has the given cache budget, and the web seeder in
+// front of it. ts is the pod's storage of the torrent.
+func zPod(tb testing.TB, dataDir string, mi *metainfo.MetaInfo, budget int64, stallTimeout time.Duration) (ws *WebSeeder, ts *mmapTorrentStorage) {
+	tb.Helper()
+	torrentsDir := tb.TempDir()
+	f, err := os.Create(filepath.Join(torrentsDir, "pack.torrent"))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if err := mi.Write(f); err != nil {
+		tb.Fatal(err)
+	}
+	_ = f.Close()
+	tc := &TorrentClient{
+		swarm:                 newSwarmStats(),
+		rLimit:                -1,
+		maxUnverifiedBytes:    -1,
+		dataDir:               dataDir,
+		perTorrentCacheBudget: budget,
+		testConfig:            func(cfg *torrent.ClientConfig) { loopbackConfig(cfg) },
+	}
+	tb.Cleanup(tc.Close)
+	tm := NewTorrentMap(tc, nil, &FileStoreMap{p: torrentsDir})
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.String(DataDirFlag, dataDir, "")
+	ws = &WebSeeder{tm: tm, fcm: zFCM(dataDir), tom: NewTouchMap(cli.NewContext(nil, fs, nil)), maxReadahead: 1 << 20, stallTimeout: stallTimeout}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tor, err := tm.Get(ctx, mi.HashInfoBytes().HexString())
+	if err != nil || tor == nil {
+		tb.Fatalf("load torrent: %v", err)
+	}
+	return ws, tor.Piece(0).Storage().PieceImpl.(mmapStoragePiece).t
+}
+
+// heldWriter is a client reading slowly: its first Write waits until
+// unblocked, then everything is recorded.
+type heldWriter struct {
+	*httptest.ResponseRecorder
+	once             sync.Once
+	writing, unblock chan struct{}
+}
+
+func (w *heldWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.writing) })
+	<-w.unblock
+	return w.ResponseRecorder.Write(p)
+}
+
+// TestCachePathLeavesEvictingTorrentsToTheTorrent: a cache-path stream holds
+// the torrent's dir for its whole response, and one that keeps moving is
+// never cut (watchStall cuts only a stalled one). In production such streams
+// ran up to 11 h, 172 h a day over 79 node+hash pairs (2026-10-03..04), and
+// every eviction of the torrent on the node waited for them, the serving
+// pod's own included. A torrent that is evicted is left to the torrent path:
+// its reads go through the evicted-piece guard and touch the LRU, and the
+// lock its storage holds does not stand in the way of its own evictions.
+func TestCachePathLeavesEvictingTorrentsToTheTorrent(t *testing.T) {
+	dataDir := zSeed(t)
+	info := zInfo()
+	// Eviction on, production's stall timeout: the stream below is within it.
+	ws, ts := zPod(t, dataDir, zMI, 3*zpl-1, 10*time.Minute)
+
+	w := &heldWriter{ResponseRecorder: httptest.NewRecorder(), writing: make(chan struct{}), unblock: make(chan struct{})}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		ws.serveFile(w, httptest.NewRequest(http.MethodGet, "/"+zHash+"/pack/b.mkv", nil), zHash, "pack/b.mkv")
+	}()
+	select {
+	case <-w.writing:
+	case <-time.After(10 * time.Second):
+		close(w.unblock)
+		t.Fatal("b was not served")
+	}
+
+	// c's piece arrives on the pod while b streams; the cache is over budget.
+	p := info.Piece(2)
+	sp := ts.Piece(p)
+	if _, err := sp.WriteAt(zData()[p.Offset():p.Offset()+p.Length()], 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.MarkComplete(); err != nil {
+		t.Fatal(err)
+	}
+	if used := ts.lru.Used(); used > ts.lru.budget {
+		t.Errorf("the pod's eviction waited for the stream of b: %d bytes cached over a budget of %d", used, ts.lru.budget)
+	}
+
+	close(w.unblock)
+	<-served
+	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), zWantB()) {
+		t.Errorf("status %d, %d bytes; b's bytes: %v", w.Code, w.Body.Len(), bytes.Equal(w.Body.Bytes(), zWantB()))
 	}
 }

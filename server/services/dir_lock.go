@@ -20,7 +20,8 @@ import (
 // zeros where the piece was.
 //
 // So whoever reads a torrent's files holds <dir>/.lock shared while it reads:
-// an open storage for its whole life, a cache-path stream for its response. A
+// an open storage for its whole life, a cache-path stream for its response
+// (only of a torrent nobody has opened with eviction on, FileCacheMap.Open). A
 // hole is punched only with the lock held exclusive, that is, when nobody
 // else holds the directory. Otherwise the eviction is put off to the next
 // MarkComplete or sweep, and the torrent runs over its cache budget for as
@@ -40,9 +41,14 @@ func lockDir(dir string) (*os.File, error) {
 	return f, nil
 }
 
-// openEvictGate opens dir's eviction gate (see whileAlone).
+// evictGateName is the eviction gate's file (see whileAlone). It exists in
+// the dir of every torrent a storage has opened with eviction on, and the
+// cache path leaves such torrents to the torrent (FileCacheMap.Open).
+const evictGateName = ".evict.lock"
+
+// openEvictGate opens dir's eviction gate, creating it.
 func openEvictGate(dir string) (*os.File, error) {
-	return openLockFile(filepath.Join(dir, ".evict.lock"))
+	return openLockFile(filepath.Join(dir, evictGateName))
 }
 
 func openLockFile(path string) (*os.File, error) {

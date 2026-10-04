@@ -94,6 +94,16 @@ func (s *FileCacheMap) Get(h string, path string) (string, error) {
 // punches a hole in it until release, which closes the file and lets go of
 // the directory and may be called more than once.
 //
+// A torrent that has been opened with eviction on (its dir has the eviction
+// gate) is left to the torrent. A stream holds the directory for its whole
+// response, and one that keeps moving is never cut: such streams held
+// evicting torrents for up to 11 h, 172 h a day over 79 node+hash pairs
+// (2026-10-03..04), with every eviction of the torrent on the node, the
+// serving pod's own included, put off behind them. The torrent path reads
+// through the evicted-piece guard, and its storage's lock does not stand in
+// the way of its own evictions. A torrent nobody evicts has nobody waiting on
+// its stream, short of a pod that starts evicting it during the stream.
+//
 // Whether the file is served is decided here, under the lock, from
 // piece_completion: eviction marks a piece incomplete there before it punches
 // it. file_completion only says which pieces to look at. Its row used to be
@@ -106,6 +116,9 @@ func (s *FileCacheMap) Open(h string, path string) (f *os.File, release func(), 
 	dir, err := GetDir(s.p, h)
 	if err != nil {
 		return nil, nil, err
+	}
+	if _, err := os.Stat(filepath.Join(dir, evictGateName)); !os.IsNotExist(err) {
+		return nil, nil, nil
 	}
 	// OpenConn would create a missing db.
 	if _, err := os.Stat(filepath.Join(dir, ".torrent.db")); err != nil {

@@ -205,11 +205,12 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	if file != nil {
 		defer release()
 		logWithField.Info("serve file from cache")
-		// The open file holds the torrent's directory, and with it every
-		// eviction of this torrent on the node. A client that stops reading
-		// would hold it for as long as it stays connected, so like a torrent
-		// stream this one is cut after stallTimeout without progress: release
-		// closes the file under ServeContent and the response ends short.
+		// The open file holds the torrent's directory. Only a torrent no pod
+		// evicts is served here (see Open), but a pod that starts evicting it
+		// waits for the stream. A client that stops reading would hold it for
+		// as long as it stays connected, so like a torrent stream this one is
+		// cut after stallTimeout without progress: release closes the file
+		// under ServeContent and the response ends short.
 		tw := NewTouchWriter(w, nil, h)
 		go watchStall(r.Context(), release, tw.LastWrite, s.stallTimeout, logWithField)
 		serveWithValidators(tw, r, p, lastMod, etag, file)

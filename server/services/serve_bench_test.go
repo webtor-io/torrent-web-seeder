@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/urfave/cli"
 )
@@ -63,8 +65,58 @@ func BenchmarkServeFileFromCache(b *testing.B) {
 	fs := flag.NewFlagSet("bench", flag.ContinueOnError)
 	fs.String(DataDirFlag, dataDir, "")
 	c := cli.NewContext(nil, fs, nil)
-	s := &WebSeeder{fcm: NewFileCacheMap(c), tom: NewTouchMap(c)}
-	h := ih.HexString()
+	benchServe(b, &WebSeeder{fcm: NewFileCacheMap(c), tom: NewTouchMap(c)}, ih.HexString(), info.Name)
+}
+
+// BenchmarkServeFileEvicting is the same request for a complete 16 MiB file of
+// a torrent with eviction on, loaded on the pod. The cache path used to answer
+// it; it goes to the torrent now (FileCacheMap.Open).
+func BenchmarkServeFileEvicting(b *testing.B) {
+	const pl = 4 << 20
+	info := &metainfo.Info{Name: "bench", PieceLength: pl, Pieces: makeDummyPieces(5), Files: []metainfo.FileInfo{
+		{Path: []string{"a.bin"}, Length: 4 * pl},
+		{Path: []string{"b.bin"}, Length: pl}, // not downloaded: the torrent is over the budget, its cache is not
+	}}
+	infoBytes, err := bencode.Marshal(info)
+	if err != nil {
+		b.Fatal(err)
+	}
+	mi := &metainfo.MetaInfo{InfoBytes: infoBytes}
+	ih := mi.HashInfoBytes()
+	dataDir := b.TempDir()
+	impl, err := NewMMap(dataDir, 0, FileCacheConfig{}).OpenTorrent(context.Background(), info, ih)
+	if err != nil {
+		b.Fatal(err)
+	}
+	buf := make([]byte, pl)
+	for i := range buf {
+		buf[i] = byte(i%251) + 1
+	}
+	for i := 0; i < 4; i++ {
+		p := impl.Piece(info.Piece(i))
+		if _, err := p.WriteAt(buf, 0); err != nil {
+			b.Fatal(err)
+		}
+		if err := p.MarkComplete(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := impl.Close(); err != nil {
+		b.Fatal(err)
+	}
+	pc, err := NewPieceCompletion(filepath.Join(dataDir, ih.HexString()), info, ih, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := pc.CompleteFile("bench/a.bin"); err != nil {
+		b.Fatal(err)
+	}
+	_ = pc.Close()
+	ws, _ := zPod(b, dataDir, mi, 4*pl, 10*time.Minute)
+	benchServe(b, ws, ih.HexString(), "bench/a.bin")
+}
+
+func benchServe(b *testing.B, s *WebSeeder, h, name string) {
 	for _, tc := range []struct {
 		name   string
 		rng    string
@@ -75,14 +127,14 @@ func BenchmarkServeFileFromCache(b *testing.B) {
 		{"file-16MiB", "", http.StatusOK, 16 << 20},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			req := httptest.NewRequest(http.MethodGet, "/"+h+"/"+info.Name, nil)
+			req := httptest.NewRequest(http.MethodGet, "/"+h+"/"+name, nil)
 			if tc.rng != "" {
 				req.Header.Set("Range", tc.rng)
 			}
 			b.SetBytes(int64(tc.size))
 			for i := 0; i < b.N; i++ {
 				w := httptest.NewRecorder()
-				s.serveFile(w, req, h, info.Name)
+				s.serveFile(w, req, h, name)
 				if w.Code != tc.status || w.Body.Len() != tc.size {
 					b.Fatalf("status %d, %d bytes", w.Code, w.Body.Len())
 				}

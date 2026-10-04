@@ -96,22 +96,19 @@ func (w *stuckWriter) Write([]byte) (int, error) {
 	return 0, errors.New("client gone")
 }
 
-// A cache-path stream holds the torrent's dir, and every eviction of the
-// torrent on the node waits for it. A client that stops reading must not hold
-// it for as long as it stays connected: after stallTimeout without progress
-// the stream lets go.
+// A cache-path stream holds the torrent's dir, and an eviction of the torrent
+// that a pod tries during the stream waits for it (the cache path leaves a
+// torrent that is evicted already to the torrent, so it is one that a pod
+// started evicting after the stream began). A client that stops reading must
+// not hold it for as long as it stays connected: after stallTimeout without
+// progress the stream lets go.
 func TestCachePathStalledStreamLetsGoOfTheDir(t *testing.T) {
-	dataDir := zSeed(t)
+	dataDir := zSeed(t) // rows written: b is served from cache
 	info := zInfo()
-	gate := newGatePub()
-	close(gate.release)
-	impl := zOpen(t, dataDir, gate)
-	defer impl.Close()
-	gate.wait(t, cachedD) // rows written: b is served from cache
 
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.String(DataDirFlag, dataDir, "")
-	s := &WebSeeder{fcm: zFCM(dataDir), tom: NewTouchMap(cli.NewContext(nil, fs, nil)), stallTimeout: 200 * time.Millisecond}
+	s := &WebSeeder{fcm: zFCM(dataDir), tom: NewTouchMap(cli.NewContext(nil, fs, nil)), stallTimeout: time.Second}
 	w := &stuckWriter{h: http.Header{}, writing: make(chan struct{}), unblock: make(chan struct{})}
 	served := make(chan struct{})
 	go func() {
@@ -125,6 +122,8 @@ func TestCachePathStalledStreamLetsGoOfTheDir(t *testing.T) {
 		t.Fatal("b was not served from cache")
 	}
 
+	impl := zOpen(t, dataDir, nil)
+	defer impl.Close()
 	zTouch(t, impl, info, 0)
 	zTouch(t, impl, info, 3)
 	zWritePiece(t, impl, info, 2) // over budget; put off by the stream
@@ -138,7 +137,7 @@ func TestCachePathStalledStreamLetsGoOfTheDir(t *testing.T) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("a stalled cache-path stream still holds the dir 5 s after its 200 ms stall timeout")
+			t.Fatal("a stalled cache-path stream still holds the dir 5 s after its 1 s stall timeout")
 		}
 	}
 }
