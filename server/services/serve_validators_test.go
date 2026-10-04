@@ -163,6 +163,32 @@ func TestServeFileDoesNotShortCircuitConditionalRange(t *testing.T) {
 		path = "episode.ts"
 		body = "0123456789abcdefghij"
 	)
+	s := cachedFileSeeder(t, hash, path, body)
+
+	req := httptest.NewRequest(http.MethodGet, "/"+path, nil)
+	req.Header.Set("Range", "bytes=10-14")
+	req.Header.Set("If-Modified-Since", "Thu, 01 Jan 1970 00:00:00 GMT")
+	w := httptest.NewRecorder()
+	s.serveFile(w, req, hash, path)
+
+	if w.Code == http.StatusNotModified {
+		t.Fatal("serveFile answered 304 to a request carrying Range — a resuming client gets no bytes and starts the file over")
+	}
+	if w.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusPartialContent)
+	}
+	if got := w.Header().Get("Content-Range"); got != "bytes 10-14/20" {
+		t.Errorf("Content-Range = %q, want %q", got, "bytes 10-14/20")
+	}
+	if got := w.Body.String(); got != "abcde" {
+		t.Errorf("body = %q, want %q", got, "abcde")
+	}
+}
+
+// cachedFileSeeder is a WebSeeder with no torrent client whose data dir holds
+// hash's file path, complete, with body: serveFile's cache branch serves it.
+func cachedFileSeeder(t *testing.T, hash, path, body string) *WebSeeder {
+	t.Helper()
 	dir := t.TempDir()
 	torrentDir := filepath.Join(dir, hash)
 	if err := os.MkdirAll(torrentDir, 0755); err != nil {
@@ -200,24 +226,5 @@ func TestServeFileDoesNotShortCircuitConditionalRange(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.String(DataDirFlag, dir, "")
 	c := cli.NewContext(nil, fs, nil)
-	s := &WebSeeder{fcm: NewFileCacheMap(c), tom: NewTouchMap(c)}
-
-	req := httptest.NewRequest(http.MethodGet, "/"+path, nil)
-	req.Header.Set("Range", "bytes=10-14")
-	req.Header.Set("If-Modified-Since", "Thu, 01 Jan 1970 00:00:00 GMT")
-	w := httptest.NewRecorder()
-	s.serveFile(w, req, hash, path)
-
-	if w.Code == http.StatusNotModified {
-		t.Fatal("serveFile answered 304 to a request carrying Range — a resuming client gets no bytes and starts the file over")
-	}
-	if w.Code != http.StatusPartialContent {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusPartialContent)
-	}
-	if got := w.Header().Get("Content-Range"); got != "bytes 10-14/20" {
-		t.Errorf("Content-Range = %q, want %q", got, "bytes 10-14/20")
-	}
-	if got := w.Body.String(); got != "abcde" {
-		t.Errorf("body = %q, want %q", got, "abcde")
-	}
+	return &WebSeeder{fcm: NewFileCacheMap(c), tom: NewTouchMap(c)}
 }
