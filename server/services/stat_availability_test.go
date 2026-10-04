@@ -443,6 +443,25 @@ func TestStat_AvailabilityFromPartialPeer(t *testing.T) {
 	}
 }
 
+// Warm-up raises a file's head and tail to HIGH (warmup.go) and the priority
+// stays until the piece completes; nobody may be reading there. Such a piece
+// without a source is wanted_missing, not reader_missing: web-ui tells a
+// viewer "nobody has the piece you wait for" on reader_missing alone.
+func TestStat_AvailabilityHighIsNotReading(t *testing.T) {
+	data, mi := availabilityTestPayload(t)
+	peerCl := swarmPeer(t, data, mi, 4*addTestPieceLen, 4)
+	cl, tor := swarmLeecher(t, mi, peerCl, 4)
+	tor.Piece(7).SetPriority(torrent.PiecePriorityHigh)
+	h := tor.InfoHash().HexString()
+	st := NewStat(statMap(cl, h, timelineSince(time.Minute)), "")
+	// Pieces 7 (HIGH) and 8 (NORMAL, swarmLeecher) are wanted, on nobody.
+	checkAvailability(t, st, h, []availabilityCase{
+		{"", 4.0 / 9, [][2]int64{{4, 9}}, 2, 0},
+		{"pack/sub/b.bin", 1.0 / 6, [][2]int64{{1, 6}}, 2, 0},
+		{"pack/sub", 1.0 / 6, [][2]int64{{1, 6}}, 2, 0},
+	})
+}
+
 // Pieces complete here count as available and are never missing, though no
 // connected peer has them: the seeder got piece 8 from a seeder that has
 // since left, and the only peer now holds 0..3.
