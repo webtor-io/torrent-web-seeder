@@ -665,15 +665,7 @@ func TestStatsAskThePieces(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dataDir, zHash, evictGateName), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	torrents := t.TempDir()
-	f, err := os.Create(filepath.Join(torrents, "pack.torrent"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := zMI.Write(f); err != nil {
-		t.Fatal(err)
-	}
-	_ = f.Close()
+	torrents := zTorrents(t)
 	// A new seeder for each look: Get keeps its answer for 60 s.
 	ws := func() *WebSeeder {
 		return &WebSeeder{fcm: zFCM(dataDir), tfcm: NewTorrentFileCountMap(&FileStoreMap{p: torrents}, nil), st: NewStatWeb(nil)}
@@ -703,4 +695,59 @@ func TestStatsAskThePieces(t *testing.T) {
 	if w.Code == http.StatusNotFound {
 		t.Error("?stats on b answers 404 with piece 1 incomplete")
 	}
+}
+
+// zTorrents is a file store with zMI in it.
+func zTorrents(t *testing.T) string {
+	t.Helper()
+	torrents := t.TempDir()
+	f, err := os.Create(filepath.Join(torrents, "pack.torrent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := zMI.Write(f); err != nil {
+		t.Fatal(err)
+	}
+	return torrents
+}
+
+// TestAdviceTakesRowsWithoutRange: 8e3afa1 writes file_completion rows
+// without the range, over this version's rows while both run on a node and
+// anew after a rollback, and a db no pod of this version has opened has no
+// range columns at all. ?stats, ?warmup and ?done take such a row at its word,
+// as they always did; without that every file cached before the rollout lost
+// "cached" until its torrent was loaded again. The cache path does not: it
+// serves bytes, and the row may lie over a punched piece (TestCachePathLegacyRow).
+func TestAdviceTakesRowsWithoutRange(t *testing.T) {
+	dataDir := zSeed(t)
+	torrents := zTorrents(t)
+	check := func(state string) {
+		t.Helper()
+		// A new seeder for each look: Get keeps its answer for 60 s.
+		s := &WebSeeder{fcm: zFCM(dataDir), tfcm: NewTorrentFileCountMap(&FileStoreMap{p: torrents}, nil)}
+		for _, p := range []string{"pack/b.mkv", "pack", ""} {
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+zHash+"/"+p+"?done", nil))
+			if w.Code != http.StatusOK {
+				t.Errorf("%s: ?done on %q: %d, want 200", state, p, w.Code)
+			}
+		}
+		if _, ok := zServeB(t, dataDir, s.fcm); ok {
+			t.Errorf("%s: the cache path serves b", state)
+		}
+	}
+
+	// What 8e3afa1 leaves: its table, a row for each of the four files.
+	zExec(t, dataDir, `drop table file_completion`)
+	zExec(t, dataDir, `create table file_completion("path", unique("path"))`)
+	for _, f := range []string{"a", "b", "c", "d"} {
+		zExec(t, dataDir, `insert or replace into file_completion("path") values(?)`, "pack/"+f+".mkv")
+	}
+	check("db without the range columns")
+
+	// A pod of this version opened it since; the rows are NULL there.
+	zExec(t, dataDir, `alter table file_completion add column first_piece`)
+	zExec(t, dataDir, `alter table file_completion add column last_piece`)
+	check("rows without the range")
 }

@@ -38,7 +38,7 @@ func (s *FileCacheMap) get(h string, path string) (string, error) {
 	if _, err := os.Stat(filepath.Join(dir, ".torrent.db")); os.IsNotExist(err) {
 		return "", nil
 	}
-	if ok, err := fileComplete(dir, path); !ok {
+	if ok, err := fileComplete(dir, path, true); !ok {
 		return "", err
 	}
 	fullPath := cachedFilePath(dir, path)
@@ -61,7 +61,8 @@ func cachedFilePath(dir, path string) string {
 // (stats, warm-up, done): whether the file needs the swarm. It checks the
 // file's pieces as Open does, without the lock, as the answer only advises,
 // and not the eviction gate: a complete file of an evicting torrent is served
-// by the torrent path, but from disk. The answer is kept for 60 s.
+// by the torrent path, but from disk. Unlike Open it takes a row without the
+// range at its word (see completeFiles). The answer is kept for 60 s.
 func (s *FileCacheMap) Get(h string, path string) (string, error) {
 	key := h + path
 	return s.LazyMap.Get(key, func() (string, error) {
@@ -128,7 +129,7 @@ func (s *FileCacheMap) Open(h string, path string) (f *os.File, release func(), 
 // openComplete opens the cached file path if every piece it lies in is
 // complete. Called with the directory held.
 func openComplete(dir, path string) (*os.File, error) {
-	if ok, err := fileComplete(dir, path); !ok {
+	if ok, err := fileComplete(dir, path, false); !ok {
 		return nil, err
 	}
 	f, err := os.Open(cachedFilePath(dir, path))
@@ -139,32 +140,46 @@ func openComplete(dir, path string) (*os.File, error) {
 }
 
 // fileComplete reports whether every piece path lies in is complete in dir's
-// piece_completion.
-func fileComplete(dir, path string) (bool, error) {
-	n, err := completeFiles(dir, `"path" = ?`, path)
+// piece_completion; legacy: see completeFiles.
+func fileComplete(dir, path string, legacy bool) (bool, error) {
+	n, err := completeFiles(dir, `"path" = ?`, path, legacy)
 	return n > 0, err
 }
 
 // completeFiles counts dir's file_completion rows matching where (one ?,
 // arg) whose pieces, first_piece to last_piece, are all complete in
-// piece_completion. A row without the range does not count (NULL compares as
-// NULL), and neither does any row of a db no storage has opened since the
-// range columns, or of none at all. One query: IsDirComplete ran two per file,
-// 35 ms for 10000 files on every ?stats or ?done of the root.
-func completeFiles(dir, where string, arg any) (n int, err error) {
+// piece_completion. One query: IsDirComplete ran two per file, 35 ms for
+// 10000 files on every ?stats or ?done of the root.
+//
+// A row without the range is from a storage older than the range columns,
+// and 8e3afa1 writes such rows still: over a row of this one's during a
+// rollout, and anew after a rollback. A db no storage has opened since has
+// only such rows (and no columns). legacy counts them complete, as the row
+// alone counted before; the answers that only advise (Get, IsDirComplete)
+// take it, or every file cached before the rollout would lose "cached" until
+// a pod of this version loads its torrent. The cache path does not: it serves
+// the bytes, and production's zeros sat under such rows.
+func completeFiles(dir, where string, arg any, legacy bool) (n int, err error) {
 	// Read-only: no journal-mode pragma on open, no checkpoint on close.
 	db, err := sqlite.OpenConn(filepath.Join(dir, ".torrent.db"), sqlite.OpenReadOnly|sqlite.OpenNoMutex)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = db.Close() }()
-	err = sqlitex.Exec(db, `select count(*) from file_completion f where `+where+` and
-		(select count(*) from piece_completion p where p."index" between f.first_piece and f.last_piece and p.complete)
-		= f.last_piece - f.first_piece + 1`,
-		func(stmt *sqlite.Stmt) error {
-			n = stmt.ColumnInt(0)
-			return nil
-		}, arg)
+	count := func(stmt *sqlite.Stmt) error {
+		n = stmt.ColumnInt(0)
+		return nil
+	}
+	// A NULL range compares as NULL: not complete.
+	complete := `(select count(*) from piece_completion p where p."index" between f.first_piece and f.last_piece and p.complete)
+		= f.last_piece - f.first_piece + 1`
+	if legacy {
+		complete = `(f.first_piece is null or ` + complete + `)`
+	}
+	err = sqlitex.Exec(db, `select count(*) from file_completion f where `+where+` and `+complete, count, arg)
+	if err != nil && legacy && strings.Contains(err.Error(), "no such column") {
+		err = sqlitex.Exec(db, `select count(*) from file_completion f where `+where, count, arg)
+	}
 	if err != nil && strings.Contains(err.Error(), "no such") {
 		return 0, nil
 	}
@@ -189,6 +204,6 @@ func (s *FileCacheMap) IsDirComplete(h string, dirPath string, expectedFiles int
 	if dirPath != "" {
 		pattern = dirPath + "/%"
 	}
-	n, err := completeFiles(dir, `"path" like ?`, pattern)
+	n, err := completeFiles(dir, `"path" like ?`, pattern, true)
 	return n >= expectedFiles, err
 }
