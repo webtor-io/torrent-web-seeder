@@ -169,15 +169,25 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	// production 2026-09-03: `Range: bytes=3000000000-` plus
 	// `If-Modified-Since` returned 304 instead of 206.
 
-	// Vault is the authoritative store (worker verifies piece SHA-1 before
-	// committing to S3). The local file cache may contain stale bytes from
-	// past piece evictions that punched holes into the mmap'd file before
-	// the eviction race fix landed — file_completion can still report the
-	// file as complete while the underlying bytes have zero-filled regions.
-	// Serve from vault first; only fall back to the local cache when vault
-	// does not have the file (typically while the resource is still being
-	// ingested).
-	if s.v != nil {
+	// A file Vault has is redirected to Vault's copy: that takes the read
+	// off this seeder, which then needs neither the torrent nor its pieces.
+	// The copy is not the more trustworthy one. Vault did not check the
+	// piece at a file's end before vault 3596497, so a file stored earlier
+	// may be broken; this seeder serves a cached file only when every piece
+	// of it is complete under the torrent dir's lock (346bb8b), and a
+	// download reads only pieces that passed their hash (f76384a). One way
+	// to zeros stays open: another pod holding the torrent can write a
+	// peer's bad chunk over a piece this one already verified.
+	//
+	// Vault's own reads (ingest, its hash pass, a boundary piece's source,
+	// a blame re-read) carry X-Role vault, which thp sets from the verified
+	// token, and are not redirected: Vault checking its copy must get the
+	// torrent's bytes, not that copy back. The role skips this redirect and
+	// nothing else. Any pod can forge it (no NetworkPolicy), which only
+	// moves its read here. ?stats, ?warmup and ?done keep counting Vault's
+	// copy for every role (availableWithoutTorrent): they serve no bytes,
+	// and Vault does not call them.
+	if s.v != nil && r.Header.Get("X-Role") != "vault" {
 		served, err := s.redirectFromVault(w, r, h, p)
 		if err != nil {
 			logWithField.WithError(err).Warn("vault redirect failed, falling back to file cache or torrent")
@@ -187,11 +197,12 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		}
 	}
 
-	// Vault does not have it — we will be serving from this seeder's local
-	// torrent state (cache or live download). Touch the dir-level marker so
-	// torrent-web-seeder-cleaner does not reap the torrent while it is in
-	// use here. Skipped on the vault path above: redirects don't need this
-	// seeder to keep the torrent loaded.
+	// Vault does not have it, or Vault is the one reading — we will be
+	// serving from this seeder's local torrent state (cache or live
+	// download). Touch the dir-level marker so torrent-web-seeder-cleaner
+	// does not reap the torrent while it is in use here. Skipped on the
+	// vault path above: redirects don't need this seeder to keep the
+	// torrent loaded.
 	if _, err := s.tom.Touch(h); err != nil {
 		log.Error(err)
 	}
