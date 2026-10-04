@@ -225,7 +225,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	// stream makes no progress for stallTimeout (see watchStall).
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	tw, reader, err := s.getTorrentReader(ctx, w, h, p)
+	tw, reader, err := s.getTorrentReader(ctx, w, h, p, !download)
 	if err == nil && reader != nil {
 		// The torrent stays loaded for as long as this request reads it.
 		defer s.tm.Hold(h)()
@@ -383,7 +383,23 @@ func samePath(filePath, requested string) bool {
 	return path.Clean("/"+filePath) == path.Clean("/"+requested)
 }
 
-func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string) (http.ResponseWriter, io.ReadSeekCloser, error) {
+// getTorrentReader opens a reader of h's file p. A responsive reader hands out
+// each chunk as soon as it is written, before its piece is hashed; one that is
+// not waits for the piece to pass its hash.
+//
+// Downloads get the one that waits. A chunk a peer sent wrong (zeros, from a
+// copy it believes complete) is caught by the hash only after a responsive
+// reader has served it: a player shows a glitch, a download keeps the bytes.
+// Vault stores what it downloads (download=true): on 2026-10-03 pod spdrw
+// served the tail of a file of 7bcdc68b with five 16 KiB chunks of zeros, both
+// of Vault's reads got them, and the piece failed its hash two minutes later,
+// once the next file's part of it arrived. The wait costs a download one
+// piece's download and hash before its first byte.
+//
+// 105705c made downloads responsive again after a waiting reader hung on an
+// evicted piece the library never requested again. evictPiece now tells the
+// library the piece is gone (refreshCompletion).
+func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string, responsive bool) (http.ResponseWriter, io.ReadSeekCloser, error) {
 	t, err := s.tm.Get(ctx, h)
 	if err != nil {
 		return w, nil, err
@@ -393,7 +409,9 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 		if samePath(f.Path(), p) {
 			torReader := f.NewReader()
 			torReader.SetContext(ctx)
-			torReader.SetResponsive()
+			if responsive {
+				torReader.SetResponsive()
+			}
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
 			// Wrapped so the request's end does not drop the pieces this
 			// reader was after — see linger.go.
