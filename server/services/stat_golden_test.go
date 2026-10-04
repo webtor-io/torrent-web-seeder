@@ -35,7 +35,10 @@ const goldenStatStream = "testdata/statstream_availability.sse"
 //     missing_unchanged true;
 //  3. the next frame after a seeder connected: nothing missing, missing
 //     null and missing_unchanged false;
-//  4. a torrent the seeder has not loaded: live false, availability zero.
+//  4. a torrent the seeder has not loaded: live false, availability zero;
+//  5. root, settled, a reader blocked on piece 8: reader_missing 1, the
+//     frame web-ui turns into "missing" (taken before piece 8 arrives,
+//     sent last so frames 0..4 stay as they were).
 func TestStatStream_GoldenAvailability(t *testing.T) {
 	data, mi := availabilityTestPayload(t)
 	peerCl := swarmPeer(t, data, mi, 4*addTestPieceLen, 4)
@@ -65,6 +68,9 @@ func TestStatStream_GoldenAvailability(t *testing.T) {
 	ss := stream()
 	first := live(timelineSince(time.Minute))
 	send(ss, "root, settled", first, nil)
+	stopRead := blockReaderOn(t, tor, 8)
+	blocked := live(timelineSince(time.Minute))
+	stopRead()
 	tor.DownloadPieces(0, 1)
 	waitFor(t, "piece 0 from the peer", func() bool { return tor.Piece(0).State().Complete })
 	second := live(timelineSince(time.Minute))
@@ -89,6 +95,7 @@ func TestStatStream_GoldenAvailability(t *testing.T) {
 	cold := statMap(mmapClient(t, t.TempDir(), false), h, nil)
 	cold.fsm = &FileStoreMap{p: src}
 	send(stream(), "a torrent not loaded here", statFor(t, NewStat(cold, ""), h, ""), nil)
+	send(stream(), "root, settled, a reader blocked on piece 8", blocked, nil)
 
 	got := rec.Body.Bytes()
 	if *updateGolden {

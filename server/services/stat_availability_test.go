@@ -297,6 +297,36 @@ func waitForPeerPieces(t *testing.T, tor *torrent.Torrent, wantPieces int) {
 	}
 }
 
+// blockReaderOn opens a reader blocked on piece, which no peer has: a
+// reader has priorities only while in Read (reader.piecesUncached), and
+// this one cannot finish. stop cancels the read and closes the reader,
+// which puts the piece's priority back (Torrent.deleteReader).
+func blockReaderOn(t *testing.T, tor *torrent.Torrent, piece int) (stop func()) {
+	t.Helper()
+	r := tor.NewReader()
+	readCtx, stopRead := context.WithCancel(context.Background())
+	r.SetContext(readCtx)
+	if _, err := r.Seek(int64(piece)*addTestPieceLen, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		_, _ = r.Read(make([]byte, 1))
+	}()
+	waitFor(t, "the reader to wait on its piece", func() bool {
+		return tor.Piece(piece).State().Priority >= torrent.PiecePriorityReadahead
+	})
+	return func() {
+		t.Helper()
+		stopRead()
+		<-readDone
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // statMap is a TorrentMap over cl that knows h with timeline tl (nil: the
 // map does not track it).
 func statMap(cl *torrent.Client, h string, tl *peerTimeline) *TorrentMap {
@@ -379,23 +409,7 @@ func TestStat_AvailabilityFromPartialPeer(t *testing.T) {
 		t.Errorf("four scopes of one torrent read its swarm %d times, want 1", n)
 	}
 
-	// A stream blocked reading piece 8: a reader has priorities only while
-	// in Read (reader.piecesUncached), and this one cannot finish — nobody
-	// has the piece.
-	r := tor.NewReader()
-	readCtx, stopRead := context.WithCancel(context.Background())
-	r.SetContext(readCtx)
-	if _, err := r.Seek(8*addTestPieceLen, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
-	readDone := make(chan struct{})
-	go func() {
-		defer close(readDone)
-		_, _ = r.Read(make([]byte, 1))
-	}()
-	waitFor(t, "the reader to wait on piece 8", func() bool {
-		return tor.Piece(8).State().Priority >= torrent.PiecePriorityReadahead
-	})
+	stopRead := blockReaderOn(t, tor, 8)
 	reading := NewStat(statMap(cl, h, timelineSince(time.Minute)), "")
 	checkAvailability(t, reading, h, []availabilityCase{
 		{"", 4.0 / 9, [][2]int64{{4, 9}}, 1, 1},
@@ -404,10 +418,6 @@ func TestStat_AvailabilityFromPartialPeer(t *testing.T) {
 		{"pack/sub", 1.0 / 6, [][2]int64{{1, 6}}, 1, 1},
 	})
 	stopRead()
-	<-readDone
-	if err := r.Close(); err != nil {
-		t.Fatal(err)
-	}
 
 	// Warm-up: the same swarm with peers only just connected is not believed.
 	fresh := NewStat(statMap(cl, h, timelineSince(0)), "")
