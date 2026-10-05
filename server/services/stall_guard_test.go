@@ -62,7 +62,7 @@ func TestWatchStall(t *testing.T) {
 // TouchWriter records the time of its last write.
 func TestTouchWriter_LastWrite(t *testing.T) {
 	tm := &TorrentMap{entries: map[string]*torrentEntry{}, ttl: time.Second}
-	w := NewTouchWriter(httptest.NewRecorder(), tm, "h")
+	w := NewTouchWriter(httptest.NewRecorder(), tm, nil, "h")
 	if !w.LastWrite().IsZero() {
 		t.Fatal("no write yet must read as zero time")
 	}

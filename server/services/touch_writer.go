@@ -11,8 +11,9 @@ import (
 
 type TouchWriter struct {
 	http.ResponseWriter
-	tm *TorrentMap
-	h  string
+	tm  *TorrentMap
+	tom *TouchMap
+	h   string
 	// lastWrite is the unix-nano time of the last Write; the stall guard
 	// reads it to tell a stream that is still moving from one that is not.
 	lastWrite atomic.Int64
@@ -27,10 +28,11 @@ func (w *TouchWriter) LastWrite() time.Time {
 	return time.Unix(0, ns)
 }
 
-func NewTouchWriter(w http.ResponseWriter, tm *TorrentMap, h string) *TouchWriter {
+func NewTouchWriter(w http.ResponseWriter, tm *TorrentMap, tom *TouchMap, h string) *TouchWriter {
 	return &TouchWriter{
 		ResponseWriter: w,
 		tm:             tm,
+		tom:            tom,
 		h:              h,
 	}
 }
@@ -42,6 +44,15 @@ func (w *TouchWriter) WriteHeader(statusCode int) {
 func (w *TouchWriter) Write(p []byte) (int, error) {
 	if w.tm != nil { // nil: a cache-path stream, which keeps no torrent loaded
 		w.tm.Touch(w.h)
+	}
+	// <hash>.touch is the cleaner's clock of the dir's last use. A response
+	// uses the dir for as long as it writes, and a free-tier download under
+	// thp's 5 Mbit/s runs for up to a day: touched only at the request's
+	// start, the dir was the cleaner's first pick the moment it was let go.
+	// TouchMap writes the file at most once per 30 s; an error was logged at
+	// the request's start.
+	if w.tom != nil {
+		_, _ = w.tom.Touch(w.h)
 	}
 	w.lastWrite.Store(time.Now().UnixNano())
 	return w.ResponseWriter.Write(p)

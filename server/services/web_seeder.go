@@ -225,7 +225,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		// as long as it stays connected, so like a torrent stream this one is
 		// cut after stallTimeout without progress: release closes the file
 		// under ServeContent and the response ends short.
-		tw := NewTouchWriter(w, nil, h)
+		tw := NewTouchWriter(w, nil, s.tom, h)
 		go watchStall(r.Context(), release, tw.LastWrite, s.stallTimeout, logWithField)
 		serveWithValidators(tw, r, p, lastMod, etag, file)
 		return
@@ -431,7 +431,7 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
 			// Wrapped so the request's end does not drop the pieces this
 			// reader was after — see linger.go.
-			return NewTouchWriter(w, s.tm, h), s.linger.Wrap(torReader, t, f), nil
+			return NewTouchWriter(w, s.tm, s.tom, h), s.linger.Wrap(torReader, t, f), nil
 		}
 	}
 	return w, nil, nil
