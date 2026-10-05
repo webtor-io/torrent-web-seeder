@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
@@ -220,6 +221,55 @@ func TestStallGuardOnTheSwarm(t *testing.T) {
 	}
 }
 
+// Two peers that send only bad data for the piece a download waits on: its
+// hash fails, the library bans neither (it bans a piece's sole toucher), and
+// the piece downloads again and again. Bytes arriving a second time are not
+// progress, and the stream ends at the stall timeout after the first failed
+// hash; when every drop counted, it ran until the client gave up.
+func TestStallGuardEndsAPoisonedSwarm(t *testing.T) {
+	const (
+		pieceLen = 1 << 20 // 64 chunks
+		timeout  = time.Second
+	)
+	_, mi := multiChunkPayload(t, pieceLen, 1)
+	h := mi.HashInfoBytes().HexString()
+	ws, _ := zPod(t, t.TempDir(), mi, 0, timeout)
+	tor, err := ws.tm.Get(context.Background(), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ~1.6 s for the piece from the two together.
+	for range 2 {
+		junk := make([]byte, pieceLen)
+		if _, err := rand.Read(junk); err != nil {
+			t.Fatal(err)
+		}
+		tor.AddClientPeer(seedModeClient(t, junk, mi, throttle(20)))
+	}
+	srv := httptest.NewServer(ws)
+	t.Cleanup(srv.Close)
+	start := time.Now()
+	client := &http.Client{Timeout: 20 * timeout}
+	resp, err := client.Get(fmt.Sprintf("%s/%s/payload.bin?download=true", srv.URL, h))
+	var n int
+	if err == nil {
+		var body []byte
+		body, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		n = len(body)
+	}
+	took := time.Since(start)
+	st := tor.Stats()
+	bad := st.PiecesDirtiedBad.Int64()
+	t.Logf("%d bytes in %v (%v), %d failed hashes", n, took.Round(time.Millisecond), err, bad)
+	if bad == 0 {
+		t.Fatal("no hash failed: nothing here tests a poisoned swarm")
+	}
+	if n != 0 || took > 5*timeout {
+		t.Fatalf("a swarm that sends only bad data held the stream %v (%d bytes), stall timeout %v", took.Round(time.Millisecond), n, timeout)
+	}
+}
+
 // A client that stops reading holds the handler in Write, and meanwhile the
 // reader's readahead downloads the piece after the one written. That data is
 // not the stream's progress: the stream ends at the stall timeout, as it did
@@ -303,9 +353,10 @@ func (c abortConn) SetWriteDeadline(time.Time) error {
 	return nil
 }
 
-// Data is progress only for the piece a Read waits on, only as it arrives,
-// and only while the Read is in flight: a handler held in Write by a client
-// that stopped reading gets nothing from the readahead filling meanwhile.
+// Data is progress only for the piece a Read waits on, only as it arrives
+// for the first time in that Read, and only while the Read is in flight: a
+// handler held in Write by a client that stopped reading gets nothing from
+// the readahead filling meanwhile.
 func TestWaitingReaderLastData(t *testing.T) {
 	const pieces = 3
 	var mu sync.Mutex
@@ -335,10 +386,10 @@ func TestWaitingReaderLastData(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 	}
-	// returns ends the Read in flight with a piece's worth of bytes.
-	returns := func() {
+	// returns ends the Read in flight with n bytes.
+	returns := func(n int) {
 		pos := r.pos.Load()
-		reads <- 100
+		reads <- n
 		for r.pos.Load() == pos {
 			time.Sleep(time.Millisecond)
 		}
@@ -358,28 +409,49 @@ func TestWaitingReaderLastData(t *testing.T) {
 	if got.IsZero() {
 		t.Fatal("data for the piece the read waits on is progress")
 	}
+	set(0, 0) // every byte in, the hash pending
+	got = r.lastData()
+	set(0, 100) // the hash failed
+	r.lastData()
+	set(0, 30)
+	if r.lastData() != got {
+		t.Fatal("bytes the read already had once, arriving again after a failed hash, are progress")
+	}
 
-	returns()
+	set(0, 0)
+	returns(40) // part of piece 0, which another pod then punches
+	set(0, 100)
+	read() // waits on piece 0 again
+	r.lastData()
+	set(0, 90)
+	next := r.lastData()
+	if next == got {
+		t.Fatal("data for a piece a new read waits on is progress, though an earlier read saw it whole")
+	}
+	got = next
+
+	set(0, 0)
+	returns(60)
 	read() // waits on piece 1, which has fewer bytes left than piece 0 had
 	if r.lastData() != got {
 		t.Fatal("a piece already part downloaded is not data arriving")
 	}
 	set(1, 40)
-	next := r.lastData()
+	next = r.lastData()
 	if next == got {
 		t.Fatal("data for the piece the next read waits on is progress")
 	}
 	got = next
 
-	returns() // the handler is in Write, the readahead fills piece 2
+	returns(100) // the handler is in Write, the readahead fills piece 2
 	r.lastData()
-	set(2, 50)
+	set(2, 30) // fewer than piece 1 ever missed
 	if r.lastData() != got {
 		t.Fatal("data that arrives while no read waits is progress")
 	}
 
 	read()
-	returns() // at the file's end
+	returns(100) // at the file's end
 	read()
 	r.lastData()
 	reads <- 0

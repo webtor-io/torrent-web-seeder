@@ -325,13 +325,16 @@ type waitingReader struct {
 	offset, length, pieceLen int64                 // the file within the torrent
 	pos                      atomic.Int64
 	reading                  atomic.Bool
-	// lastData's own, sampled on watchStall's goroutine.
-	piece int
-	left  int64
-	at    time.Time
+	reads                    atomic.Int64 // Reads started
+	// lastData's own, sampled on watchStall's goroutine: the fewest bytes
+	// seen missing from the piece that Read number read waits on.
+	read int64
+	left int64
+	at   time.Time
 }
 
 func (r *waitingReader) Read(b []byte) (int, error) {
+	r.reads.Add(1)
 	r.reading.Store(true)
 	n, err := r.ReadSeekCloser.Read(b)
 	r.reading.Store(false)
@@ -347,22 +350,30 @@ func (r *waitingReader) Seek(off int64, whence int) (int64, error) {
 	return n, err
 }
 
-// lastData returns when the piece a Read waits on was last seen to get
-// bytes (zero: never). Each call is a sample; one goroutine makes them.
+// lastData returns when the piece a Read waits on was last seen with fewer
+// bytes missing than ever before in that Read (zero: never). Each call is a
+// sample; one goroutine makes them. A new low and not any drop: after a
+// failed hash the piece's bytes arrive again, and two or more peers that
+// send only bad data are never banned (the library bans a piece's sole
+// toucher), so counting their every drop held the stream for good. The low
+// is a Read's, not a piece's: a piece an earlier Read saw whole and that
+// lost its bytes since (an eviction, another pod's punch) arrives anew.
 func (r *waitingReader) lastData() time.Time {
-	pos := r.pos.Load()
+	// reads before pos: pos is then where Read number read started, or past
+	// it once that Read returned, and the next sample takes the later Read
+	// anew.
+	read, pos := r.reads.Load(), r.pos.Load()
 	// At the file's end there is no piece to wait on, and PieceBytesMissing
 	// does not check its index: past the torrent's last piece it panics.
 	if !r.reading.Load() || pos >= r.length {
-		r.piece = -1
 		return r.at
 	}
-	piece := int((r.offset + pos) / r.pieceLen)
-	left := r.missing(piece)
-	if piece == r.piece && left < r.left {
-		r.at = time.Now()
+	left := r.missing(int((r.offset + pos) / r.pieceLen))
+	if read != r.read {
+		r.read, r.left = read, left
+	} else if left < r.left {
+		r.left, r.at = left, time.Now()
 	}
-	r.piece, r.left = piece, left
 	return r.at
 }
 
