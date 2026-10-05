@@ -161,8 +161,6 @@ func recoverLRU(lru *PieceLRU, pc storage.PieceCompletion, info *metainfo.Info, 
 		lru.Recover(completePieces)
 		log.Infof("recovered %d complete pieces (%d bytes) for LRU",
 			len(completePieces), lru.Used())
-		promCacheBytesUsed.Add(float64(lru.Used()))
-		promCachePieceCount.Add(float64(len(completePieces)))
 	}
 }
 
@@ -281,10 +279,7 @@ func (ts *mmapTorrentStorage) Close() error {
 	close(ts.closeCh)
 	ts.stopEvictions()
 	if ts.lru != nil {
-		promCacheBytesUsed.Sub(float64(ts.lru.Used()))
-		ts.lru.mu.Lock()
-		promCachePieceCount.Sub(float64(len(ts.lru.entries)))
-		ts.lru.mu.Unlock()
+		ts.lru.Close()
 	}
 	// Advise the kernel to drop all mmap'd pages before unmapping.
 	// This ensures immediate RSS release when a torrent is dropped,
@@ -438,10 +433,8 @@ func (sp mmapStoragePiece) Completion() storage.Completion {
 	// the library downloads it again: the LRU then punches the chunks just
 	// written, and the next WriteAt clears the flag over them. In the LRU
 	// means complete here, so an incomplete piece leaves it.
-	if !c.Complete && sp.t.lru != nil && sp.t.lru.Has(idx) {
+	if !c.Complete && sp.t.lru != nil {
 		sp.t.lru.Remove(idx)
-		promCacheBytesUsed.Sub(float64(sp.p.Length()))
-		promCachePieceCount.Dec()
 	}
 	return c
 }
@@ -473,8 +466,6 @@ func (sp mmapStoragePiece) MarkComplete() error {
 	}
 	if sp.t.lru != nil {
 		toEvict := sp.t.lru.Add(sp.p.Index(), sp.p.Length())
-		promCacheBytesUsed.Add(float64(sp.p.Length()))
-		promCachePieceCount.Inc()
 		for _, idx := range toEvict {
 			if !sp.t.evictPiece(idx) {
 				break
@@ -627,11 +618,7 @@ func (ts *mmapTorrentStorage) punchPiece(idx int) (bool, func()) {
 		}
 	}
 
-	prevUsed := ts.lru.Used()
-	ts.lru.Remove(idx)
-	freedBytes := prevUsed - ts.lru.Used()
-	promCacheBytesUsed.Sub(float64(freedBytes))
-	promCachePieceCount.Dec()
+	freedBytes := ts.lru.Remove(idx)
 	promCacheEvictions.Inc()
 
 	mu.Unlock()

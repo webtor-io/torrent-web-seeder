@@ -30,6 +30,7 @@ type PieceLRU struct {
 	used        int64                // current bytes used
 	budget      int64                // max bytes (0 = unlimited)
 	isProtected func(index int) bool // optional: returns true if piece should not be evicted (e.g. belongs to completed file)
+	closed      bool                 // off the gauges; see Close
 }
 
 // NewPieceLRU creates a new per-torrent LRU tracker.
@@ -69,6 +70,9 @@ func (l *PieceLRU) Touch(index int) {
 func (l *PieceLRU) Add(index int, size int64) []int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.closed {
+		return nil
+	}
 	if _, ok := l.entries[index]; ok {
 		// Already tracked — just touch it.
 		e := l.entries[index]
@@ -84,24 +88,49 @@ func (l *PieceLRU) Add(index int, size int64) []int {
 	e.element = l.lruList.PushFront(e)
 	l.entries[index] = e
 	l.used += size
+	promCacheBytesUsed.Add(float64(size))
+	promCachePieceCount.Inc()
 	return l.computeEvictions()
 }
 
-// Remove removes a piece from the LRU tracker and decreases used bytes.
-func (l *PieceLRU) Remove(index int) {
+// Remove removes a piece from the LRU tracker and returns the bytes it freed,
+// 0 for a piece it did not track.
+func (l *PieceLRU) Remove(index int) int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.removeLocked(index)
+	return l.removeLocked(index)
 }
 
-func (l *PieceLRU) removeLocked(index int) {
+func (l *PieceLRU) removeLocked(index int) int64 {
 	e, ok := l.entries[index]
 	if !ok {
-		return
+		return 0
 	}
 	l.lruList.Remove(e.element)
 	l.used -= e.size
 	delete(l.entries, index)
+	if !l.closed {
+		promCacheBytesUsed.Sub(float64(e.size))
+		promCachePieceCount.Dec()
+	}
+	return e.size
+}
+
+// Close takes the LRU off the cache gauges for good: its storage is closing,
+// and a MarkComplete the library's hashers finish after the drop adds nothing.
+//
+// The gauges move here, under mu, with every change to the LRU. Moved by hand
+// next to each change, they drifted wherever the two came apart: an eviction
+// took off its piece as Used before the Remove less Used after, and an Add in
+// between made that 0 ("freed 0 bytes", 104 a day on two pods 2026-10-05);
+// an Add of a piece already tracked counted it again; a MarkComplete in Close
+// added its piece after Close had taken the LRU off.
+func (l *PieceLRU) Close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	promCacheBytesUsed.Sub(float64(l.used))
+	promCachePieceCount.Sub(float64(len(l.entries)))
+	l.closed = true
 }
 
 // Has reports whether a piece is tracked: complete and on disk.
@@ -153,6 +182,8 @@ func (l *PieceLRU) Recover(completePieces map[int]int64) {
 		e.element = l.lruList.PushBack(e) // recovered pieces go to back (LRU)
 		l.entries[index] = e
 		l.used += size
+		promCacheBytesUsed.Add(float64(size))
+		promCachePieceCount.Inc()
 	}
 }
 
