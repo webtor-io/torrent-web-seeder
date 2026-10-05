@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/anacrolix/torrent"
@@ -239,16 +240,22 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	// until 2026-09-21) a read on a swarm with no data blocked for as long
 	// as the process lived, and 46 such handlers on one pod were older than
 	// two hours. It is cancelled when the client goes away and when the
-	// stream makes no progress for stallTimeout (see watchStall).
+	// stream makes no progress for stallTimeout (see watchStall): no write,
+	// and no data for the piece a read waits on (see waitingReader).
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	tw, reader, err := s.getTorrentReader(ctx, w, h, p, !download)
 	if err == nil && reader != nil {
 		// The torrent stays loaded for as long as this request reads it.
 		defer s.tm.Hold(h)()
-		if t, ok := tw.(*TouchWriter); ok {
-			go watchStall(ctx, func() { cancel(); abortWrite(r) }, t.LastWrite, s.stallTimeout, logWithField)
+		progress := func() time.Time {
+			data, write := reader.lastData(), tw.LastWrite()
+			if data.After(write) {
+				return data
+			}
+			return write
 		}
+		go watchStall(ctx, func() { cancel(); abortWrite(r) }, progress, s.stallTimeout, logWithField)
 	}
 	if err != nil {
 		if strings.Contains(err.Error(), "PermissionDenied") {
@@ -275,9 +282,10 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 
 // watchStall cancels a stream that has made no progress for timeout: a
 // request whose client is gone or whose swarm is dead would otherwise hold
-// its torrent (and a goroutine) until the process restarts. Progress is the
-// response's last Write; a stream that just started counts from start.
-func watchStall(ctx context.Context, cancel context.CancelFunc, lastWrite func() time.Time, timeout time.Duration, logger *log.Entry) {
+// its torrent (and a goroutine) until the process restarts. lastProgress is
+// when the stream last moved, called once a tick; a stream that just started
+// counts from start.
+func watchStall(ctx context.Context, cancel context.CancelFunc, lastProgress func() time.Time, timeout time.Duration, logger *log.Entry) {
 	if timeout <= 0 {
 		return
 	}
@@ -289,7 +297,7 @@ func watchStall(ctx context.Context, cancel context.CancelFunc, lastWrite func()
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			last := lastWrite()
+			last := lastProgress()
 			if last.IsZero() {
 				last = start
 			}
@@ -300,6 +308,62 @@ func watchStall(ctx context.Context, cancel context.CancelFunc, lastWrite func()
 			}
 		}
 	}
+}
+
+// waitingReader tells watchStall when the swarm last sent data for the piece
+// a Read waits on. A download reads only pieces that passed their hash
+// (f76384a), so its response is written a whole piece at a time; counting
+// writes alone, watchStall cut a download whose piece was still arriving,
+// slower than a piece per stall timeout: 288 times on 2026-10-04/05 against
+// 80 the day before, at 0.7-14 KB/s on 1-16 MiB pieces, and thp's retries
+// finished none of them. Data counts only while a Read is in flight: a
+// client that stops reading holds the handler in Write while the readahead
+// still downloads, and that response must end (see abortWrite).
+type waitingReader struct {
+	io.ReadSeekCloser
+	missing                  func(piece int) int64 // bytes of the piece not yet received
+	offset, length, pieceLen int64                 // the file within the torrent
+	pos                      atomic.Int64
+	reading                  atomic.Bool
+	// lastData's own, sampled on watchStall's goroutine.
+	piece int
+	left  int64
+	at    time.Time
+}
+
+func (r *waitingReader) Read(b []byte) (int, error) {
+	r.reading.Store(true)
+	n, err := r.ReadSeekCloser.Read(b)
+	r.reading.Store(false)
+	r.pos.Add(int64(n))
+	return n, err
+}
+
+func (r *waitingReader) Seek(off int64, whence int) (int64, error) {
+	n, err := r.ReadSeekCloser.Seek(off, whence)
+	if err == nil {
+		r.pos.Store(n)
+	}
+	return n, err
+}
+
+// lastData returns when the piece a Read waits on was last seen to get
+// bytes (zero: never). Each call is a sample; one goroutine makes them.
+func (r *waitingReader) lastData() time.Time {
+	pos := r.pos.Load()
+	// At the file's end there is no piece to wait on, and PieceBytesMissing
+	// does not check its index: past the torrent's last piece it panics.
+	if !r.reading.Load() || pos >= r.length {
+		r.piece = -1
+		return r.at
+	}
+	piece := int((r.offset + pos) / r.pieceLen)
+	left := r.missing(piece)
+	if piece == r.piece && left < r.left {
+		r.at = time.Now()
+	}
+	r.piece, r.left = piece, left
+	return r.at
 }
 
 // abortWrite fails r's pending and later writes. A client that stays
@@ -428,10 +492,10 @@ func samePath(filePath, requested string) bool {
 // evicted piece the library never requested again. evictPiece now tells the
 // library the piece is gone (refreshCompletion), and a waiting reader gets an
 // evicted piece back (TestEvictedPieceRedownload_ReaderNeverSeesHoles).
-func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string, responsive bool) (http.ResponseWriter, io.ReadSeekCloser, error) {
+func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string, responsive bool) (*TouchWriter, *waitingReader, error) {
 	t, err := s.tm.Get(ctx, h)
 	if err != nil {
-		return w, nil, err
+		return nil, nil, err
 	}
 
 	for _, f := range t.Files() {
@@ -444,10 +508,16 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
 			// Wrapped so the request's end does not drop the pieces this
 			// reader was after — see linger.go.
-			return NewTouchWriter(w, s.tm, s.tom, h), s.linger.Wrap(torReader, t, f), nil
+			return NewTouchWriter(w, s.tm, s.tom, h), &waitingReader{
+				ReadSeekCloser: s.linger.Wrap(torReader, t, f),
+				missing:        t.PieceBytesMissing,
+				offset:         f.Offset(),
+				length:         f.Length(),
+				pieceLen:       t.Info().PieceLength,
+			}, nil
 		}
 	}
-	return w, nil, nil
+	return nil, nil, nil
 }
 
 // availableWithoutTorrent checks if the file/directory/root is available via cache or vault,

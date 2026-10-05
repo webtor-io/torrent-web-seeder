@@ -80,7 +80,8 @@ func addTestConfig(dir string) *torrent.ClientConfig {
 }
 
 // seedingClient holds the payload complete, in the library's own storage.
-func seedingClient(t *testing.T, data []byte, mi *metainfo.MetaInfo) *torrent.Client {
+// opts adjust its config before the client starts.
+func seedingClient(t *testing.T, data []byte, mi *metainfo.MetaInfo, opts ...func(*torrent.ClientConfig)) *torrent.Client {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "payload.bin"), data, 0o644); err != nil {
@@ -94,6 +95,9 @@ func seedingClient(t *testing.T, data []byte, mi *metainfo.MetaInfo) *torrent.Cl
 		UsePartFiles:    g.Some(false),
 	})
 	cfg.DefaultStorage = st
+	for _, o := range opts {
+		o(cfg)
+	}
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
 		t.Fatal(err)
