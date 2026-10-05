@@ -7,10 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/anacrolix/torrent/storage"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/urfave/cli"
 )
 
@@ -214,3 +219,61 @@ func TestEvictionPublishesOutsideTheDir(t *testing.T) {
 		t.Error("another pod's OpenTorrent waited 2 s for the dir while the eviction's Uncached publish was stuck")
 	}
 }
+
+// An eviction waiting for the dir (aloneMu, the gate) when the library drops
+// the torrent ran in the middle of Close, which told whileAlone to stop only
+// in its last step. A punch after Close had taken the LRU off the gauges took
+// its piece off a second time; one after the completion db closed failed with
+// "failed to mark piece N incomplete during eviction: closed". 2026-10-05,
+// worker63: 11 such lines and cache_pieces_count at -1 and -3 on the two pods,
+// each time within 6 s of dropping a torrent that was evicting.
+func TestCloseRefusesEvictions(t *testing.T) {
+	hook := test.NewGlobal()
+	defer hook.Reset()
+	before := testutil.ToFloat64(promCachePieceCount)
+	impl := zOpen(t, zSeed(t), nil)
+	ts := zStorage(impl)
+
+	shard := ts.pieceLock(1)
+	shard.Lock() // the eviction of piece 1 stops mid-way, holding aloneMu
+	evicted := make(chan struct{})
+	go func() { ts.evictPiece(1); close(evicted) }()
+	for ts.aloneMu.TryLock() {
+		ts.aloneMu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+	dbClosing := make(chan struct{}, 1)
+	ts.pc = closeHookPC{ts.pc, func(closeDB func() error) error {
+		dbClosing <- struct{}{}
+		<-evicted
+		err := closeDB()
+		ts.evictPiece(3)
+		return err
+	}}
+	closed := make(chan error)
+	go func() { closed <- impl.Close() }()
+	select {
+	case <-dbClosing: // Close went on past the gauges
+	case <-time.After(200 * time.Millisecond): // Close waits for the eviction
+	}
+	shard.Unlock()
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if d := testutil.ToFloat64(promCachePieceCount) - before; d != 0 {
+		t.Errorf("cache_pieces_count is off by %v once the storage closed", d)
+	}
+	for _, e := range hook.AllEntries() {
+		if strings.Contains(e.Message, "during eviction") {
+			t.Errorf("an eviction ran in Close: %s: %v", e.Message, e.Data[log.ErrorKey])
+		}
+	}
+}
+
+// closeHookPC runs close in place of Close, handing it the real one.
+type closeHookPC struct {
+	storage.PieceCompletion
+	close func(real func() error) error
+}
+
+func (p closeHookPC) Close() error { return p.close(p.PieceCompletion.Close) }

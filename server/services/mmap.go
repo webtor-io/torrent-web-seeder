@@ -214,7 +214,7 @@ type mmapTorrentStorage struct {
 	// for a storage built by hand in a test.
 	dirLock, evictGate *os.File
 	aloneMu            sync.Mutex
-	dirClosed          bool
+	closing            bool   // under aloneMu; see stopEvictions
 	afterFailedUpgrade func() // test hook: runs in whileAlone's gap
 }
 
@@ -279,6 +279,7 @@ func (ts *mmapTorrentStorage) startEvictionSweep() {
 
 func (ts *mmapTorrentStorage) Close() error {
 	close(ts.closeCh)
+	ts.stopEvictions()
 	if ts.lru != nil {
 		promCacheBytesUsed.Sub(float64(ts.lru.Used()))
 		ts.lru.mu.Lock()

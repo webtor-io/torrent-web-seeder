@@ -76,7 +76,7 @@ func (ts *mmapTorrentStorage) whileAlone(fn func()) bool {
 		fn()
 		return true
 	}
-	if ts.dirClosed {
+	if ts.closing {
 		return false
 	}
 	gate := int(ts.evictGate.Fd())
@@ -98,15 +98,24 @@ func (ts *mmapTorrentStorage) whileAlone(fn func()) bool {
 	return alone
 }
 
+// stopEvictions waits out a punch under way and refuses every later one. Close
+// calls it first: an eviction that was waiting for aloneMu or the gate when the
+// library dropped the torrent otherwise ran on in the middle of Close, after it
+// had taken the LRU off the gauges (the piece came off twice) or closed the
+// completion db ("failed to mark piece N incomplete during eviction: closed").
+func (ts *mmapTorrentStorage) stopEvictions() {
+	ts.aloneMu.Lock()
+	ts.closing = true
+	ts.aloneMu.Unlock()
+}
+
 // unlockDir lets go of the directory. Called last in Close: until then the
 // storage may still read the files on the strength of what it remembers.
+// Nothing uses the descriptors by then: whileAlone stopped in stopEvictions.
 func (ts *mmapTorrentStorage) unlockDir() {
-	ts.aloneMu.Lock()
-	defer ts.aloneMu.Unlock()
-	if ts.dirLock == nil || ts.dirClosed {
+	if ts.dirLock == nil {
 		return
 	}
-	ts.dirClosed = true
 	_ = ts.dirLock.Close()
 	if ts.evictGate != nil {
 		_ = ts.evictGate.Close()
