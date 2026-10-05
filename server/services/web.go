@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"github.com/prometheus/client_golang/prometheus"
 	"net"
@@ -88,15 +89,23 @@ func (s *Web) Serve() error {
 		return err
 	}
 
-	mux := http.NewServeMux()
-	logger := log.New()
-	l := logrusmiddleware.Middleware{
-		Logger: logger,
-	}
-	mux.Handle("/", l.Handler(RecoverMiddleware(s.ws), ""))
 	log.Infof("serving Web at %v", fmt.Sprintf("%s:%d", s.host, s.port))
-	return s.gs.Serve(&http.Server{Handler: mux}, ln)
+	return s.gs.Serve(newServer(s.ws), ln)
 }
+
+func newServer(ws http.Handler) *http.Server {
+	mux := http.NewServeMux()
+	l := logrusmiddleware.Middleware{
+		Logger: log.New(),
+	}
+	mux.Handle("/", l.Handler(RecoverMiddleware(ws), ""))
+	return &http.Server{Handler: mux, ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+		return context.WithValue(ctx, connKey{}, c)
+	}}
+}
+
+// connKey keys a request's connection in its context (see abortWrite).
+type connKey struct{}
 
 // Close drains in-flight requests (WEB_SHUTDOWN_TIMEOUT) before returning.
 // Closing only the listener let a terminating pod exit mid-response. It must

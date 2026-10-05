@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -224,9 +225,10 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		// waits for the stream. A client that stops reading would hold it for
 		// as long as it stays connected, so like a torrent stream this one is
 		// cut after stallTimeout without progress: release closes the file
-		// under ServeContent and the response ends short.
+		// under ServeContent, abortWrite fails a Write the client blocks, and
+		// the response ends short.
 		tw := NewTouchWriter(w, nil, s.tom, h)
-		go watchStall(r.Context(), release, tw.LastWrite, s.stallTimeout, logWithField)
+		go watchStall(r.Context(), func() { release(); abortWrite(r) }, tw.LastWrite, s.stallTimeout, logWithField)
 		serveWithValidators(tw, r, p, lastMod, etag, file)
 		return
 	}
@@ -245,7 +247,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		// The torrent stays loaded for as long as this request reads it.
 		defer s.tm.Hold(h)()
 		if t, ok := tw.(*TouchWriter); ok {
-			go watchStall(ctx, cancel, t.LastWrite, s.stallTimeout, logWithField)
+			go watchStall(ctx, func() { cancel(); abortWrite(r) }, t.LastWrite, s.stallTimeout, logWithField)
 		}
 	}
 	if err != nil {
@@ -297,6 +299,17 @@ func watchStall(ctx context.Context, cancel context.CancelFunc, lastWrite func()
 				return
 			}
 		}
+	}
+}
+
+// abortWrite fails r's pending and later writes. A client that stays
+// connected and stops reading blocks the response in Write, where watchStall's
+// cancel does not reach: the handler stayed until the client left, and on the
+// torrent path its Hold kept the torrent and its dir (75 times on 2026-10-05
+// for an hour or more).
+func abortWrite(r *http.Request) {
+	if c, ok := r.Context().Value(connKey{}).(net.Conn); ok {
+		_ = c.SetWriteDeadline(time.Now())
 	}
 }
 
