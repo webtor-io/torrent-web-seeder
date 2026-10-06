@@ -58,8 +58,12 @@ var promRecoveredPanics = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "HTTP handlers that panicked and were answered with a 500 by RecoverMiddleware",
 })
 
+// accessLog writes the "completed handling request" line of every request.
+var accessLog = log.New()
+
 func init() {
 	prometheus.MustRegister(promRecoveredPanics)
+	accessLog.AddHook(redactHook{})
 }
 
 // RecoverMiddleware is a middleware that recovers from panics and logs the error.
@@ -96,7 +100,7 @@ func (s *Web) Serve() error {
 func newServer(ws http.Handler) *http.Server {
 	mux := http.NewServeMux()
 	l := logrusmiddleware.Middleware{
-		Logger: log.New(),
+		Logger: accessLog,
 	}
 	mux.Handle("/", l.Handler(RecoverMiddleware(ws), ""))
 	return &http.Server{Handler: mux, ConnContext: func(ctx context.Context, c net.Conn) context.Context {
