@@ -374,10 +374,10 @@ func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatRe
 	}
 	f := findFile(t, in.GetPath())
 	if f == nil {
-		// Not a file: a directory (the resource page asks for the root
-		// item, which for a single-root-directory torrent is that
-		// directory) — aggregate its files. Only a path matching nothing
-		// is NotFound.
+		// Not a file: a directory (a directory download's job asks for
+		// it, web-ui action.go) — aggregate its files. The resource page
+		// is not this path: it asks for the root "/", the empty path
+		// above, torrentStat. Only a path matching nothing is NotFound.
 		if files := dirFiles(t, in.GetPath()); len(files) > 0 {
 			return s.dirStat(t, files, tl)
 		}
