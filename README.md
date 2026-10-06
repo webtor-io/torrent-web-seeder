@@ -257,7 +257,12 @@ All configuration via CLI flags and environment variables.
 
 - Warmup (`?warmup=true`, optional `Range`) takes a file or a directory;
   a directory is warmed as its files concatenated in torrent order, which
-  is the byte order of the archive built from it.
+  is the byte order of the archive built from it. Each second's frame is
+  `have:`, `span:`, `data:`. `data` is the range's verified bytes and moves
+  a whole piece at a time; `span` is the length of the pieces covering the
+  range and `have` their bytes on hand, chunks not yet hashed included (it
+  drops when a hash fails). A client reading only `data:` lines is
+  unaffected.
 - Stats look but do not touch (2026-09-09). `Stat`/`StatStream` ask the
   client whether it already holds the torrent (`TorrentMap.Peek`); if it
   does — someone is streaming, downloading or warming it — the numbers are

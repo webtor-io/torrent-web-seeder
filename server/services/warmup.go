@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,12 +33,21 @@ func NewWarmup(tm *TorrentMap) *Warmup {
 // order, the byte order the archiver emits them in, so "the first MiB of
 // the archive" is the first MiB of that concatenation. Serve parses the
 // Range header (or defaults to the whole target), bumps PiecePriorityHigh
-// on every piece covering that byte range, and emits `data: <downloaded>\n\n` once per
-// second where downloaded is the number of bytes within the requested
-// range that the seeder has already verified. The stream closes when
-// downloaded == total or the client disconnects; the close itself is the
-// "warmup complete" signal — the client already knows the requested
-// range length.
+// on every piece covering that byte range, and once per second emits
+//
+//	have: <have>
+//	span: <span>
+//	data: <downloaded>
+//
+// downloaded is the number of bytes within the requested range that the
+// seeder has already verified; it moves a whole piece at a time. span is
+// the length of the pieces covering the range, and have the bytes of those
+// pieces the seeder holds, chunks not yet hashed included: it moves a chunk
+// at a time and drops when a hash fails. A client that reads only data:
+// lines (web-ui before have/span) sees the stream it always did. The
+// stream closes when downloaded == total or the client disconnects; the
+// close itself is the "warmup complete" signal — the client already knows
+// the requested range length.
 //
 // Piece priorities are intentionally NOT lowered when the client leaves:
 // pieces that finish after disconnect remain cached and ready for the
@@ -102,7 +112,12 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 	// SetPriority is idempotent and the request-strategy layer takes the
 	// max across all sources, so this won't downgrade pieces a concurrent
 	// reader has already raised to PiecePriorityNow.
-	target.prioritize(t, pieceLen, rangeStart, rangeEnd)
+	pieces := target.pieces(pieceLen, rangeStart, rangeEnd)
+	for _, i := range pieces {
+		t.Piece(i).SetPriority(torrent.PiecePriorityHigh)
+	}
+	// Once: for a v2 or hybrid torrent a piece's length walks the file tree.
+	span := pieceSpan(pieces, func(i int) int64 { return t.Piece(i).Info().Length() })
 
 	var mu sync.Mutex
 	emit := func(downloaded int64) {
@@ -120,6 +135,9 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 				log.WithField("at", "warmup.emit").Warnf("recovered panic: %v", rec)
 			}
 		}()
+		if span > 0 {
+			fmt.Fprintf(w, "have: %d\nspan: %d\n", pieceHave(pieces, span, t.PieceBytesMissing), span)
+		}
 		fmt.Fprintf(w, "data: %d\n\n", downloaded)
 		flusher.Flush()
 	}
@@ -159,6 +177,8 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 type warmSegment struct {
 	f      *torrent.File
 	off, n int64
+	// at is the file's offset in the torrent.
+	at int64
 }
 
 // warmTarget is what a warmup request addresses: a single file, or a
@@ -178,7 +198,7 @@ func newWarmTarget(files []*torrent.File) *warmTarget {
 		if f.Length() <= 0 {
 			continue
 		}
-		wt.segs = append(wt.segs, warmSegment{f: f, off: wt.length, n: f.Length()})
+		wt.segs = append(wt.segs, warmSegment{f: f, off: wt.length, n: f.Length(), at: f.Offset()})
 		wt.length += f.Length()
 	}
 	return wt
@@ -203,21 +223,44 @@ func (wt *warmTarget) each(start, end int64, fn func(s warmSegment, fileStart, f
 	}
 }
 
-// prioritize raises every piece overlapping [start, end] to High.
-func (wt *warmTarget) prioritize(t *torrent.Torrent, pieceLen, start, end int64) {
+// pieces are the pieces overlapping [start, end], ascending and each once:
+// in a directory a file that ends mid-piece shares that piece with the
+// next file.
+func (wt *warmTarget) pieces(pieceLen, start, end int64) []int {
+	var idx []int
 	wt.each(start, end, func(s warmSegment, fileStart, fileEnd int64) {
-		firstPieceInFile := int(s.f.Offset() / pieceLen)
-		var fileOff int64
-		for i, ps := range s.f.State() {
-			pieceFileStart := fileOff
-			pieceFileEnd := fileOff + ps.Bytes - 1
-			fileOff += ps.Bytes
-			if pieceFileEnd < fileStart || pieceFileStart > fileEnd {
-				continue
-			}
-			t.Piece(firstPieceInFile + i).SetPriority(torrent.PiecePriorityHigh)
+		for i := (s.at + fileStart) / pieceLen; i <= (s.at+fileEnd)/pieceLen; i++ {
+			idx = append(idx, int(i))
 		}
 	})
+	slices.Sort(idx)
+	return slices.Compact(idx)
+}
+
+// pieceSpan is the summed length of pieces, or 0 if length panics: the
+// library panics on a torrent whose piece count and file lengths disagree
+// (metainfo.Piece.Length), and such a torrent keeps its data: lines.
+func pieceSpan(pieces []int, length func(int) int64) (span int64) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.WithField("at", "warmup.span").Warnf("recovered panic: %v", rec)
+			span = 0
+		}
+	}()
+	for _, i := range pieces {
+		span += length(i)
+	}
+	return span
+}
+
+// pieceHave is the bytes of pieces the seeder holds, out of their span:
+// every chunk written, hashed or not. A piece's chunks are cleared when its
+// hash fails, so have can drop.
+func pieceHave(pieces []int, span int64, missing func(int) int64) int64 {
+	for _, i := range pieces {
+		span -= missing(i)
+	}
+	return span
 }
 
 // downloaded is the number of verified bytes inside [start, end].
