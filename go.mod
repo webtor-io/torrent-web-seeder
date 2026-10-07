@@ -20,7 +20,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli v1.22.17
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
-	github.com/webtor-io/common-services v0.0.0-20260925142105-6ffe7f0e19ed
+	github.com/webtor-io/common-services v0.0.0-20261007162356-7960c21dad8f
 	github.com/webtor-io/torrent-store v1.0.0
 	go.etcd.io/bbolt v1.4.3 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
