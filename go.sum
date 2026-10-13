@@ -476,8 +476,8 @@ github.com/webtor-io/common-services v0.0.0-20261007162356-7960c21dad8f h1:nOpm1
 github.com/webtor-io/common-services v0.0.0-20261007162356-7960c21dad8f/go.mod h1:r6jdz43RU9T68jBhxLMIAlkEXGMw5BWTkTiWa0PtaZc=
 github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108 h1:4rJXuBJFmr4ePOQIIBDOkAzQrjFoMpWns8g1zD95ugM=
 github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108/go.mod h1:kioEFK4hk8YfHrhg47tGvMG40xawOJM4gcfRQ4EeX4k=
-github.com/webtor-io/torrent v0.0.0-20260925081045-553f70d9836b h1:mqzgJDNvSSLLbedxuyqk+BqUbkZRa+cEBt6WhqfqjGI=
-github.com/webtor-io/torrent v0.0.0-20260925081045-553f70d9836b/go.mod h1:+grExvB/R/rMshKJNTTPNxKFLsxqbETsXsyQDHSQfUA=
+github.com/webtor-io/torrent v0.0.0-20261013211745-be58dc6815b7 h1:cKfsraFLeW2fLpANxbQZwIQYAKjp7lHb8dN7QXOkiPU=
+github.com/webtor-io/torrent v0.0.0-20261013211745-be58dc6815b7/go.mod h1:+grExvB/R/rMshKJNTTPNxKFLsxqbETsXsyQDHSQfUA=
 github.com/webtor-io/torrent-store v1.0.0 h1:UiDRZ2H6MrlpLkL/nfDzeelUFuS/Snj2E6QwKazTrOk=
 github.com/webtor-io/torrent-store v1.0.0/go.mod h1:88tKPA84dac59ZhzlvTjrt2nRLq4tGHYAxfUicDnkso=
 github.com/webtor-io/utp v0.2.1-0.20260503123918-24e7018d4f71 h1:ZYVgRxIEJzttPQt82Gq9DXpiHcrK0OIQeO53x0Jzg3k=
