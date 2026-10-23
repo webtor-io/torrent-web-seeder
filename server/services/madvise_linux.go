@@ -15,10 +15,8 @@ var pageSize = int64(os.Getpagesize())
 // to a page boundary and whose length covers the original range.
 // madvise(2) requires page-aligned addresses.
 func pageAlignedSlice(b []byte) []byte {
-	addr := uintptr(unsafe.Pointer(&b[0]))
-	aligned := addr &^ uintptr(pageSize-1)
-	length := uintptr(len(b)) + (addr - aligned)
-	return unsafe.Slice((*byte)(unsafe.Pointer(aligned)), length)
+	off := uintptr(unsafe.Pointer(&b[0])) & uintptr(pageSize-1)
+	return unsafe.Slice((*byte)(unsafe.Add(unsafe.Pointer(&b[0]), -int(off))), uintptr(len(b))+off)
 }
 
 // madviseEvict advises the kernel that the given mmap'd region is no longer needed
