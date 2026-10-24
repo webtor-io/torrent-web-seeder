@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -61,6 +62,9 @@ type WebSeeder struct {
 	cl           *http.Client
 	maxReadahead int64
 	linger       *Linger
+	// storePending holds the hashes whose verdict ran out of time with their
+	// Pull still running; see storeVerdict.
+	storePending sync.Map
 }
 
 func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, tom *TouchMap, st *StatWeb, wu *Warmup, v *Vault, cl *http.Client, maxReadahead int64, linger *Linger, stallTimeout time.Duration) *WebSeeder {
@@ -324,7 +328,17 @@ var storeCheckWarn = rate.Sometimes{Interval: time.Minute}
 // included, is not cached). serveFile refuses only on PermissionDenied: a
 // file in Vault or on disk is not to stop being served when the store is
 // down.
+//
+// Nor is it to be slowed down by a store that hangs. Until the Pull that ran
+// out of time returns, h is not asked again: a later request would join the
+// same Pull in the lazymap and wait the timeout again for nothing, every
+// Range request and nginx-vod subrequest of the file, for up to the Pull's
+// minute and then again with the next Pull. So a hang costs one wait per
+// Pull, not one per request.
 func (s *WebSeeder) storeVerdict(h string) error {
+	if _, ok := s.storePending.Load(h); ok {
+		return fmt.Errorf("no answer from torrent store yet, its Pull ran out of %v", storeCheckTimeout)
+	}
 	res := make(chan error, 1)
 	go func() {
 		_, err := s.tm.MetaInfo(h)
@@ -334,6 +348,11 @@ func (s *WebSeeder) storeVerdict(h string) error {
 	case err := <-res:
 		return err
 	case <-time.After(storeCheckTimeout):
+		s.storePending.Store(h, struct{}{})
+		go func() {
+			<-res
+			s.storePending.Delete(h)
+		}()
 		return fmt.Errorf("no answer from torrent store in %v", storeCheckTimeout)
 	}
 }

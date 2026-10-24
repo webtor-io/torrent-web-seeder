@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -135,5 +136,62 @@ func TestStoreRefusalBeforeVaultAndCache(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestStoreHangWaitedOncePerPull: while the store hangs, only the request that
+// started the Pull waits storeCheckTimeout; the ones after it, which would
+// join the same Pull in the lazymap, are served at once, and the next Pull
+// is waited for again once the hung one returns.
+func TestStoreHangWaitedOncePerPull(t *testing.T) {
+	const (
+		hash = "f07c04a783450dba366e562c253ce56573d7535f"
+		path = "episode.ts"
+		body = "0123456789abcdefghij"
+	)
+	old := storeCheckTimeout
+	storeCheckTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { storeCheckTimeout = old })
+	hang := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hang) })
+	t.Cleanup(release)
+	var pulls atomic.Int32
+	ws := cachedFileSeeder(t, hash, path, body)
+	ws.tm = storeMap(func() (*ts.PullReply, error) {
+		pulls.Add(1)
+		<-hang
+		return nil, status.Error(codes.DeadlineExceeded, "")
+	})
+	get := func() time.Duration {
+		start := time.Now()
+		w := httptest.NewRecorder()
+		ws.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+hash+"/"+path+"?download=true", nil))
+		if w.Code != http.StatusOK || w.Body.String() != body {
+			t.Fatalf("status %d, body %q; want the file from this disk", w.Code, w.Body.String())
+		}
+		return time.Since(start)
+	}
+	if d := get(); d < storeCheckTimeout {
+		t.Fatalf("first request served in %v, before the store's timeout", d)
+	}
+	for i := 1; i < 5; i++ {
+		if d := get(); d >= storeCheckTimeout/2 {
+			t.Errorf("request %d waited %v for a Pull that already ran out of time", i, d)
+		}
+	}
+	if n := pulls.Load(); n != 1 {
+		t.Errorf("%d Pulls, want 1", n)
+	}
+	release()
+	deadline := time.Now().Add(5 * time.Second)
+	for _, ok := ws.storePending.Load(hash); ok; _, ok = ws.storePending.Load(hash) {
+		if time.Now().After(deadline) {
+			t.Fatal("the hash stays pending after its Pull returned")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	get()
+	if n := pulls.Load(); n != 2 {
+		t.Errorf("%d Pulls after the hung one returned, want 2", n)
 	}
 }
