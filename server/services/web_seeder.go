@@ -20,6 +20,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	"golang.org/x/time/rate"
 )
 
 var sha1R = regexp.MustCompile("^[0-9a-f]{5,40}$")
@@ -171,6 +172,31 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	// production 2026-09-03: `Range: bytes=3000000000-` plus
 	// `If-Modified-Since` returned 304 instead of 206.
 
+	// torrent-store refuses a torrent (a ban by infohash or by payload, the
+	// stoplist) with PermissionDenied from Pull, and Pull used to come only on
+	// the torrent path below. A refused torrent's file in Vault or whole on
+	// this disk was served without it for as long as the copy stayed: Vault's
+	// until its worker deletes it (never for a payload ban under another
+	// infohash), the disk's until the cleaner reaps the dir (10.6 h at the
+	// median in October 2026, never while in demand, as every read touches
+	// it). So the verdict comes first and for every role: Vault reading a
+	// refused file from this disk is how such a copy comes to be. ?stats,
+	// ?warmup and ?done serve no bytes and are not asked.
+	if err := s.storeVerdict(h); err != nil {
+		if strings.Contains(err.Error(), "PermissionDenied") {
+			logWithField.WithError(err).Warn("permission denied")
+			http.Error(w, "permission denied", http.StatusForbidden)
+			return
+		}
+		// NotFound is no failure: the store no longer has the .torrent, and
+		// a banned infohash is refused before the store is read.
+		if !strings.Contains(err.Error(), "NotFound") {
+			storeCheckWarn.Do(func() {
+				logWithField.WithError(err).Warn("torrent store check failed, serving without it")
+			})
+		}
+	}
+
 	// A file Vault has is redirected to Vault's copy: that takes the read
 	// off this seeder, which then needs neither the torrent nor its pieces.
 	// The copy is not the more trustworthy one. Vault did not check the
@@ -278,6 +304,38 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	defer reader.Close()
 
 	serveWithValidators(tw, r, p, lastMod, etag, reader)
+}
+
+// storeCheckTimeout is how long a file waits for torrent-store's verdict
+// before it is served without one. Pull took 21 ms at the median and 4.2 s at
+// the slowest (torrent-store's log, 6 h of 2026-10-24); the seeder's own Pull
+// waits up to a minute and its errors are not cached, so a store that hangs
+// would hold every request to a file in Vault or on disk that long.
+var storeCheckTimeout = 5 * time.Second
+
+// storeCheckWarn keeps a store that fails every check to a warning a minute.
+var storeCheckWarn = rate.Sometimes{Interval: time.Minute}
+
+// storeVerdict asks torrent-store for torrent h through MetaInfo: the same
+// Pull and 5-minute cache the torrent path uses, without loading the torrent
+// or taking the map's lock. It returns Pull's error, or one of its own when
+// there is no answer in storeCheckTimeout; the Pull left running then caches
+// its torrent, if it gets one, for the next request (an error, a refusal
+// included, is not cached). serveFile refuses only on PermissionDenied: a
+// file in Vault or on disk is not to stop being served when the store is
+// down.
+func (s *WebSeeder) storeVerdict(h string) error {
+	res := make(chan error, 1)
+	go func() {
+		_, err := s.tm.MetaInfo(h)
+		res <- err
+	}()
+	select {
+	case err := <-res:
+		return err
+	case <-time.After(storeCheckTimeout):
+		return fmt.Errorf("no answer from torrent store in %v", storeCheckTimeout)
+	}
 }
 
 // watchStall cancels a stream that has made no progress for timeout: a

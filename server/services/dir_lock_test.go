@@ -113,7 +113,7 @@ func TestCachePathStalledStreamLetsGoOfTheDir(t *testing.T) {
 
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.String(DataDirFlag, dataDir, "")
-	s := &WebSeeder{fcm: zFCM(dataDir), tom: NewTouchMap(cli.NewContext(nil, fs, nil)), stallTimeout: time.Second}
+	s := &WebSeeder{tm: storeMap(notStored), fcm: zFCM(dataDir), tom: NewTouchMap(cli.NewContext(nil, fs, nil)), stallTimeout: time.Second}
 	w := &stuckWriter{h: http.Header{}, writing: make(chan struct{}), unblock: make(chan struct{})}
 	served := make(chan struct{})
 	go func() {

@@ -68,7 +68,7 @@ func BenchmarkServeFileFromCache(b *testing.B) {
 	fs := flag.NewFlagSet("bench", flag.ContinueOnError)
 	fs.String(DataDirFlag, dataDir, "")
 	c := cli.NewContext(nil, fs, nil)
-	benchServe(b, &WebSeeder{fcm: NewFileCacheMap(c), tom: NewTouchMap(c)}, ih.HexString(), info.Name)
+	benchServe(b, &WebSeeder{tm: storeMap(notStored), fcm: NewFileCacheMap(c), tom: NewTouchMap(c)}, ih.HexString(), info.Name)
 }
 
 // BenchmarkServeFileEvicting is the same request for a complete 16 MiB file of

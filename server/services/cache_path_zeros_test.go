@@ -239,7 +239,7 @@ func zServeB(t *testing.T, dataDir string, fcm *FileCacheMap) (body []byte, ok b
 	t.Helper()
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.String(DataDirFlag, dataDir, "")
-	s := &WebSeeder{fcm: fcm, tom: NewTouchMap(cli.NewContext(nil, fs, nil))}
+	s := &WebSeeder{tm: storeMap(notStored), fcm: fcm, tom: NewTouchMap(cli.NewContext(nil, fs, nil))}
 	f, release, err := fcm.Open(zHash, "pack/b.mkv")
 	if err != nil {
 		t.Fatal(err)

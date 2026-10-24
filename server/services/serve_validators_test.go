@@ -226,5 +226,5 @@ func cachedFileSeeder(t *testing.T, hash, path, body string) *WebSeeder {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.String(DataDirFlag, dir, "")
 	c := cli.NewContext(nil, fs, nil)
-	return &WebSeeder{fcm: NewFileCacheMap(c), tom: NewTouchMap(c)}
+	return &WebSeeder{tm: storeMap(notStored), fcm: NewFileCacheMap(c), tom: NewTouchMap(c)}
 }
