@@ -18,6 +18,7 @@ import (
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/metainfo"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -95,12 +96,30 @@ func (s *WebSeeder) renderTorrent(ctx context.Context, w http.ResponseWriter, h 
 	}
 	w.Header().Set("Content-Type", "application/x-bittorrent")
 
-	err = bencode.NewEncoder(w).Encode(t.Metainfo())
+	err = bencode.NewEncoder(w).Encode(sourceMetainfo(t))
 	if err != nil {
 		log.WithError(err).Error("failed to encode torrent")
 		http.Error(w, "failed to encode torrent", http.StatusInternalServerError)
 		return
 	}
+}
+
+// sourceMetainfo is the metainfo source.torrent serves. A private torrent
+// (BEP 27) goes out without announce, announce-list and url-list, to
+// everyone: torrent-store keeps one record per infohash, its trackers carry
+// the passkey of whoever uploaded it first, and anyone who knows the
+// infohash can ask for this file. The uploader has the original. A torrent
+// whose info is unknown is treated as private; Get does not hand one out
+// (AddTorrent refuses a metainfo without info), so that is only the safe
+// default. Announce needs no clearing: Torrent.Metainfo never sets it, the
+// trackers are all in announce-list.
+func sourceMetainfo(t *torrent.Torrent) metainfo.MetaInfo {
+	mi := t.Metainfo()
+	if info := t.Info(); info == nil || info.Private != nil && *info.Private {
+		mi.AnnounceList = nil
+		mi.UrlList = nil
+	}
+	return mi
 }
 
 func (s *WebSeeder) addA(path string, w http.ResponseWriter, r *http.Request) {
