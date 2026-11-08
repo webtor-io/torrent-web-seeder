@@ -264,9 +264,8 @@ func NewPieceCompletion(dir string, info *metainfo.Info, hash metainfo.Hash, eve
 		announced:   make(map[string]bool),
 	}
 	go func() {
-		// No local dedup map — always call CompleteFile() so that after
-		// eviction + re-download the file_completion entry is re-added.
-		// INSERT OR REPLACE is idempotent, so repeated calls are safe.
+		// Every tick offers every complete file; completeFile writes only
+		// the ones not yet written since load or since their eviction.
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -406,6 +405,19 @@ func (s *pieceCompletion) completeFile(path string) (announce bool, err error) {
 	if s.closed {
 		return false, errors.New("closed")
 	}
+	// The row is written once per completion, like the event: the loop below
+	// NewPieceCompletion offers every complete file every 5 s until the whole
+	// torrent is, which a torrent over its cache budget never is. Rewriting
+	// an identical row each tick cost ~13 KB of WAL per file per tick: two
+	// pods on 2026-11-07 wrote ~25 MB/s each while downloading 1-3 MB/s
+	// (2.7 TB/day between them; up to ~6 TB/day fleet-wide by the same
+	// signature, not checked pod by pod). Only uncompleteFiles deletes the row, and it
+	// clears announced under this lock, so a file evicted and downloaded again
+	// is written again. The first call of each load still writes, which fills
+	// first_piece/last_piece of a row from before those columns.
+	if s.announced[path] {
+		return false, nil
+	}
 	var first, last any // NULL for a path the torrent does not have
 	if r, ok := s.pieces[path]; ok {
 		first, last = r[0], r[1]
@@ -420,7 +432,7 @@ func (s *pieceCompletion) completeFile(path string) (announce bool, err error) {
 	// restart or an unload announces its complete files anew: that is the
 	// consumer's sign they are still here, and it costs one event per file
 	// per load.
-	if err == nil && !s.announced[path] {
+	if err == nil {
 		s.announced[path] = true
 		announce = true
 	}
