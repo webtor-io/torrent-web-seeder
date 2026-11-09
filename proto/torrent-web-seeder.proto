@@ -96,6 +96,13 @@ message StatReply {
   // keep the runs you have. False in every frame that carries missing,
   // including one where it became empty, and in Stat replies.
   bool  missing_unchanged   = 14;
+  // tracker_refused is true when the torrent is private (BEP 27) and the
+  // latest announce to every one of its trackers failed: the tracker refused
+  // it (a bad ratio, an unknown passkey, a banned client) or did not answer.
+  // A private torrent finds peers through its trackers alone, so this is why
+  // it has none. False for a public torrent, which has DHT and PEX too, and
+  // on a cold reply.
+  bool  tracker_refused     = 15;
 }
 
 // A half-open run [start, end) of piece positions.

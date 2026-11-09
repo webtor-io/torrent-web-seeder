@@ -150,6 +150,7 @@ func readSwarm(t *torrent.Torrent, tl *peerTimeline) *swarmSnapshot {
 // torrent piece offset; complete, wanted and reading are per scope piece,
 // seeders is the torrent's ConnectedSeeders.
 func (s *Stat) fillAvailability(rep *pb.StatReply, t *torrent.Torrent, tl *peerTimeline, seeders, offset int, complete, wanted, reading []bool) {
+	rep.TrackerRefused = trackerRefused(t)
 	in := availabilityInput{offset: offset, complete: complete, wanted: wanted, reading: reading, seeders: seeders}
 	if seeders == 0 {
 		sw, _ := s.swarms.Get(t.InfoHash().HexString(), func() (*swarmSnapshot, error) {
@@ -169,6 +170,16 @@ func (s *Stat) fillAvailability(rep *pb.StatReply, t *torrent.Torrent, tl *peerT
 	for _, r := range a.missing {
 		rep.Missing = append(rep.Missing, &pb.PieceRange{Start: int64(r.start), End: int64(r.end)})
 	}
+}
+
+// trackerRefused says that the latest announce to every tracker of a private
+// torrent failed. A private torrent finds peers through its trackers alone, so
+// that is why it has none; a public one has DHT and PEX too, and a failing
+// tracker explains nothing. The flag goes first: a public torrent never takes
+// the client lock for this.
+func trackerRefused(t *torrent.Torrent) bool {
+	p := t.Info().Private
+	return p != nil && *p && t.AllAnnouncesFailing()
 }
 
 func fileBytesCompleted(f *torrent.File) int64 {
@@ -416,9 +427,11 @@ func diff(a []*pb.Piece, b []*pb.Piece) []*pb.Piece {
 // (the last reply sent; nil before the first) did not: the counters, the
 // swarm split, any piece's state (diffPieces) — a priority bump, a piece now
 // being fetched, used to be invisible until a piece completed — or the swarm
-// availability. A torrent stuck with peers changes nothing but the last.
+// availability. A torrent stuck with peers changes nothing but the last; one
+// whose private tracker refuses changes nothing but tracker_refused.
 func statChanged(rep, prev *pb.StatReply, diffPieces []*pb.Piece) bool {
 	return prev == nil ||
+		rep.GetTrackerRefused() != prev.GetTrackerRefused() ||
 		rep.GetCompleted() != prev.GetCompleted() ||
 		rep.GetPeers() != prev.GetPeers() ||
 		rep.GetSeeders() != prev.GetSeeders() ||
@@ -465,6 +478,7 @@ func statFrame(rep, prev *pb.StatReply, diffPieces []*pb.Piece) *pb.StatReply {
 		AvailabilityKnown: rep.GetAvailabilityKnown(),
 		WantedMissing:     rep.GetWantedMissing(),
 		ReaderMissing:     rep.GetReaderMissing(),
+		TrackerRefused:    rep.GetTrackerRefused(),
 	}
 	if prev != nil && samePieceRanges(rep.GetMissing(), prev.GetMissing()) {
 		f.MissingUnchanged = true
