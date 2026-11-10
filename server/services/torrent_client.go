@@ -79,6 +79,9 @@ func categorizeError(err error) string {
 	if err == nil {
 		return "none"
 	}
+	if errors.Is(err, errNonPublicAddr) {
+		return "non_public_addr"
+	}
 	if os.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) || (errors.Unwrap(err) != nil && errors.Is(errors.Unwrap(err), context.DeadlineExceeded)) {
 		return "timeout"
 	}
@@ -169,6 +172,7 @@ type TorrentClient struct {
 	dialRateLimit              int
 	perTorrentCacheBudget      int64
 	torrentClientDebug         bool
+	trackerAllowPrivate        bool
 }
 
 const (
@@ -196,6 +200,7 @@ const (
 	PieceHashersPerTorrentFlag     = "piece-hashers-per-torrent"
 	DialRateLimitFlag              = "dial-rate-limit"
 	PerTorrentCacheBudgetFlag      = "per-torrent-cache-budget"
+	TrackerAllowPrivateAddrsFlag   = "tracker-allow-private-addrs"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -253,6 +258,11 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Name:   DisableIPv6Flag,
 			Usage:  "disables IPv6: no IPv6 listening, peers or tracker announces (for networks without an IPv6 route)",
 			EnvVar: "DISABLE_IPV6",
+		},
+		cli.BoolFlag{
+			Name:   TrackerAllowPrivateAddrsFlag,
+			Usage:  "lets trackers be contacted on loopback, private, link-local and other non-public addresses (for a tracker on the local network)",
+			EnvVar: "TRACKER_ALLOW_PRIVATE_ADDRS",
 		},
 		cli.IntFlag{
 			Name:   EstablishedConnsPerTorrentFlag,
@@ -422,8 +432,9 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 			MmapMax:    c.Int64("mmap-max-file-size"),
 			MmapBudget: c.Int64("mmap-budget-per-torrent"),
 		},
-		clientIdleTimeout:  c.Duration("client-idle-timeout"),
-		torrentClientDebug: c.Bool(TorrentClientDebugFlag),
+		clientIdleTimeout:   c.Duration("client-idle-timeout"),
+		torrentClientDebug:  c.Bool(TorrentClientDebugFlag),
+		trackerAllowPrivate: c.Bool(TrackerAllowPrivateAddrsFlag),
 	}, nil
 }
 
@@ -458,12 +469,14 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.DisableIPv6 = s.dIPv6
 	cfg.DisableWebtorrent = s.dWebTorrent
 	cfg.DisableWebseeds = s.dWebseeds
+	var proxyAddr string
 	if s.proxy != "" {
 		u, err := url.Parse(s.proxy)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to parse proxy u=%v", s.proxy)
 		}
 		cfg.HTTPProxy = http.ProxyURL(u)
+		proxyAddr = proxyDialAddr(u)
 	}
 	if s.establishedConnsPerTorrent != 0 {
 		cfg.EstablishedConnsPerTorrent = s.establishedConnsPerTorrent
@@ -518,17 +531,12 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 		}
 		return conn, err
 	}
-	cfg.TrackerDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		promDialAttempts.WithLabelValues("tracker").Inc()
-		d := net.Dialer{}
-		conn, err := d.DialContext(ctx, network, addr)
-		if err != nil {
-			promDialFailures.WithLabelValues("tracker", categorizeError(err)).Inc()
-		} else {
-			promDialSuccess.WithLabelValues("tracker").Inc()
-		}
-		return conn, err
-	}
+	// A tracker URL comes from whoever made the .torrent: without a check on
+	// the address it lets anyone make the pods connect to the cluster's own
+	// services. See trackerGuard.
+	tg := newTrackerGuard(s.trackerAllowPrivate, proxyAddr)
+	cfg.TrackerDialContext = tg.dialContext
+	cfg.TrackerListenPacket = tg.listenPacket
 	if s.testConfig != nil {
 		s.testConfig(cfg)
 	}
