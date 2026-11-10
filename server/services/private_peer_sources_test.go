@@ -62,9 +62,9 @@ func countsSince(before, after map[string]float64) map[string]float64 {
 }
 
 // A torrent downloaded by the client the service builds, from one peer over
-// loopback. The private torrent's useful bytes and connection land under the
-// peer's source, and the bytes are exactly the client's useful bytes; a public
-// torrent's land nowhere.
+// loopback. The private torrent's useful bytes and its one connection land
+// under the peer's source, the bytes exactly the client's useful bytes and the
+// connection counted once; a public torrent's land nowhere.
 func TestTorrentClient_PrivatePeerSources(t *testing.T) {
 	for _, c := range []struct {
 		name     string
@@ -132,8 +132,9 @@ func TestTorrentClient_PrivatePeerSources(t *testing.T) {
 			if len(db) != 1 || db[c.want] != useful {
 				t.Errorf("useful bytes by source %v, want %v under %q only", db, useful, c.want)
 			}
-			if len(dc) != 1 || dc[c.want] < 1 {
-				t.Errorf("connections by source %v, want under %q only", dc, c.want)
+			// One listen address each, TCP only: the download is one connection.
+			if len(dc) != 1 || dc[c.want] != 1 {
+				t.Errorf("connections by source %v, want 1 under %q only", dc, c.want)
 			}
 		})
 	}
