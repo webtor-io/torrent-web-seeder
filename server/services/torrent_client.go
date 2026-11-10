@@ -261,7 +261,7 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 		},
 		cli.BoolFlag{
 			Name:   AllowLocalNetworksFlag,
-			Usage:  "lets trackers be contacted on loopback, private, link-local, CGNAT, multicast and unspecified addresses (for a tracker on the local network); refused by default, as a .torrent picks the address",
+			Usage:  "lets trackers be contacted on local network addresses: loopback, private, link-local, CGNAT, multicast, unspecified, reserved and the rest the README lists (for a tracker on the local network); refused by default, as a .torrent picks the address",
 			EnvVar: "ALLOW_LOCAL_NETWORKS",
 		},
 		cli.IntFlag{
