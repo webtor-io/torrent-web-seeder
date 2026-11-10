@@ -355,6 +355,8 @@ Prometheus metrics exported on `:8083/metrics`:
 | `torrent_web_seeder_dial_failures_total` | Counter | Dial failures by type and error category; `err="non_public_addr"` is a tracker refused by the address check (`type="udp_tracker"`: UDP tracker sends, counted only when refused) |
 | `torrent_web_seeder_dial_success_total` | Counter | Successful dials by type |
 | `torrent_web_seeder_handshake_success_total` | Counter | Successful peer handshakes |
+| `torrent_web_seeder_private_peer_useful_bytes_total` | Counter | Needed piece payload received for private (BEP 27) torrents, by peer source: `tracker`, `dht`, `pex`, `incoming`, `other` |
+| `torrent_web_seeder_private_peer_connections_total` | Counter | Peer connections established for private torrents, by the same peer sources |
 | `torrent_web_seeder_established_connections` | Gauge | Active peer connections |
 | `torrent_web_seeder_half_open_connections` | Gauge | Pending peer connections |
 | `torrent_web_seeder_active_torrents_count` | Gauge | Number of active torrents |

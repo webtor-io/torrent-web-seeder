@@ -520,6 +520,8 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.Callbacks.CompletedHandshake = func(pc *torrent.PeerConn, ih torrent.InfoHash) {
 		promHandshakeSuccess.Inc()
 	}
+	cfg.Callbacks.PeerConnAdded = append(cfg.Callbacks.PeerConnAdded, countPrivatePeerConn)
+	cfg.Callbacks.ReceivedUsefulData = append(cfg.Callbacks.ReceivedUsefulData, countPrivateUsefulData)
 	cfg.HTTPDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		promDialAttempts.WithLabelValues("http").Inc()
 		d := net.Dialer{}
