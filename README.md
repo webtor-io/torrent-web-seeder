@@ -302,13 +302,18 @@ All configuration via CLI flags and environment variables.
 that come from a torrent or a magnet are not connected to when they are on a
 local network: loopback, private (RFC 1918, IPv6 ULA `fc00::/7`), link-local
 (`169.254.0.0/16` with the cloud metadata address `169.254.169.254`, and
-`fe80::/10`), CGNAT (`100.64.0.0/10`), multicast or unspecified, IPv4-mapped
-forms included. The check is on the address actually connected or sent to,
-after DNS, so a name that resolves to such an address and a redirect to one
-are refused too. A refusal is logged as a warning at most once a minute per
-process, naming the refused `ip:port` and this variable; a counter counts
-every refusal. Set it to `true` when a tracker you use is on your own network.
-torrent-web-seeder and magnet2torrent read the same variable.
+`fe80::/10`), CGNAT (`100.64.0.0/10`), multicast, unspecified, "this network"
+(`0.0.0.0/8`), reserved (`240.0.0.0/4`, the broadcast `255.255.255.255`
+included) or IPv6 site-local (`fec0::/10`). An IPv6 address that carries an
+IPv4 address is judged as that IPv4 address: IPv4-mapped (`::ffff:0:0/96`),
+NAT64 (`64:ff9b::/96`, and `64:ff9b:1::/48` read as a /96), 6to4
+(`2002::/16`) and IPv4-compatible (`::/96`). The check is on the address
+actually connected or sent to, after DNS, so a name that resolves to such an
+address and a redirect to one are refused too. A refusal is logged as a
+warning at most once a minute per process, naming the refused `ip:port` and
+this variable; a counter counts every refusal. Set it to `true` when a tracker
+you use is on your own network. torrent-web-seeder and magnet2torrent read the
+same variable.
 
 In torrent-web-seeder it covers the trackers of a `.torrent`: HTTP and
 websocket trackers on connect, UDP trackers on every send. The warning also

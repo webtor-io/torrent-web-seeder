@@ -59,6 +59,38 @@ func TestNonPublicAddrClass(t *testing.T) {
 		{"::ffff:100.64.0.1", "cgnat"},
 		{"::ffff:0.0.0.0", "unspecified"},
 		{"::ffff:239.1.2.3", "multicast"},
+		{"0.1.2.3", "this-network"},
+		{"0.255.255.255", "this-network"},
+		{"::ffff:0.1.2.3", "this-network"},
+		{"240.0.0.1", "reserved"},
+		{"255.255.255.254", "reserved"},
+		{"255.255.255.255", "reserved"}, // limited broadcast
+		{"::ffff:255.255.255.255", "reserved"},
+		{"fec0::1", "site-local"},
+		{"feff:ffff::1", "site-local"},
+		{"febf:ffff::1", "link-local"}, // the edges of fec0::/10
+		{"ff00::1", "multicast"},
+		// IPv6 forms that carry an IPv4 address are judged as that address.
+		// NAT64, well-known and local-use prefixes: the low 32 bits.
+		{"64:ff9b::127.0.0.1", "loopback"},
+		{"64:ff9b::10.1.2.3", "private"},
+		{"64:ff9b::169.254.169.254", "link-local"},
+		{"64:ff9b::100.64.0.1", "cgnat"},
+		{"64:ff9b:1::10.1.2.3", "private"},
+		{"64:ff9b:1:ffff::127.0.0.1", "loopback"},
+		// 6to4: bits 16 to 48.
+		{"2002:7f00:1::1", "loopback"},
+		{"2002:a9fe:a9fe::", "link-local"},
+		{"2002:c0a8:101:1::1", "private"},
+		// IPv4-compatible (deprecated): the low 32 bits.
+		{"::127.0.0.1", "loopback"},
+		{"::10.1.2.3", "private"},
+		{"::169.254.169.254", "link-local"},
+		{"::240.0.0.1", "reserved"},
+		// A zone does not hide the address: prefixes and IsUnspecified would
+		// not match a zoned address.
+		{"64:ff9b::10.1.2.3%eth0", "private"},
+		{"::%eth0", "unspecified"},
 		// Public: documentation ranges and the edges of the ranges above.
 		{"203.0.113.7", ""},
 		{"198.51.100.1", ""},
@@ -69,6 +101,16 @@ func TestNonPublicAddrClass(t *testing.T) {
 		{"172.32.0.1", ""},
 		{"11.0.0.1", ""},
 		{"169.255.0.1", ""},
+		{"1.0.0.1", ""},
+		{"223.255.255.255", ""},
+		{"64:ff9b::203.0.113.7", ""},
+		{"64:ff9b:1::203.0.113.7", ""},
+		{"64:ff9b::1:a01:203", ""},  // outside the /96: 10.1.2.3 in the low bits is not reached
+		{"64:ff9b:2::10.1.2.3", ""}, // outside the /48
+		{"2002:cb00:7107::1", ""},
+		{"2003:a01:203::1", ""}, // outside 2002::/16
+		{"::203.0.113.7", ""},
+		{"::1:a01:203", ""}, // outside ::/96
 	} {
 		if got := nonPublicAddrClass(netip.MustParseAddr(c.addr)); got != c.class {
 			t.Errorf("%s: class %q, want %q", c.addr, got, c.class)

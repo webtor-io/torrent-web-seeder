@@ -23,11 +23,49 @@ var errNonPublicAddr = errors.New("tracker address is not public")
 // networks out of it.
 var cgnatAddrs = netip.MustParsePrefix("100.64.0.0/10")
 
+// More ranges that are not on the internet and that netip has no predicate
+// for: "this network" 0.0.0.0/8 (0.0.0.0 itself is unspecified), the reserved
+// 240.0.0.0/4 with the limited broadcast 255.255.255.255 at its top, and the
+// deprecated IPv6 site-local fec0::/10.
+var (
+	thisNetworkAddrs = netip.MustParsePrefix("0.0.0.0/8")
+	reservedAddrs    = netip.MustParsePrefix("240.0.0.0/4")
+	siteLocalAddrs   = netip.MustParsePrefix("fec0::/10")
+)
+
+// IPv6 addresses that carry an IPv4 address, which a NAT64 translator
+// (RFC 6052, and RFC 8215 for local use) or a 6to4 relay (RFC 3056) connects
+// to, and the deprecated IPv4-compatible form (RFC 4291). Each is judged as
+// the IPv4 address it carries, read from the low 32 bits or, for 6to4, bits
+// 16 to 48. A local-use translator may use a prefix shorter than /96, which
+// puts the IPv4 address elsewhere; only the /96 layout is read.
+var (
+	nat64Addrs      = netip.MustParsePrefix("64:ff9b::/96")
+	nat64LocalAddrs = netip.MustParsePrefix("64:ff9b:1::/48")
+	sixToFourAddrs  = netip.MustParsePrefix("2002::/16")
+	v4CompatAddrs   = netip.MustParsePrefix("::/96")
+)
+
+// embeddedIPv4 returns the IPv4 address that a, an IPv6 address without a
+// zone, carries, if it is one of the forms above.
+func embeddedIPv4(a netip.Addr) (netip.Addr, bool) {
+	b := a.As16()
+	switch {
+	case nat64Addrs.Contains(a), nat64LocalAddrs.Contains(a), v4CompatAddrs.Contains(a):
+		return netip.AddrFrom4([4]byte(b[12:16])), true
+	case sixToFourAddrs.Contains(a):
+		return netip.AddrFrom4([4]byte(b[2:6])), true
+	}
+	return netip.Addr{}, false
+}
+
 // nonPublicAddrClass names what kind of non-public address a is, or returns ""
 // for a public one. An IPv4-mapped IPv6 address is judged as the IPv4 address
-// it reaches.
+// it reaches, and so is every other IPv6 form that carries one.
 func nonPublicAddrClass(a netip.Addr) string {
-	a = a.Unmap()
+	// A zone does not change where an address leads, but netip's prefixes do
+	// not match a zoned address, nor does IsUnspecified.
+	a = a.Unmap().WithZone("")
 	switch {
 	case a.IsLoopback():
 		return "loopback"
@@ -41,6 +79,16 @@ func nonPublicAddrClass(a netip.Addr) string {
 		return "multicast"
 	case cgnatAddrs.Contains(a):
 		return "cgnat"
+	case thisNetworkAddrs.Contains(a):
+		return "this-network"
+	case reservedAddrs.Contains(a):
+		return "reserved"
+	case siteLocalAddrs.Contains(a):
+		return "site-local"
+	}
+	// After the checks above: :: and ::1 are in the IPv4-compatible prefix.
+	if v4, ok := embeddedIPv4(a); ok {
+		return nonPublicAddrClass(v4)
 	}
 	return ""
 }
