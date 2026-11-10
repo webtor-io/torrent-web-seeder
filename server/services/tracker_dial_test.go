@@ -111,14 +111,20 @@ func TestTrackerGuard_RefusesNonPublicDials(t *testing.T) {
 	ln, accepted := countingListener(t, "tcp4", "127.0.0.1:0")
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
 	g := newTrackerGuard(false, "")
-	for _, addr := range []string{
+	addrs := []string{
 		"127.0.0.1:" + port,
 		"[::ffff:127.0.0.1]:" + port,
 		"localhost:" + port,
-		"[::1]:" + port,
 		"10.255.255.1:6969",
 		"169.254.169.254:80",
-	} {
+	}
+	// Without IPv6 the socket cannot be made, and the dial fails before the
+	// check.
+	if ln6, err := net.Listen("tcp6", "[::1]:0"); err == nil {
+		_ = ln6.Close()
+		addrs = append(addrs, "[::1]:"+port)
+	}
+	for _, addr := range addrs {
 		t.Run(addr, func(t *testing.T) {
 			a0, r0, s0 := trackerDialCounts()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
