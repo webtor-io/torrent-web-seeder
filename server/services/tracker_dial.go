@@ -25,25 +25,28 @@ var cgnatAddrs = netip.MustParsePrefix("100.64.0.0/10")
 
 // More ranges that are not on the internet and that netip has no predicate
 // for: "this network" 0.0.0.0/8 (0.0.0.0 itself is unspecified), the reserved
-// 240.0.0.0/4 with the limited broadcast 255.255.255.255 at its top, and the
-// deprecated IPv6 site-local fec0::/10.
+// 240.0.0.0/4 with the limited broadcast 255.255.255.255 at its top, the
+// deprecated IPv6 site-local fec0::/10, and the NAT64 local-use prefix
+// 64:ff9b:1::/48 (RFC 8215). The last is refused whole rather than judged by
+// the IPv4 address it carries: IANA marks the whole /48 as not globally
+// reachable, and an operator may carve any prefix out of it, which puts the
+// IPv4 address at a different offset (RFC 6052), so no one reading of it is
+// right for every translator.
 var (
 	thisNetworkAddrs = netip.MustParsePrefix("0.0.0.0/8")
 	reservedAddrs    = netip.MustParsePrefix("240.0.0.0/4")
 	siteLocalAddrs   = netip.MustParsePrefix("fec0::/10")
+	nat64LocalAddrs  = netip.MustParsePrefix("64:ff9b:1::/48")
 )
 
 // IPv6 addresses that carry an IPv4 address, which a NAT64 translator
-// (RFC 6052, and RFC 8215 for local use) or a 6to4 relay (RFC 3056) connects
-// to, and the deprecated IPv4-compatible form (RFC 4291). Each is judged as
-// the IPv4 address it carries, read from the low 32 bits or, for 6to4, bits
-// 16 to 48. A local-use translator may use a prefix shorter than /96, which
-// puts the IPv4 address elsewhere; only the /96 layout is read.
+// (RFC 6052) or a 6to4 relay (RFC 3056) connects to, and the deprecated
+// IPv4-compatible form (RFC 4291). Each is judged as the IPv4 address it
+// carries, read from the low 32 bits or, for 6to4, bits 16 to 48.
 var (
-	nat64Addrs      = netip.MustParsePrefix("64:ff9b::/96")
-	nat64LocalAddrs = netip.MustParsePrefix("64:ff9b:1::/48")
-	sixToFourAddrs  = netip.MustParsePrefix("2002::/16")
-	v4CompatAddrs   = netip.MustParsePrefix("::/96")
+	nat64Addrs     = netip.MustParsePrefix("64:ff9b::/96")
+	sixToFourAddrs = netip.MustParsePrefix("2002::/16")
+	v4CompatAddrs  = netip.MustParsePrefix("::/96")
 )
 
 // embeddedIPv4 returns the IPv4 address that a, an IPv6 address without a
@@ -51,7 +54,7 @@ var (
 func embeddedIPv4(a netip.Addr) (netip.Addr, bool) {
 	b := a.As16()
 	switch {
-	case nat64Addrs.Contains(a), nat64LocalAddrs.Contains(a), v4CompatAddrs.Contains(a):
+	case nat64Addrs.Contains(a), v4CompatAddrs.Contains(a):
 		return netip.AddrFrom4([4]byte(b[12:16])), true
 	case sixToFourAddrs.Contains(a):
 		return netip.AddrFrom4([4]byte(b[2:6])), true
@@ -85,6 +88,8 @@ func nonPublicAddrClass(a netip.Addr) string {
 		return "reserved"
 	case siteLocalAddrs.Contains(a):
 		return "site-local"
+	case nat64LocalAddrs.Contains(a):
+		return "nat64-local-use"
 	}
 	// After the checks above: :: and ::1 are in the IPv4-compatible prefix.
 	if v4, ok := embeddedIPv4(a); ok {

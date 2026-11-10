@@ -70,14 +70,20 @@ func TestNonPublicAddrClass(t *testing.T) {
 		{"feff:ffff::1", "site-local"},
 		{"febf:ffff::1", "link-local"}, // the edges of fec0::/10
 		{"ff00::1", "multicast"},
+		// NAT64 local-use (RFC 8215): the whole /48, whatever it carries and
+		// wherever. 64:ff9b:1:a01:2:300:cb00:7107 has 10.1.2.3 at the /48
+		// offset (bits 48-63 and 72-87) and a public address in the low 32 bits.
+		{"64:ff9b:1::", "nat64-local-use"},
+		{"64:ff9b:1::10.1.2.3", "nat64-local-use"},
+		{"64:ff9b:1::203.0.113.7", "nat64-local-use"},
+		{"64:ff9b:1:a01:2:300:cb00:7107", "nat64-local-use"},
+		{"64:ff9b:1:ffff:ffff:ffff:ffff:ffff", "nat64-local-use"},
 		// IPv6 forms that carry an IPv4 address are judged as that address.
-		// NAT64, well-known and local-use prefixes: the low 32 bits.
+		// NAT64, well-known prefix: the low 32 bits.
 		{"64:ff9b::127.0.0.1", "loopback"},
 		{"64:ff9b::10.1.2.3", "private"},
 		{"64:ff9b::169.254.169.254", "link-local"},
 		{"64:ff9b::100.64.0.1", "cgnat"},
-		{"64:ff9b:1::10.1.2.3", "private"},
-		{"64:ff9b:1:ffff::127.0.0.1", "loopback"},
 		// 6to4: bits 16 to 48.
 		{"2002:7f00:1::1", "loopback"},
 		{"2002:a9fe:a9fe::", "link-local"},
@@ -104,9 +110,9 @@ func TestNonPublicAddrClass(t *testing.T) {
 		{"1.0.0.1", ""},
 		{"223.255.255.255", ""},
 		{"64:ff9b::203.0.113.7", ""},
-		{"64:ff9b:1::203.0.113.7", ""},
-		{"64:ff9b::1:a01:203", ""},  // outside the /96: 10.1.2.3 in the low bits is not reached
-		{"64:ff9b:2::10.1.2.3", ""}, // outside the /48
+		{"64:ff9b::1:a01:203", ""},               // outside the /96: 10.1.2.3 in the low bits is not reached
+		{"64:ff9b:0:ffff:ffff:ffff:a01:203", ""}, // just below the /48
+		{"64:ff9b:2::10.1.2.3", ""},              // just above the /48
 		{"2002:cb00:7107::1", ""},
 		{"2003:a01:203::1", ""}, // outside 2002::/16
 		{"::203.0.113.7", ""},
