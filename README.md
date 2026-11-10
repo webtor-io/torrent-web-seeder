@@ -307,9 +307,10 @@ All configuration via CLI flags and environment variables.
   warning, at most one a minute, with the address and its class but nothing
   of the tracker URL, and counted in `torrent_web_seeder_dial_failures_total`
   with `err="non_public_addr"`. Set `--tracker-allow-private-addrs` when the
-  tracker is on your own network. With `--http-proxy`, HTTP announces connect
-  to the proxy, which is allowed wherever it is; where the proxy connects is
-  up to the proxy.
+  tracker is on your own network. With `--http-proxy`, HTTP and websocket
+  announces connect to the proxy, which is allowed wherever it is; where the
+  proxy connects is up to the proxy. UDP announces do not use the proxy and
+  are checked as usual.
 
 ### Infrastructure flags
 
