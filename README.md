@@ -293,24 +293,31 @@ All configuration via CLI flags and environment variables.
 | `--disable-utp` | `DISABLE_UTP` | `false` | Disable uTP protocol |
 | `--disable-webtorrent` | `DISABLE_WEBTORRENT` | `false` | Disable WebTorrent |
 | `--disable-webseeds` | `DISABLE_WEBSEEDS` | `false` | Disable webseeds |
-| `--tracker-allow-private-addrs` | `TRACKER_ALLOW_PRIVATE_ADDRS` | `false` | Allow trackers on non-public addresses (a tracker on the local network) |
+| `--allow-local-networks` | `ALLOW_LOCAL_NETWORKS` | `false` | Allow trackers on local network addresses (see below) |
 | `--torrent-client-debug` | `TORRENT_CLIENT_DEBUG` | `false` | Verbose torrent client logging |
 
-- Tracker addresses. Tracker URLs come from the `.torrent`, so by default the
-  seeder does not contact a tracker on a loopback, private (RFC 1918,
-  `fc00::/7`), link-local (`169.254.0.0/16` with the cloud metadata address,
-  `fe80::/10`), shared CGNAT (`100.64.0.0/10`), unspecified or multicast
-  address, IPv4-mapped forms included. The check is on the address actually
-  connected to, after DNS: a name that resolves to such an address and a
-  redirect to one are refused as well. HTTP and websocket trackers are
-  checked on connect, UDP trackers on every send. A refusal is logged as a
-  warning, at most one a minute, with the address and its class but nothing
-  of the tracker URL, and counted in `torrent_web_seeder_dial_failures_total`
-  with `err="non_public_addr"`. Set `--tracker-allow-private-addrs` when the
-  tracker is on your own network. With `--http-proxy`, HTTP and websocket
-  announces connect to the proxy, which is allowed wherever it is; where the
-  proxy connects is up to the proxy. UDP announces do not use the proxy and
-  are checked as usual.
+#### Local network addresses
+
+`--allow-local-networks` (`ALLOW_LOCAL_NETWORKS`, default `false`). Addresses
+that come from a torrent or a magnet are not connected to when they are on a
+local network: loopback, private (RFC 1918, IPv6 ULA `fc00::/7`), link-local
+(`169.254.0.0/16` with the cloud metadata address `169.254.169.254`, and
+`fe80::/10`), CGNAT (`100.64.0.0/10`), multicast or unspecified, IPv4-mapped
+forms included. The check is on the address actually connected or sent to,
+after DNS, so a name that resolves to such an address and a redirect to one
+are refused too. A refusal is logged as a warning at most once a minute per
+process, naming the refused `ip:port` and this variable; a counter counts
+every refusal. Set it to `true` when a tracker you use is on your own network.
+torrent-web-seeder and magnet2torrent read the same variable.
+
+In torrent-web-seeder it covers the trackers of a `.torrent`: HTTP and
+websocket trackers on connect, UDP trackers on every send. The warning also
+gives the class of the address and nothing of the tracker URL. The counter is
+`torrent_web_seeder_dial_failures_total` with `err="non_public_addr"`. With
+`--http-proxy`, HTTP and websocket announces connect to the proxy, which is
+allowed wherever it is; where the proxy connects is up to the proxy. UDP
+announces do not use the proxy and are checked as usual. Peer and webseed
+connections are not covered.
 
 ### Infrastructure flags
 

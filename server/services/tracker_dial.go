@@ -66,19 +66,23 @@ func nonPublicAddrClass(a netip.Addr) string {
 // operator chose and which is often on the local network, so that one address
 // is not checked; where the proxy connects on is its own policy.
 type trackerGuard struct {
-	allowPrivate bool
-	proxyAddr    string
-	// One refusal a minute is logged. Each announce of a refused tracker is
-	// refused again, and a .torrent can list many trackers; the counters
-	// carry the volume.
-	warnLimit *rate.Limiter
+	allowLocal bool
+	proxyAddr  string
+	warnLimit  *rate.Limiter
 }
 
-func newTrackerGuard(allowPrivate bool, proxyAddr string) *trackerGuard {
+// trackerWarnLimit lets one refusal a minute be logged for the whole process.
+// Each announce of a refused tracker is refused again, a .torrent can list
+// many trackers, and the service builds a new client, and so a new guard,
+// after an idle close; the counters carry the volume. A guard takes it when
+// built, so that a test can give the guards it builds a minute of their own.
+var trackerWarnLimit = rate.NewLimiter(rate.Every(time.Minute), 1)
+
+func newTrackerGuard(allowLocal bool, proxyAddr string) *trackerGuard {
 	return &trackerGuard{
-		allowPrivate: allowPrivate,
-		proxyAddr:    proxyAddr,
-		warnLimit:    rate.NewLimiter(rate.Every(time.Minute), 1),
+		allowLocal: allowLocal,
+		proxyAddr:  proxyAddr,
+		warnLimit:  trackerWarnLimit,
 	}
 }
 
@@ -116,9 +120,9 @@ func (g *trackerGuard) check(address string) error {
 		return nil
 	}
 	if g.warnLimit.Allow() {
-		log.WithField("addr", address).WithField("class", class).Warnf(
-			"refused a tracker connection to a non-public address; set --%s (TRACKER_ALLOW_PRIVATE_ADDRS=true) if the tracker is on the local network",
-			TrackerAllowPrivateAddrsFlag)
+		log.WithField("addr", address).WithField("class", class).Warn(
+			"refused a tracker connection to a local network address (allow with --" +
+				AllowLocalNetworksFlag + " or ALLOW_LOCAL_NETWORKS=true; logged at most once a minute)")
 	}
 	return fmt.Errorf("%w: %s is a %s address", errNonPublicAddr, address, class)
 }
@@ -127,7 +131,7 @@ func (g *trackerGuard) check(address string) error {
 func (g *trackerGuard) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	promDialAttempts.WithLabelValues("tracker").Inc()
 	d := net.Dialer{}
-	if !g.allowPrivate && addr != g.proxyAddr {
+	if !g.allowLocal && addr != g.proxyAddr {
 		d.Control = func(_, address string, _ syscall.RawConn) error {
 			return g.check(address)
 		}
@@ -145,7 +149,7 @@ func (g *trackerGuard) dialContext(ctx context.Context, network, addr string) (n
 // tracker announce.
 func (g *trackerGuard) listenPacket(network, addr string) (net.PacketConn, error) {
 	pc, err := net.ListenPacket(network, addr)
-	if err != nil || g.allowPrivate {
+	if err != nil || g.allowLocal {
 		return pc, err
 	}
 	return &trackerPacketConn{PacketConn: pc, g: g}, nil

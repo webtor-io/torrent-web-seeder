@@ -172,7 +172,7 @@ type TorrentClient struct {
 	dialRateLimit              int
 	perTorrentCacheBudget      int64
 	torrentClientDebug         bool
-	trackerAllowPrivate        bool
+	allowLocalNetworks         bool
 }
 
 const (
@@ -200,7 +200,7 @@ const (
 	PieceHashersPerTorrentFlag     = "piece-hashers-per-torrent"
 	DialRateLimitFlag              = "dial-rate-limit"
 	PerTorrentCacheBudgetFlag      = "per-torrent-cache-budget"
-	TrackerAllowPrivateAddrsFlag   = "tracker-allow-private-addrs"
+	AllowLocalNetworksFlag         = "allow-local-networks"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -260,9 +260,9 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			EnvVar: "DISABLE_IPV6",
 		},
 		cli.BoolFlag{
-			Name:   TrackerAllowPrivateAddrsFlag,
-			Usage:  "lets trackers be contacted on loopback, private, link-local and other non-public addresses (for a tracker on the local network)",
-			EnvVar: "TRACKER_ALLOW_PRIVATE_ADDRS",
+			Name:   AllowLocalNetworksFlag,
+			Usage:  "lets trackers be contacted on loopback, private, link-local, CGNAT, multicast and unspecified addresses (for a tracker on the local network); refused by default, as a .torrent picks the address",
+			EnvVar: "ALLOW_LOCAL_NETWORKS",
 		},
 		cli.IntFlag{
 			Name:   EstablishedConnsPerTorrentFlag,
@@ -432,9 +432,9 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 			MmapMax:    c.Int64("mmap-max-file-size"),
 			MmapBudget: c.Int64("mmap-budget-per-torrent"),
 		},
-		clientIdleTimeout:   c.Duration("client-idle-timeout"),
-		torrentClientDebug:  c.Bool(TorrentClientDebugFlag),
-		trackerAllowPrivate: c.Bool(TrackerAllowPrivateAddrsFlag),
+		clientIdleTimeout:  c.Duration("client-idle-timeout"),
+		torrentClientDebug: c.Bool(TorrentClientDebugFlag),
+		allowLocalNetworks: c.Bool(AllowLocalNetworksFlag),
 	}, nil
 }
 
@@ -536,7 +536,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	// A tracker URL comes from whoever made the .torrent: without a check on
 	// the address it lets anyone make the pods connect to the cluster's own
 	// services. See trackerGuard.
-	tg := newTrackerGuard(s.trackerAllowPrivate, proxyAddr)
+	tg := newTrackerGuard(s.allowLocalNetworks, proxyAddr)
 	cfg.TrackerDialContext = tg.dialContext
 	cfg.TrackerListenPacket = tg.listenPacket
 	if s.testConfig != nil {

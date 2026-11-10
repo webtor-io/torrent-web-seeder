@@ -21,6 +21,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/urfave/cli"
+	"golang.org/x/time/rate"
 )
 
 // A fake private-tracker key: tests check that it never reaches a log line the
@@ -154,7 +155,7 @@ func TestTrackerGuard_RefusesNonPublicDials(t *testing.T) {
 
 // A deployment whose tracker is on its own network sets the flag, and then
 // nothing is refused.
-func TestTrackerGuard_AllowPrivateDials(t *testing.T) {
+func TestTrackerGuard_AllowLocalNetworksDials(t *testing.T) {
 	ln, accepted := countingListener(t, "tcp4", "127.0.0.1:0")
 	g := newTrackerGuard(true, "")
 	_, _, s0 := trackerDialCounts()
@@ -282,15 +283,19 @@ func TestTrackerGuard_RefusesUnparsableAddr(t *testing.T) {
 	}
 }
 
-// One refused address is logged, naming the address, the class and the flag
-// that allows it; a torrent that keeps announcing does not repeat it.
+// A refusal is logged at most once a minute for the whole process, naming the
+// address, its class and the variable that allows it: each announce of a
+// refused tracker is refused again, and the service builds a new client (and
+// guard) after an idle close.
 func TestTrackerGuard_WarnsOnceAMinute(t *testing.T) {
+	freshWarnLimit(t)
 	hook := test.NewGlobal()
 	defer hook.Reset()
-	g := newTrackerGuard(false, "")
-	for range 3 {
-		if err := g.check("10.1.2.3:6969"); !errors.Is(err, errNonPublicAddr) {
-			t.Fatalf("check: %v", err)
+	for _, g := range []*trackerGuard{newTrackerGuard(false, ""), newTrackerGuard(false, "")} {
+		for range 3 {
+			if err := g.check("10.1.2.3:6969"); !errors.Is(err, errNonPublicAddr) {
+				t.Fatalf("check: %v", err)
+			}
 		}
 	}
 	var warns []*log.Entry
@@ -300,17 +305,25 @@ func TestTrackerGuard_WarnsOnceAMinute(t *testing.T) {
 		}
 	}
 	if len(warns) != 1 {
-		t.Fatalf("%d warnings for 3 refusals, want 1", len(warns))
+		t.Fatalf("%d warnings for 6 refusals by 2 guards, want 1", len(warns))
 	}
 	line, err := warns[0].String()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"10.1.2.3:6969", "private", "--" + TrackerAllowPrivateAddrsFlag, "TRACKER_ALLOW_PRIVATE_ADDRS"} {
+	for _, want := range []string{"10.1.2.3:6969", "private", "--allow-local-networks", "ALLOW_LOCAL_NETWORKS=true"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("warning %q does not name %q", line, want)
 		}
 	}
+}
+
+// freshWarnLimit gives the guards built during the test a minute of their own:
+// the limit is the process's, and an earlier test may have used it up.
+func freshWarnLimit(t *testing.T) {
+	old := trackerWarnLimit
+	trackerWarnLimit = rate.NewLimiter(rate.Every(time.Minute), 1)
+	t.Cleanup(func() { trackerWarnLimit = old })
 }
 
 // trackerTestConfig is loopbackConfig with trackers on.
@@ -325,7 +338,8 @@ func trackerTestConfig(cfg *torrent.ClientConfig) {
 // the flag on, both get the announce.
 func TestTorrentClient_TrackerGuard(t *testing.T) {
 	for _, allow := range []bool{false, true} {
-		t.Run(map[bool]string{false: "default", true: "allow-private"}[allow], func(t *testing.T) {
+		t.Run(map[bool]string{false: "default", true: "allow-local-networks"}[allow], func(t *testing.T) {
+			freshWarnLimit(t)
 			hook := test.NewGlobal()
 			defer hook.Reset()
 			var httpGot atomic.Int32
@@ -337,12 +351,12 @@ func TestTorrentClient_TrackerGuard(t *testing.T) {
 			usrv, udpGot := countingUDPServer(t)
 
 			tc := &TorrentClient{
-				swarm:               newSwarmStats(),
-				testConfig:          trackerTestConfig,
-				rLimit:              -1,
-				maxUnverifiedBytes:  -1,
-				dataDir:             t.TempDir(),
-				trackerAllowPrivate: allow,
+				swarm:              newSwarmStats(),
+				testConfig:         trackerTestConfig,
+				rLimit:             -1,
+				maxUnverifiedBytes: -1,
+				dataDir:            t.TempDir(),
+				allowLocalNetworks: allow,
 			}
 			t.Cleanup(tc.Close)
 			cl, err := tc.Get()
@@ -436,8 +450,9 @@ func TestTorrentClient_TrackerViaLocalProxy(t *testing.T) {
 }
 
 // The flag and its variable reach the client; without either nothing is
-// allowed.
-func TestNewTorrentClient_TrackerAllowPrivateAddrs(t *testing.T) {
+// allowed. The names are spelled out: the variable is shared with
+// magnet2torrent through one env file in self-hosted.
+func TestNewTorrentClient_AllowLocalNetworks(t *testing.T) {
 	parse := func(args ...string) bool {
 		t.Helper()
 		var got bool
@@ -448,7 +463,7 @@ func TestNewTorrentClient_TrackerAllowPrivateAddrs(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			got = tc.trackerAllowPrivate
+			got = tc.allowLocalNetworks
 			return nil
 		}
 		if err := app.Run(append([]string{"seeder"}, args...)); err != nil {
@@ -459,10 +474,10 @@ func TestNewTorrentClient_TrackerAllowPrivateAddrs(t *testing.T) {
 	if parse() {
 		t.Error("allowed by default")
 	}
-	if !parse("--" + TrackerAllowPrivateAddrsFlag) {
+	if !parse("--allow-local-networks") {
 		t.Error("the flag does not allow")
 	}
-	t.Setenv("TRACKER_ALLOW_PRIVATE_ADDRS", "true")
+	t.Setenv("ALLOW_LOCAL_NETWORKS", "true")
 	if !parse() {
 		t.Error("the variable does not allow")
 	}
