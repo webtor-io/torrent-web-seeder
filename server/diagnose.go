@@ -124,6 +124,9 @@ func runDiagnose(c *cli.Context) error {
 		fmt.Printf("       Info Hash: %s\n", mi.HashInfoBytes().HexString())
 		fmt.Printf("       Name: %s\n", info.Name)
 		fmt.Printf("       Size: %s\n", formatBytes(info.TotalLength()))
+		if dropPrivateTrackers(mi, &info) {
+			fmt.Println("[WARN] private torrent: its trackers are not announced (a stored .torrent carries another account's key)")
+		}
 
 		var trackers []string
 		for _, tier := range mi.UpvertedAnnounceList() {
@@ -460,6 +463,20 @@ func formatBytes(b int64) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
+}
+
+// dropPrivateTrackers clears announce, announce-list and url-list of a private
+// torrent and reports whether it did; diagnose then prints
+// "[WARN] private torrent: its trackers are not announced (a stored .torrent carries another account's key)".
+// diagnose reads no record, so a private .torrent announces nothing: a copy
+// taken from the store carries the key of the account that uploaded it. A
+// magnet's tr= is the operator's own and is left alone.
+func dropPrivateTrackers(mi *metainfo.MetaInfo, info *metainfo.Info) bool {
+	if info.Private == nil || !*info.Private {
+		return false
+	}
+	mi.Announce, mi.AnnounceList, mi.UrlList = "", nil, nil
+	return true
 }
 
 // printTrackers lists trackers by scheme://host[:port] only. A private
