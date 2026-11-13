@@ -75,7 +75,7 @@ func run(c *cli.Context) error {
 
 	// Setting TorrentMap
 	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap).
-		WithPrivate(s.NewPrivateRecords(torrentStore), c.Bool(s.PrivateAccessEnforceFlag))
+		WithPrivate(privateRecords(c, torrentStore), c.Bool(s.PrivateAccessEnforceFlag))
 	// Deferred here, so it runs after web.Close drains the requests and before
 	// torrentClient.Close: the accounts' stopped announces get 8 s.
 	defer torrentMap.CloseAccounts(8 * time.Second)
@@ -153,4 +153,17 @@ func run(c *cli.Context) error {
 	}
 
 	return err
+}
+
+// privateRecords reads private records from torrent-store, or is nil when no
+// store host is configured: a seeder without a store has no records at all,
+// answered as a store that keeps none (private_disabled), not as one that
+// fails every lookup (store_unavailable).
+func privateRecords(c *cli.Context, store *s.TorrentStore) *s.PrivateRecords {
+	if c.String(s.TorrentStoreHostFlag) == "" {
+		log.Info("no torrent-store host: private torrents have no records, " +
+			"observe loads them with their stored trackers and enforce refuses them (private_disabled)")
+		return nil
+	}
+	return s.NewPrivateRecords(store)
 }
