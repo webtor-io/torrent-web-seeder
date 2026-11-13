@@ -133,7 +133,8 @@ type trackerAnnounce struct {
 }
 
 // fakeTracker answers announces on loopback (trackerAnswers), or refuses a key
-// (trackerRefuses); it keeps every announce by its passkey.
+// with a failure reason that quotes it back, as trackers do; it keeps every
+// announce by its passkey.
 type fakeTracker struct {
 	srv     *httptest.Server
 	mu      sync.Mutex
@@ -151,7 +152,7 @@ func newFakeTracker(t *testing.T) *fakeTracker {
 		f.seen[a.key] = append(f.seen[a.key], a)
 		body := trackerAnswers
 		if f.refused[a.key] {
-			body = trackerRefuses
+			body = string(bencode.MustMarshal(map[string]string{"failure reason": "invalid passkey (" + a.key + ")"}))
 		}
 		f.mu.Unlock()
 		_, _ = io.WriteString(w, body)
