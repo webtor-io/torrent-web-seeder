@@ -307,6 +307,9 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		go watchStall(ctx, func() { cancel(); abortWrite(r) }, progress, s.stallTimeout, logWithField)
 	}
 	if err != nil {
+		if writeRefusal(w, err) {
+			return
+		}
 		if strings.Contains(err.Error(), "PermissionDenied") {
 			logWithField.WithError(err).Warn("permission denied")
 			http.Error(w, "permission denied", http.StatusForbidden)
@@ -744,6 +747,9 @@ func (s *WebSeeder) serveWarmup(w http.ResponseWriter, r *http.Request, h string
 	}
 	err = s.wu.Serve(w, r, h, p)
 	if err != nil {
+		if writeRefusal(w, err) {
+			return
+		}
 		log.Error(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

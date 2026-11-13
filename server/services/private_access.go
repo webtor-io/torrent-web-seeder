@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 
@@ -46,6 +47,21 @@ type seederRefusal struct {
 }
 
 func (e *seederRefusal) Error() string { return "seeder refused: " + e.reason }
+
+// writeRefusal answers a seederRefusal: its status, X-Seeder-Reason, and Retry-After: 5
+// on a 503; the body is the reason. It reports false, writing nothing, for any other error.
+func writeRefusal(w http.ResponseWriter, err error) bool {
+	var r *seederRefusal
+	if !errors.As(err, &r) {
+		return false
+	}
+	w.Header().Set("X-Seeder-Reason", r.reason)
+	if r.status == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", "5")
+	}
+	http.Error(w, r.reason, r.status)
+	return true
+}
 
 var uidRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
