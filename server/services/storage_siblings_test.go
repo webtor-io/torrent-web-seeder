@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,6 +131,48 @@ func TestSiblings_ReaderGetsSiblingPiece(t *testing.T) {
 	ta.AddClientPeer(seedingClient(t, data, mi))
 	if buf := <-got; !bytes.Equal(buf, data) {
 		t.Fatalf("B read %d bytes, want the %d of the payload", len(buf), len(data))
+	}
+}
+
+// A burst of pieces verified by one Client reaches the other through one
+// worker at a time, and every piece of the burst arrives. A goroutine per
+// piece, each taking the other Client's lock, kept that Client's own requests
+// waiting behind the queue while its sibling downloaded.
+func TestSiblings_BurstRefreshesThroughOneWorker(t *testing.T) {
+	_, mi := addTestPayload(t)
+	a, b := podClients(t)
+	tb, err := addTorrent(b, mi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ta, err := addTorrent(a, mi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs := tb.Piece(0).Storage().PieceImpl.(mmapStoragePiece).t
+	var running, most atomic.Int32
+	bs.refreshHook = func() {
+		n := running.Add(1)
+		for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+		}
+		time.Sleep(20 * time.Millisecond) // long enough for the burst to pile up
+		running.Add(-1)
+	}
+	for i := range ta.NumPieces() {
+		if err := ta.Piece(i).Storage().MarkComplete(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, "B to see every piece complete", func() bool {
+		for i := range tb.NumPieces() {
+			if !tb.Piece(i).State().Complete {
+				return false
+			}
+		}
+		return true
+	})
+	if m := most.Load(); m != 1 {
+		t.Fatalf("%d re-reads of B at once, want 1", m)
 	}
 }
 

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"maps"
 	"slices"
 	"sync"
 
@@ -102,19 +103,59 @@ func (s *storageSiblings) shared(h metainfo.Hash) bool {
 	return len(s.m[h]) > 1
 }
 
-// refreshFromStorage re-reads piece idx's completion in this storage's Client
-// (Piece.RefreshCompletionFromStorage). No attached check: it runs in its own goroutine.
+// queueRefresh has this storage's Client re-read piece idx's completion,
+// which a sibling has just changed. The pieces wait in one set, drained by
+// one worker at a time: each re-read takes the Client's lock, and a goroutine
+// per piece queued a writer per piece on it while a sibling downloaded,
+// holding up the Client's own requests and handshakes behind them. A piece
+// queued twice before the worker gets to it is re-read once.
+func (ts *mmapTorrentStorage) queueRefresh(idx int) {
+	ts.refreshMu.Lock()
+	defer ts.refreshMu.Unlock()
+	if ts.refreshPending != nil {
+		ts.refreshPending[idx] = struct{}{}
+		return
+	}
+	ts.refreshPending = map[int]struct{}{idx: {}}
+	go ts.drainRefresh()
+}
+
+// drainRefresh re-reads the queued pieces, in index order, until none is
+// left. refreshPending stays non-nil while it runs, so queueRefresh starts no
+// second one.
+func (ts *mmapTorrentStorage) drainRefresh() {
+	for {
+		ts.refreshMu.Lock()
+		batch := ts.refreshPending
+		if len(batch) == 0 {
+			ts.refreshPending = nil
+			ts.refreshMu.Unlock()
+			return
+		}
+		ts.refreshPending = map[int]struct{}{}
+		ts.refreshMu.Unlock()
+		ts.refreshFromStorage(slices.Sorted(maps.Keys(batch))...)
+	}
+}
+
+// refreshFromStorage re-reads the completion of pieces idx in this storage's
+// Client (Piece.RefreshCompletionFromStorage), each under the Client's lock
+// on its own. No attached check: the worker never runs under OpenTorrent.
 // With --torrent-client-debug the library may log "piece request order has {}
 // and pending pieces has {N}" for a piece a reader waits on: it checks needData
 // before it updates its pending set, a transient mismatch.
-func (ts *mmapTorrentStorage) refreshFromStorage(idx int) {
+func (ts *mmapTorrentStorage) refreshFromStorage(idx ...int) {
+	if ts.refreshHook != nil {
+		ts.refreshHook()
+	}
 	if ts.cl == nil {
 		return
 	}
-	for _, t := range ts.cl.Torrents() {
-		if t.InfoHash() == ts.infoHash {
-			t.Piece(idx).RefreshCompletionFromStorage()
-			return
-		}
+	t, ok := ts.cl.Torrent(ts.infoHash)
+	if !ok {
+		return
+	}
+	for _, i := range idx {
+		t.Piece(i).RefreshCompletionFromStorage()
 	}
 }

@@ -181,6 +181,12 @@ type mmapTorrentStorage struct {
 	closeCh  chan struct{}
 	cl       *torrent.Client // for completion refresh on eviction and from siblings
 	siblings *storageSiblings
+	// refreshPending is the pieces a sibling changed that this storage's
+	// Client has yet to re-read; non-nil while a worker drains it (see
+	// queueRefresh). Under refreshMu.
+	refreshMu      sync.Mutex
+	refreshPending map[int]struct{}
+	refreshHook    func() // test hook: runs as refreshFromStorage starts
 	// evicted[i] is true while piece i's bytes are a punched hole. Set
 	// before the hole is punched, cleared when the piece is written again.
 	//
@@ -478,7 +484,7 @@ func (sp mmapStoragePiece) MarkComplete() error {
 	// The other Clients of the pod learn of the piece from the db, without
 	// downloading it (see storageSiblings).
 	for _, o := range sp.t.siblings.others(sp.t) {
-		go o.refreshFromStorage(idx)
+		o.queueRefresh(idx)
 	}
 	// The piece has been fully written and verified. Drop the mmap pages —
 	// dirty pages will be written back by the kernel asynchronously, and
@@ -503,7 +509,7 @@ func (sp mmapStoragePiece) MarkNotComplete() error {
 		return err
 	}
 	for _, o := range sp.t.siblings.others(sp.t) {
-		go o.refreshFromStorage(sp.p.Index())
+		o.queueRefresh(sp.p.Index())
 	}
 	return nil
 }
