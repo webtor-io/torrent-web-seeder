@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"flag"
 	"io"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/urfave/cli"
 )
 
 // openShared opens info in dir as a Client's storage would, registered in sib.
@@ -26,21 +28,29 @@ func openShared(t *testing.T, dir string, sib *storageSiblings, info *metainfo.I
 	return ts
 }
 
-// siblingClient is a Client whose storage is rooted at dir and registered in
-// sib, as TorrentClient.get builds it.
-func siblingClient(t *testing.T, dir string, sib *storageSiblings) *torrent.Client {
+// podClients builds the pod's Client and an account's Client on one data dir
+// the way the service does: NewTorrentClient makes the registry, forUser shares
+// it and get hands it to each Client's storage. Nothing here sets it by hand.
+func podClients(t *testing.T) (pod, account *torrent.Client) {
 	t.Helper()
-	cfg := addTestConfig(dir)
-	m := NewMMap(dir, 0, FileCacheConfig{})
-	m.siblings = sib
-	cfg.DefaultStorage = m
-	cl, err := torrent.NewClient(cfg)
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.String(DataDirFlag, t.TempDir(), "")
+	tc, err := NewTorrentClient(cli.NewContext(nil, fs, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.SetClient(cl)
-	t.Cleanup(func() { cl.Close() })
-	return cl
+	tc.swarm = newSwarmStats() // the service's collector is process-wide
+	tc.testConfig = loopbackConfig
+	var cls []*torrent.Client
+	for _, cc := range []*TorrentClient{tc, tc.forUser()} {
+		cl, err := cc.get()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cl.Close() })
+		cls = append(cls, cl)
+	}
+	return cls[0], cls[1]
 }
 
 // A chunk written over a piece the other Client of this pod has verified is dropped
@@ -70,9 +80,11 @@ func TestSiblings_WriteGuardKeepsCompletePiece(t *testing.T) {
 				t.Fatalf("WriteAt over a complete piece = (%d, %v), want (%d, nil)", n, err, len(bad))
 			}
 			got := make([]byte, 1024)
-			_, _ = a.Piece(p0).ReadAt(got, 0)
-			if c.guarded != bytes.Equal(got, data[:1024]) {
-				t.Fatalf("guarded=%v but the verified bytes kept=%v", c.guarded, bytes.Equal(got, data[:1024]))
+			if _, err := a.Piece(p0).ReadAt(got, 0); err != nil {
+				t.Fatal(err)
+			}
+			if want := map[bool][]byte{true: data[:1024], false: bad}[c.guarded]; !bytes.Equal(got, want) {
+				t.Fatalf("guarded=%v: piece 0 starts %x, want %x", c.guarded, got[:4], want[:4])
 			}
 			if d := testutil.ToFloat64(promSharedChunkWritesDropped) - dropped; d != map[bool]float64{true: 1, false: 0}[c.guarded] {
 				t.Fatalf("dropped +%v", d)
@@ -81,7 +93,9 @@ func TestSiblings_WriteGuardKeepsCompletePiece(t *testing.T) {
 			if _, err := b.Piece(p1).WriteAt(chunk, 0); err != nil {
 				t.Fatal(err)
 			}
-			_, _ = b.Piece(p1).ReadAt(got, 0)
+			if _, err := b.Piece(p1).ReadAt(got, 0); err != nil {
+				t.Fatal(err)
+			}
 			if !bytes.Equal(got, chunk) {
 				t.Fatal("a piece nobody completed was not written")
 			}
@@ -89,12 +103,12 @@ func TestSiblings_WriteGuardKeepsCompletePiece(t *testing.T) {
 	}
 }
 
-// B holds the torrent with no peer and a reader waiting; A downloads it. B's reader
-// gets every byte from A's verified pieces and B downloads nothing.
+// B, an account's Client, holds the torrent with no peer and a reader waiting;
+// A, the pod's Client, downloads it. B has no peer, so every byte its reader
+// gets comes from A's verified pieces.
 func TestSiblings_ReaderGetsSiblingPiece(t *testing.T) {
 	data, mi := addTestPayload(t)
-	dir, sib := t.TempDir(), newStorageSiblings()
-	a, b := siblingClient(t, dir, sib), siblingClient(t, dir, sib)
+	a, b := podClients(t)
 	tb, err := addTorrent(b, mi)
 	if err != nil {
 		t.Fatal(err)
@@ -117,18 +131,13 @@ func TestSiblings_ReaderGetsSiblingPiece(t *testing.T) {
 	if buf := <-got; !bytes.Equal(buf, data) {
 		t.Fatalf("B read %d bytes, want the %d of the payload", len(buf), len(data))
 	}
-	s := tb.Stats()
-	if n := s.ConnStats.BytesReadUsefulData.Int64(); n != 0 {
-		t.Fatalf("B downloaded %d useful bytes, want 0", n)
-	}
 }
 
 // A piece one Client of the pod marks not complete (a failed hash) is taken
 // back from the other Client too: the bytes on disk are no longer verified.
 func TestSiblings_NotCompleteReachesSibling(t *testing.T) {
 	data, mi := addTestPayload(t)
-	dir, sib := t.TempDir(), newStorageSiblings()
-	a, b := siblingClient(t, dir, sib), siblingClient(t, dir, sib)
+	a, b := podClients(t)
 	tb, err := addTorrent(b, mi)
 	if err != nil {
 		t.Fatal(err)

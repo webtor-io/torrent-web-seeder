@@ -104,6 +104,9 @@ func (s *storageSiblings) shared(h metainfo.Hash) bool {
 
 // refreshFromStorage re-reads piece idx's completion in this storage's Client
 // (Piece.RefreshCompletionFromStorage). No attached check: it runs in its own goroutine.
+// With --torrent-client-debug the library may log "piece request order has {}
+// and pending pieces has {N}" for a piece a reader waits on: it checks needData
+// before it updates its pending set, a transient mismatch.
 func (ts *mmapTorrentStorage) refreshFromStorage(idx int) {
 	if ts.cl == nil {
 		return
