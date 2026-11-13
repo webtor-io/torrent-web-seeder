@@ -1,8 +1,11 @@
 package services
 
 import (
+	"errors"
 	"reflect"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	ts "github.com/webtor-io/torrent-store/proto"
@@ -123,5 +126,65 @@ func TestPrivateRecords_CacheAndRefresh(t *testing.T) {
 	})
 	if rec, _ := pr.Get(h, uidA); rec == nil || rec.Tiers[0][0] != "http://tracker.invalid/c" || f.lookupCount() != 8 {
 		t.Fatalf("Get after an unavailable Refresh = %+v after %d lookups, want the store asked again (8)", rec, f.lookupCount())
+	}
+}
+
+// lazymap's Drop leaves the dropped entry's expire goroutine blocked for good,
+// so a Refresh of an unchanged record must not drop it.
+func TestPrivateRecords_RefreshUnchangedLeaksNoGoroutine(t *testing.T) {
+	const h = "f07c04a783450dba366e562c253ce56573d7535f"
+	f := &storeFake{}
+	f.setRecord(func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
+		return recordReply("http://tracker.invalid/a"), nil
+	})
+	pr := NewPrivateRecords(f.store())
+	pr.Get(h, uidA)
+	before := runtime.NumGoroutine()
+	for i := 0; i < 100; i++ {
+		if rec, o := pr.Refresh(h, uidA); o != recordOK || rec.Tiers[0][0] != "http://tracker.invalid/a" {
+			t.Fatalf("Refresh = %+v, %s", rec, o)
+		}
+	}
+	waitFor(t, "100 Refreshes of an unchanged record to leave the goroutines as they were", func() bool {
+		return runtime.NumGoroutine() <= before+5
+	})
+}
+
+// Р4: a store that never answers gives unavailable at recordLookupTimeout.
+func TestPrivateRecords_LookupTimeout(t *testing.T) {
+	old := recordLookupTimeout
+	recordLookupTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { recordLookupTimeout = old })
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f := &storeFake{}
+	f.setRecord(func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
+		<-release
+		return recordReply("http://tracker.invalid/a"), nil
+	})
+	done := make(chan recordOutcome, 1)
+	go func() {
+		_, o := NewPrivateRecords(f.store()).Get("f07c04a783450dba366e562c253ce56573d7535f", uidA)
+		done <- o
+	}()
+	select {
+	case o := <-done:
+		if o != recordUnavailable {
+			t.Fatalf("outcome %s, want unavailable", o)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the lookup outlived recordLookupTimeout")
+	}
+}
+
+// No client from TorrentStore.Get() is a store failure: unavailable, never missing.
+func TestPrivateRecords_NoStoreClient(t *testing.T) {
+	before := testutil.ToFloat64(promRecordLookups.WithLabelValues(string(recordUnavailable)))
+	store := &TorrentStore{inited: true, err: errors.New("dial failed")}
+	if rec, o := NewPrivateRecords(store).Get("f07c04a783450dba366e562c253ce56573d7535f", uidA); o != recordUnavailable || rec != nil {
+		t.Fatalf("Get = %+v, %s, want nil, unavailable", rec, o)
+	}
+	if d := testutil.ToFloat64(promRecordLookups.WithLabelValues(string(recordUnavailable))) - before; d != 1 {
+		t.Fatalf("lookups{unavailable} +%v, want +1", d)
 	}
 }

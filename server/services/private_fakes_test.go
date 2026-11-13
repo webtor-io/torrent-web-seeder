@@ -51,8 +51,8 @@ func (f *storeFake) Pull(_ context.Context, in *ts.PullRequest, _ ...grpc.CallOp
 }
 
 // GetPrivateRecord counts the lookup before answering, so a test can see one
-// that record holds.
-func (f *storeFake) GetPrivateRecord(_ context.Context, in *ts.GetPrivateRecordRequest, _ ...grpc.CallOption) (*ts.GetPrivateRecordReply, error) {
+// that record holds. Like a gRPC client, it gives up when ctx ends.
+func (f *storeFake) GetPrivateRecord(ctx context.Context, in *ts.GetPrivateRecordRequest, _ ...grpc.CallOption) (*ts.GetPrivateRecordReply, error) {
 	f.mu.Lock()
 	f.lookups++
 	record := f.record
@@ -60,7 +60,18 @@ func (f *storeFake) GetPrivateRecord(_ context.Context, in *ts.GetPrivateRecordR
 	if record == nil {
 		return nil, status.Error(codes.Unimplemented, "unknown method GetPrivateRecord")
 	}
-	return record(in)
+	type answer struct {
+		r   *ts.GetPrivateRecordReply
+		err error
+	}
+	ch := make(chan answer, 1)
+	go func() { r, err := record(in); ch <- answer{r, err} }()
+	select {
+	case a := <-ch:
+		return a.r, a.err
+	case <-ctx.Done():
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 }
 
 func (f *storeFake) setRecord(fn func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error)) {

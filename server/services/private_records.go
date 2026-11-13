@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"reflect"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -103,17 +104,28 @@ func (s *PrivateRecords) Get(h, uid string) (*PrivateRecord, recordOutcome) {
 
 // Refresh asks the store past the cache and leaves its answer there (Drop, then Get
 // with a loader returning it); an unavailable answer leaves the cache empty.
+//
+// An equal answer already cached is left in place: lazymap's Drop stops the
+// entry's expire timer, and the goroutine waiting on it never exits. Its
+// cached copy then expires earlier than a fresh one would, at the cost of a
+// store lookup, never a stale answer. A changed or unavailable answer still
+// drops a live entry and leaks one goroutine per change; fixing lazymap's
+// expiry (time.AfterFunc) removes that.
 func (s *PrivateRecords) Refresh(h, uid string) (*PrivateRecord, recordOutcome) {
 	if s == nil {
 		return nil, recordDisabled
 	}
 	a, err := s.lookup(h, uid)
 	key := entryKey(h, uid)
-	s.Drop(key)
 	if err != nil {
+		s.Drop(key)
 		return nil, recordUnavailable
 	}
-	_, _ = s.LazyMap.Get(key, func() (*recordAnswer, error) { return a, nil })
+	load := func() (*recordAnswer, error) { return a, nil }
+	if cur, err := s.LazyMap.Get(key, load); err != nil || !reflect.DeepEqual(cur, a) {
+		s.Drop(key)
+		_, _ = s.LazyMap.Get(key, load)
+	}
 	return a.rec, a.outcome
 }
 
