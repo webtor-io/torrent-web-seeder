@@ -288,9 +288,8 @@ func TestWarmupReportsUnverifiedBytes(t *testing.T) {
 
 	dataDir := t.TempDir()
 	hold := &holdHashFailure{piece: bad, failed: make(chan struct{}), release: make(chan struct{})}
-	tc := &TorrentClient{
+	tc := &TorrentClient{clientSettings: clientSettings{
 		swarm:              newSwarmStats(),
-		rLimit:             -1,
 		maxUnverifiedBytes: -1,
 		dataDir:            dataDir,
 		testConfig: func(cfg *torrent.ClientConfig) {
@@ -298,7 +297,7 @@ func TestWarmupReportsUnverifiedBytes(t *testing.T) {
 			hold.ClientImpl = cfg.DefaultStorage
 			cfg.DefaultStorage = hold
 		},
-	}
+	}}
 	t.Cleanup(tc.Close)
 	t.Cleanup(hold.unblock)
 	torrentsDir := t.TempDir()

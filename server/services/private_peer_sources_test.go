@@ -78,13 +78,12 @@ func TestTorrentClient_PrivatePeerSources(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			swarm := newSwarmStats()
-			tc := &TorrentClient{
+			tc := &TorrentClient{clientSettings: clientSettings{
 				swarm:              swarm,
 				testConfig:         loopbackConfig,
-				rLimit:             -1,
 				maxUnverifiedBytes: -1,
 				dataDir:            t.TempDir(),
-			}
+			}}
 			t.Cleanup(tc.Close)
 			cl, err := tc.Get()
 			if err != nil {

@@ -54,9 +54,8 @@ func sourceFixture(t *testing.T, dir, name string, private bool) metainfo.Hash {
 // WebSeeder.ServeHTTP to a torrent the map loaded into an offline client.
 func TestRenderTorrent_PrivateWithoutTrackers(t *testing.T) {
 	dataDir := t.TempDir()
-	tc := &TorrentClient{
+	tc := &TorrentClient{clientSettings: clientSettings{
 		swarm:              newSwarmStats(),
-		rLimit:             -1,
 		maxUnverifiedBytes: -1,
 		dataDir:            dataDir,
 		testConfig: func(cfg *torrent.ClientConfig) {
@@ -66,7 +65,7 @@ func TestRenderTorrent_PrivateWithoutTrackers(t *testing.T) {
 			// no reader nothing is wanted and nothing is fetched.
 			cfg.DisableWebseeds = false
 		},
-	}
+	}}
 	t.Cleanup(tc.Close)
 	torrentsDir := t.TempDir()
 	priv := sourceFixture(t, torrentsDir, "priv", true)

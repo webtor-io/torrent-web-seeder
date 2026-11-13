@@ -570,14 +570,13 @@ func zPod(tb testing.TB, dataDir string, mi *metainfo.MetaInfo, budget int64, st
 		tb.Fatal(err)
 	}
 	_ = f.Close()
-	tc := &TorrentClient{
+	tc := &TorrentClient{clientSettings: clientSettings{
 		swarm:                 newSwarmStats(),
-		rLimit:                -1,
 		maxUnverifiedBytes:    -1,
 		dataDir:               dataDir,
 		perTorrentCacheBudget: budget,
 		testConfig:            func(cfg *torrent.ClientConfig) { loopbackConfig(cfg) },
-	}
+	}}
 	tb.Cleanup(tc.Close)
 	tm := NewTorrentMap(tc, nil, &FileStoreMap{p: torrentsDir})
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
@@ -709,13 +708,12 @@ func TestStatsOfAFileWithAHoleLeaveTheTorrentUnloaded(t *testing.T) {
 	dataDir := zSeed(t)
 	zExec(t, dataDir, `update piece_completion set complete = 0 where "index" = 1`)
 	torrents := zTorrents(t)
-	tc := &TorrentClient{
+	tc := &TorrentClient{clientSettings: clientSettings{
 		swarm:              newSwarmStats(),
-		rLimit:             -1,
 		maxUnverifiedBytes: -1,
 		dataDir:            dataDir,
 		testConfig:         func(cfg *torrent.ClientConfig) { loopbackConfig(cfg) },
-	}
+	}}
 	t.Cleanup(tc.Close)
 	tm := NewTorrentMap(tc, nil, &FileStoreMap{p: torrents})
 	ws := &WebSeeder{
