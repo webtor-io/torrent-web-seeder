@@ -26,6 +26,7 @@ require (
 	github.com/webtor-io/torrent-store v0.0.0-20261113110425-65a5e4f57aa3
 	golang.org/x/sys v0.48.0
 	golang.org/x/time v0.14.0
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )
@@ -129,7 +130,6 @@ require (
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mellium.im/sasl v0.3.2 // indirect
 	modernc.org/libc v1.67.1 // indirect
