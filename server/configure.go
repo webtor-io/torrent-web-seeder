@@ -27,6 +27,7 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterLingerFlags(app.Flags)
 	app.Flags = s.RegisterCacheEventsFlags(app.Flags)
 	app.Flags = s.RegisterDebugStatusFlags(app.Flags)
+	app.Flags = s.RegisterPrivateFlags(app.Flags)
 	// app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
 	configureDiagnose(app)
@@ -73,7 +74,8 @@ func run(c *cli.Context) error {
 	touchMap := s.NewTouchMap(c)
 
 	// Setting TorrentMap
-	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap)
+	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap).
+		WithPrivate(s.NewPrivateRecords(torrentStore), c.Bool(s.PrivateAccessEnforceFlag))
 
 	// Setting Stat
 	stat := s.NewStat(torrentMap, c.String(s.DataDirFlag))

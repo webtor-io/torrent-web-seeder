@@ -628,7 +628,11 @@ func (s *Stat) Files(ctx context.Context, _ *pb.FilesRequest) (*pb.FilesReply, e
 		return nil, errors.Errorf("no info-hash provided")
 	}
 	h := md.Get("info-hash")[0]
-	t, err := s.tm.Get(ctx, h)
+	var uid string
+	if v := md.Get("user-id"); len(v) > 0 {
+		uid = v[0]
+	}
+	t, _, err := s.tm.Get(ctx, h, uid)
 	if err != nil {
 		return nil, err
 	}

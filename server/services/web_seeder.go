@@ -84,10 +84,10 @@ func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, 
 	}
 }
 
-func (s *WebSeeder) renderTorrent(ctx context.Context, w http.ResponseWriter, h string) {
+func (s *WebSeeder) renderTorrent(ctx context.Context, w http.ResponseWriter, h, uid string) {
 	log.Info("serve torrent")
 
-	t, err := s.tm.Get(ctx, h)
+	t, _, err := s.tm.Get(ctx, h, uid)
 
 	if err != nil {
 		log.Error(err)
@@ -141,7 +141,7 @@ func (s *WebSeeder) addH(h string, w http.ResponseWriter) {
 func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h string) {
 	log.Info("Serve file index")
 
-	t, err := s.tm.Get(r.Context(), h)
+	t, _, err := s.tm.Get(r.Context(), h, r.Header.Get("X-Uid"))
 
 	if err != nil {
 		log.Error(err)
@@ -277,7 +277,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		// cut after stallTimeout without progress: release closes the file
 		// under ServeContent, abortWrite fails a Write the client blocks, and
 		// the response ends short.
-		tw := NewTouchWriter(w, nil, s.tom, h)
+		tw := NewTouchWriter(w, nil, s.tom, h, h)
 		go watchStall(r.Context(), func() { release(); abortWrite(r) }, tw.LastWrite, s.stallTimeout, logWithField)
 		serveWithValidators(tw, r, p, lastMod, etag, file)
 		return
@@ -293,10 +293,10 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	// and no data for the piece a read waits on (see waitingReader).
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	tw, reader, err := s.getTorrentReader(ctx, w, h, p, !download)
+	tw, reader, err := s.getTorrentReader(ctx, w, h, r.Header.Get("X-Uid"), p, !download)
 	if err == nil && reader != nil {
 		// The torrent stays loaded for as long as this request reads it.
-		defer s.tm.Hold(h)()
+		defer s.tm.Hold(tw.key)()
 		progress := func() time.Time {
 			data, write := reader.lastData(), tw.LastWrite()
 			if data.After(write) {
@@ -599,8 +599,8 @@ func samePath(filePath, requested string) bool {
 // evicted piece the library never requested again. evictPiece now tells the
 // library the piece is gone (refreshCompletion), and a waiting reader gets an
 // evicted piece back (TestEvictedPieceRedownload_ReaderNeverSeesHoles).
-func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string, responsive bool) (*TouchWriter, *waitingReader, error) {
-	t, err := s.tm.Get(ctx, h)
+func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h, uid, p string, responsive bool) (*TouchWriter, *waitingReader, error) {
+	t, key, err := s.tm.Get(ctx, h, uid)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -615,7 +615,7 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
 			// Wrapped so the request's end does not drop the pieces this
 			// reader was after — see linger.go.
-			return NewTouchWriter(w, s.tm, s.tom, h), &waitingReader{
+			return NewTouchWriter(w, s.tm, s.tom, h, key), &waitingReader{
 				ReadSeekCloser: s.linger.Wrap(torReader, t, f),
 				missing:        t.PieceBytesMissing,
 				offset:         f.Offset(),
@@ -794,7 +794,7 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if p == "" {
 			s.renderTorrentIndex(w, r, h)
 		} else if p == SourceTorrentPath {
-			s.renderTorrent(r.Context(), w, h)
+			s.renderTorrent(r.Context(), w, h, r.Header.Get("X-Uid"))
 		} else {
 			s.serveFile(w, r, h, p)
 		}

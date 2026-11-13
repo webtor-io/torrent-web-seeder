@@ -93,7 +93,7 @@ func TestServeFileFromTorrent_NeverServesUnverifiedChunks(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	tor, err := tm.Get(ctx, ih.HexString())
+	tor, _, err := tm.Get(ctx, ih.HexString(), "")
 	if err != nil || tor == nil {
 		t.Fatalf("load torrent: %v", err)
 	}

@@ -2,9 +2,14 @@ package services
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 
+	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	ts "github.com/webtor-io/torrent-store/proto"
@@ -120,4 +125,156 @@ func torrentBytes(t *testing.T, mi *metainfo.MetaInfo) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+type trackerAnnounce struct {
+	key, event, peerID string
+	port               int
+}
+
+// fakeTracker answers announces on loopback (trackerAnswers), or refuses a key
+// (trackerRefuses); it keeps every announce by its passkey.
+type fakeTracker struct {
+	srv     *httptest.Server
+	mu      sync.Mutex
+	seen    map[string][]trackerAnnounce
+	refused map[string]bool
+}
+
+func newFakeTracker(t *testing.T) *fakeTracker {
+	f := &fakeTracker{seen: map[string][]trackerAnnounce{}, refused: map[string]bool{}}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		a := trackerAnnounce{key: q.Get("passkey"), event: q.Get("event"), peerID: q.Get("peer_id")}
+		a.port, _ = strconv.Atoi(q.Get("port"))
+		f.mu.Lock()
+		f.seen[a.key] = append(f.seen[a.key], a)
+		body := trackerAnswers
+		if f.refused[a.key] {
+			body = trackerRefuses
+		}
+		f.mu.Unlock()
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeTracker) URL(key string) string { return f.srv.URL + "/announce?passkey=" + key }
+
+func (f *fakeTracker) Refuse(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refused[key] = true
+}
+
+func (f *fakeTracker) Announces(key string) []trackerAnnounce {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]trackerAnnounce(nil), f.seen[key]...)
+}
+
+// waitEvent waits for an announce of key with event ("started", "stopped").
+func (f *fakeTracker) waitEvent(t *testing.T, key, event string) {
+	t.Helper()
+	waitFor(t, "a "+event+" announce", func() bool {
+		for _, a := range f.Announces(key) {
+			if a.event == event {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+type testRecord struct{ uid, key string }
+
+// privateEnv: a private torrent (stored copy announcing keyStored) and a public one in
+// storeFake; a TorrentMap over a loopback TorrentClient with trackers on
+// (trackerTestConfig, allowLocalNetworks, siblings), WithPrivate(records, enforce).
+type privateEnv struct {
+	tm    *TorrentMap
+	store *storeFake
+	trk   *fakeTracker
+	h     string // the private torrent
+	pub   string // the public torrent
+	data  []byte
+	dir   string
+}
+
+func newPrivateEnv(t *testing.T, enforce bool) *privateEnv {
+	t.Helper()
+	trk := newFakeTracker(t)
+	data, mi := privatePayload(t, trk.URL(keyStored))
+	_, pub := addTestPayload(t)
+	env := &privateEnv{
+		store: &storeFake{torrents: map[string][]byte{
+			mi.HashInfoBytes().HexString():  torrentBytes(t, mi),
+			pub.HashInfoBytes().HexString(): torrentBytes(t, pub),
+		}},
+		trk:  trk,
+		h:    mi.HashInfoBytes().HexString(),
+		pub:  pub.HashInfoBytes().HexString(),
+		data: data,
+		dir:  t.TempDir(),
+	}
+	tc := &TorrentClient{clientSettings: clientSettings{
+		swarm:              newSwarmStats(),
+		testConfig:         trackerTestConfig,
+		siblings:           newStorageSiblings(),
+		maxUnverifiedBytes: -1,
+		dataDir:            env.dir,
+		allowLocalNetworks: true,
+	}}
+	env.tm = NewTorrentMap(tc, NewTorrentStoreMap(env.store.store()), &FileStoreMap{}).
+		WithPrivate(NewPrivateRecords(env.store.store()), enforce)
+	t.Cleanup(func() {
+		var cls []*torrent.Client
+		env.tm.mux.Lock()
+		for _, e := range env.tm.entries {
+			e.timer.Stop()
+		}
+		for _, a := range env.tm.accounts {
+			cls = append(cls, a.cl)
+		}
+		env.tm.mux.Unlock()
+		for _, cl := range cls {
+			cl.Close()
+		}
+		tc.Close()
+	})
+	return env
+}
+
+// setRecords makes the store find those uids' records, each with the one tier
+// {{trk.URL(key)}}, and no record (found=false) for the rest.
+func (e *privateEnv) setRecords(recs ...testRecord) {
+	e.store.setRecord(func(in *ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
+		for _, r := range recs {
+			if in.GetUid() == r.uid {
+				return &ts.GetPrivateRecordReply{Found: true, Tiers: []*ts.Tier{{Urls: []string{e.trk.URL(r.key)}}}}, nil
+			}
+		}
+		return &ts.GetPrivateRecordReply{}, nil
+	})
+}
+
+func (e *privateEnv) defaultClient(t *testing.T) *torrent.Client {
+	t.Helper()
+	cl, err := e.tm.tc.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cl
+}
+
+// accountTorrents is the number of torrents in every account Client.
+func (e *privateEnv) accountTorrents() int {
+	e.tm.mux.Lock()
+	defer e.tm.mux.Unlock()
+	n := 0
+	for _, a := range e.tm.accounts {
+		n += len(a.cl.Torrents())
+	}
+	return n
 }

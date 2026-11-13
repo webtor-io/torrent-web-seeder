@@ -584,7 +584,7 @@ func zPod(tb testing.TB, dataDir string, mi *metainfo.MetaInfo, budget int64, st
 	ws = &WebSeeder{tm: tm, fcm: zFCM(dataDir), tom: NewTouchMap(cli.NewContext(nil, fs, nil)), maxReadahead: 1 << 20, stallTimeout: stallTimeout}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	tor, err := tm.Get(ctx, mi.HashInfoBytes().HexString())
+	tor, _, err := tm.Get(ctx, mi.HashInfoBytes().HexString(), "")
 	if err != nil || tor == nil {
 		tb.Fatalf("load torrent: %v", err)
 	}

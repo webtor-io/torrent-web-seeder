@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"encoding/hex"
+	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,13 +81,18 @@ func init() {
 	prometheus.MustRegister(promStallDownloadSeconds)
 }
 
+// TorrentMap holds the loaded torrents by entryKey: h in the default Client,
+// h#uid in uid's account Client.
 type TorrentMap struct {
-	tc      *TorrentClient
-	tsm     *TorrentStoreMap
-	fsm     *FileStoreMap
-	entries map[string]*torrentEntry
-	ttl     time.Duration
-	mux     sync.Mutex
+	tc       *TorrentClient
+	tsm      *TorrentStoreMap
+	fsm      *FileStoreMap
+	records  *PrivateRecords // nil: the store keeps no private records (disabled)
+	enforce  bool
+	entries  map[string]*torrentEntry
+	accounts map[string]*accountClient // by uid
+	ttl      time.Duration
+	mux      sync.Mutex
 }
 
 // torrentEntry is a loaded torrent's lease: the TTL timer and the number of
@@ -96,6 +103,9 @@ type torrentEntry struct {
 	drop   func()
 	// peers is kept by the torrent's watcher (Get); stats read it.
 	peers *peerTimeline
+	t     *torrent.Torrent
+	uid   string     // "" in the default Client
+	tiers [][]string // an account's: the record's trackers, as loaded
 }
 
 // peerTimeline is since when a loaded torrent has had connected peers, none
@@ -166,12 +176,25 @@ func (p *peerTimeline) connectedFor(now time.Time) time.Duration {
 
 func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap) *TorrentMap {
 	return &TorrentMap{
-		tc:      tc,
-		tsm:     tsm,
-		fsm:     fsm,
-		entries: map[string]*torrentEntry{},
-		ttl:     time.Duration(600) * time.Second,
+		tc:       tc,
+		tsm:      tsm,
+		fsm:      fsm,
+		entries:  map[string]*torrentEntry{},
+		accounts: map[string]*accountClient{},
+		ttl:      time.Duration(600) * time.Second,
 	}
+}
+
+// WithPrivate sets where private records come from and whether access to a
+// private torrent is enforced or only observed (PRIVATE_ACCESS_ENFORCE).
+func (s *TorrentMap) WithPrivate(pr *PrivateRecords, enforce bool) *TorrentMap {
+	s.records, s.enforce = pr, enforce
+	v := 0.0
+	if enforce {
+		v = 1
+	}
+	promPrivateEnforce.Set(v)
+	return s
 }
 
 func (s *TorrentMap) Touch(h string) {
@@ -221,27 +244,41 @@ func (s *TorrentMap) reading(h string) bool {
 
 // track registers a freshly added torrent with a TTL and its drop action.
 // Called with mux held.
-func (s *TorrentMap) track(h string, drop func()) {
+func (s *TorrentMap) track(key string, drop func()) *torrentEntry {
 	e := &torrentEntry{drop: drop}
-	e.timer = time.AfterFunc(s.ttl, func() { s.expire(h, e) })
-	s.entries[h] = e
+	e.timer = time.AfterFunc(s.ttl, func() { s.expire(key, e) })
+	s.entries[key] = e
+	return e
 }
 
-// expire runs when h's TTL fires: drops the torrent unless a request is
+// expire runs when key's TTL fires: drops the torrent unless a request is
 // being served from it, in which case the lease is extended by another ttl.
-func (s *TorrentMap) expire(h string, e *torrentEntry) {
+func (s *TorrentMap) expire(key string, e *torrentEntry) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if cur, ok := s.entries[h]; !ok || cur != e {
+	if cur, ok := s.entries[key]; !ok || cur != e {
 		return
 	}
+	// The uid stays out of logs: the account goes as acct.
+	h, _, _ := strings.Cut(key, "#")
+	l := log.NewEntry(log.StandardLogger())
+	if e.uid != "" {
+		l = l.WithField("acct", acct(e.uid))
+	}
 	if e.active > 0 {
-		log.Infof("torrent kept infohash=%v (%d active requests)", h, e.active)
+		l.Infof("torrent kept infohash=%v (%d active requests)", h, e.active)
 		e.timer.Reset(s.ttl)
 		return
 	}
-	delete(s.entries, h)
-	log.Infof("torrent dropped infohash=%v", h)
+	s.unload(key, e)
+	l.Infof("torrent dropped infohash=%v", h)
+}
+
+// unload takes key's torrent out of the map and drops it. Called with mux
+// held.
+func (s *TorrentMap) unload(key string, e *torrentEntry) {
+	delete(s.entries, key)
+	e.timer.Stop()
 	e.drop()
 }
 
@@ -317,95 +354,178 @@ func addTorrent(cl *torrent.Client, mi *metainfo.MetaInfo) (*torrent.Torrent, er
 	return cl.AddTorrent(mi)
 }
 
-func (s *TorrentMap) Get(ctx context.Context, h string) (*torrent.Torrent, error) {
+// Get loads torrent h and returns it with its entryKey. A public torrent goes
+// to the default Client under h, for any uid. A private one (BEP 27) goes to
+// uid's account Client under h#uid, announcing only the trackers of uid's
+// record in torrent-store; without a valid uid or a record enforce refuses it
+// (seederRefusal) and observe loads it as before, into the default Client
+// with the stored trackers. A malformed uid and a store that fails are
+// refused in both modes.
+//
+// The metainfo and the record are read outside s.mux: a slow store holds up
+// only the request that waits for it, not the pod's other torrents. A pair
+// already loaded is served without asking the store again, so neither its
+// outage nor the end of the record cache cuts a running stream.
+func (s *TorrentMap) Get(ctx context.Context, h, uid string) (t *torrent.Torrent, key string, err error) {
+	mi, err := s.MetaInfo(h)
+	if err != nil || mi == nil {
+		return nil, "", err
+	}
+	private, err := metainfoPrivate(mi)
+	if err != nil {
+		return nil, "", err
+	}
+	if !private {
+		return s.getDefault(h, mi)
+	}
+	if uid == "" {
+		return s.fallback(h, mi, reasonAccountRequired)
+	}
+	if !validUID(uid) {
+		return nil, "", &seederRefusal{http.StatusForbidden, reasonAccountRequired}
+	}
+	key = entryKey(h, uid)
+	if t := s.loaded(key); t != nil {
+		return t, key, nil
+	}
+	rec, outcome := s.records.Get(h, uid)
+	switch outcome {
+	case recordDisabled:
+		return s.fallback(h, mi, reasonPrivateDisabled)
+	case recordBad:
+		return s.fallback(h, mi, reasonBadRecord)
+	case recordMissing:
+		return s.fallback(h, mi, reasonNotEntitled)
+	case recordUnavailable:
+		return nil, "", &seederRefusal{http.StatusServiceUnavailable, reasonStoreUnavailable}
+	}
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	// Another request of the pair may have loaded it during the lookup.
+	if e, ok := s.entries[key]; ok {
+		e.timer.Reset(s.ttl)
+		return e.t, key, nil
+	}
+	a, err := s.accountFor(uid)
+	if err != nil {
+		return nil, "", err
+	}
+	m := *mi
+	m.Announce = ""
+	m.AnnounceList = rec.Tiers
+	m.UrlList = nil
+	t, err = addTorrent(a.cl, &m)
+	if err != nil {
+		return nil, "", err
+	}
+	promActiveTorrentCount.Inc()
+	e := s.track(key, func() {
+		t.Drop()
+		promActiveTorrentCount.Dec()
+		s.releaseAccount(uid)
+	})
+	e.uid, e.t, e.tiers = uid, t, rec.Tiers
+	e.peers = s.watch(key, t)
+	a.torrents++
+	log.WithFields(log.Fields{"infohash": h, "acct": acct(uid)}).Info("private torrent added")
+	return t, key, nil
+}
+
+// loaded returns key's torrent with its lease renewed, nil if it is not
+// loaded.
+func (s *TorrentMap) loaded(key string) *torrent.Torrent {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	e, ok := s.entries[key]
+	if !ok {
+		return nil
+	}
+	e.timer.Reset(s.ttl)
+	return e.t
+}
+
+// getDefault loads h into the default Client under h, as Get did before
+// private records.
+func (s *TorrentMap) getDefault(h string, mi *metainfo.MetaInfo) (*torrent.Torrent, string, error) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	cl, err := s.tc.Get()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	var t *torrent.Torrent
-	mi, err := s.fsm.Get(h)
+	t, err := addTorrent(cl, mi)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if mi == nil {
-		mi, err = s.tsm.Get(h)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if mi == nil {
-		return nil, nil
-
-	}
-	t, err = addTorrent(cl, mi)
-	if err != nil {
-		return nil, err
-	}
-	e, ok := s.entries[h]
-	if ok {
+	if e, ok := s.entries[h]; ok {
 		e.timer.Reset(s.ttl)
-	} else {
-		log.Infof("torrent added infohash=%v", h)
-		promActiveTorrentCount.Inc()
-		go defaultChokeRedial.watch(t, func() bool { return s.reading(h) })
-		startTime := time.Now()
-		tl := &peerTimeline{}
-		go func() {
-			const tickDuration = time.Millisecond * 50
-			ticker := time.NewTicker(tickDuration)
-			defer ticker.Stop()
-			firstPeerRecorded := false
-			tenPeersRecorded := false
-			thirtyPeersRecorded := false
-			firstByteRecorded := false
-			var lastBytesRead int64
-			for {
-				select {
-				case <-t.Closed():
-					return
-				case <-ticker.C:
-					stats := t.Stats()
-					activePeers := stats.ActivePeers
-					tl.observe(activePeers, stats.ConnectedSeeders, time.Now())
-					bytesRead := stats.ConnStats.BytesRead.Int64()
-					if bytesRead == lastBytesRead {
-						if activePeers == 0 {
-							promStallDiscoverySeconds.Add(tickDuration.Seconds())
-						} else if !firstByteRecorded {
-							promStallIdleSeconds.Add(tickDuration.Seconds())
-						} else {
-							promStallDownloadSeconds.Add(tickDuration.Seconds())
-						}
-					}
-					lastBytesRead = bytesRead
-					if !firstPeerRecorded && activePeers > 0 {
-						promTimeToFirstPeerMs.Observe(float64(time.Since(startTime).Milliseconds()))
-						firstPeerRecorded = true
-					}
-					if !tenPeersRecorded && activePeers >= 10 {
-						promTimeTo10PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
-						tenPeersRecorded = true
-					}
-					if !thirtyPeersRecorded && activePeers >= 30 {
-						promTimeTo30PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
-						thirtyPeersRecorded = true
-					}
-					if !firstByteRecorded && stats.ConnStats.BytesReadUsefulData.Int64() > 0 {
-						promTimeToFirstByteMs.Observe(float64(time.Since(startTime).Milliseconds()))
-						firstByteRecorded = true
+		return t, h, nil
+	}
+	log.Infof("torrent added infohash=%v", h)
+	promActiveTorrentCount.Inc()
+	e := s.track(h, func() {
+		t.Drop()
+		promActiveTorrentCount.Dec()
+	})
+	e.t = t
+	e.peers = s.watch(h, t)
+	return t, h, nil
+}
+
+// watch starts t's watchers until it closes: chokeRedial, and every 50 ms the
+// peer timeline it returns and the time-to and stall metrics.
+func (s *TorrentMap) watch(key string, t *torrent.Torrent) *peerTimeline {
+	go defaultChokeRedial.watch(t, func() bool { return s.reading(key) })
+	startTime := time.Now()
+	tl := &peerTimeline{}
+	go func() {
+		const tickDuration = time.Millisecond * 50
+		ticker := time.NewTicker(tickDuration)
+		defer ticker.Stop()
+		firstPeerRecorded := false
+		tenPeersRecorded := false
+		thirtyPeersRecorded := false
+		firstByteRecorded := false
+		var lastBytesRead int64
+		for {
+			select {
+			case <-t.Closed():
+				return
+			case <-ticker.C:
+				stats := t.Stats()
+				activePeers := stats.ActivePeers
+				tl.observe(activePeers, stats.ConnectedSeeders, time.Now())
+				bytesRead := stats.ConnStats.BytesRead.Int64()
+				if bytesRead == lastBytesRead {
+					if activePeers == 0 {
+						promStallDiscoverySeconds.Add(tickDuration.Seconds())
+					} else if !firstByteRecorded {
+						promStallIdleSeconds.Add(tickDuration.Seconds())
+					} else {
+						promStallDownloadSeconds.Add(tickDuration.Seconds())
 					}
 				}
+				lastBytesRead = bytesRead
+				if !firstPeerRecorded && activePeers > 0 {
+					promTimeToFirstPeerMs.Observe(float64(time.Since(startTime).Milliseconds()))
+					firstPeerRecorded = true
+				}
+				if !tenPeersRecorded && activePeers >= 10 {
+					promTimeTo10PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
+					tenPeersRecorded = true
+				}
+				if !thirtyPeersRecorded && activePeers >= 30 {
+					promTimeTo30PeersMs.Observe(float64(time.Since(startTime).Milliseconds()))
+					thirtyPeersRecorded = true
+				}
+				if !firstByteRecorded && stats.ConnStats.BytesReadUsefulData.Int64() > 0 {
+					promTimeToFirstByteMs.Observe(float64(time.Since(startTime).Milliseconds()))
+					firstByteRecorded = true
+				}
 			}
-		}()
-		s.track(h, func() {
-			t.Drop()
-			promActiveTorrentCount.Dec()
-		})
-		s.entries[h].peers = tl
-	}
-	return t, nil
+		}
+	}()
+	return tl
 }
 
 func (s *TorrentMap) List() ([]string, error) {
