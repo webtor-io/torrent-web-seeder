@@ -143,6 +143,7 @@ type clientSettings struct {
 	swarm                      *swarmStats                 // exports the clients' peer traffic
 	testConfig                 func(*torrent.ClientConfig) // tests point the client at loopback; nil in the service
 	cacheEvents                *CacheEvents                // set before the first Get; nil publishes nothing
+	siblings                   *storageSiblings            // the pod's open storages, shared by its Clients; nil: none
 	fileCache                  FileCacheConfig
 	clientIdleTimeout          time.Duration
 	dataDir                    string
@@ -442,6 +443,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 	}
 	return &TorrentClient{clientSettings: clientSettings{
 		swarm:                      promSwarm,
+		siblings:                   newStorageSiblings(),
 		downloadLimiter:            download,
 		dialLimiter:                dial,
 		dataDir:                    c.String(DataDirFlag),
@@ -495,6 +497,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	}
 	s.storageImpl = NewMMap(s.dataDir, s.perTorrentCacheBudget, s.fileCache)
 	s.storageImpl.events = s.cacheEvents
+	s.storageImpl.siblings = s.siblings
 	cfg.DefaultStorage = s.storageImpl
 	// An account's Client keeps the library's user agent: it then agrees
 	// with the library's peer id prefix and handshake version.
