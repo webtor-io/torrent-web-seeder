@@ -127,7 +127,7 @@ func TestTorrentMap_GetKeepsPeerTimeline(t *testing.T) {
 		defer m.mux.Unlock()
 		m.entries[h].timer.Stop()
 	})
-	_, tl := m.peek("", h)
+	_, tl := m.peek(h)
 	if tl == nil {
 		t.Fatal("a torrent loaded by Get has no timeline")
 	}

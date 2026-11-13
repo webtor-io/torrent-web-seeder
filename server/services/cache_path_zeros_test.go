@@ -734,7 +734,7 @@ func TestStatsOfAFileWithAHoleLeaveTheTorrentUnloaded(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "event: statupdate") {
 		t.Fatalf("?stats on b: %d, %q", w.Code, w.Body.String())
 	}
-	if tm.Peek("", zHash) != nil {
+	if tm.Peek(zHash) != nil {
 		t.Error("?stats on b loaded the torrent")
 	}
 	cl, err := tc.Get()

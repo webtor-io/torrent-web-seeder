@@ -377,7 +377,7 @@ func (s *Stat) statUncached(key, h string, t *torrent.Torrent, tl *peerTimeline,
 	// its numbers come from disk (coldStat). Peek never joins the swarm or
 	// extends the TTL — that is for serveFile and warm-up to do.
 	if t == nil {
-		t, tl = s.tm.peek("", h)
+		t, tl = s.tm.peek(h)
 	}
 	if t == nil {
 		return s.coldStat(h, in.GetPath())

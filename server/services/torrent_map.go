@@ -197,26 +197,28 @@ func (s *TorrentMap) WithPrivate(pr *PrivateRecords, enforce bool) *TorrentMap {
 	return s
 }
 
-func (s *TorrentMap) Touch(h string) {
+// Touch renews the lease of the torrent under key (entryKey).
+func (s *TorrentMap) Touch(key string) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if e, ok := s.entries[h]; ok {
+	if e, ok := s.entries[key]; ok {
 		e.timer.Reset(s.ttl)
 	}
 }
 
-// Hold keeps torrent h loaded until the returned release is called, however
-// long that takes. The TTL used to be refreshed only by bytes written to the
+// Hold keeps the torrent under key (entryKey) loaded until the returned
+// release is called, however long that takes. The TTL used to be refreshed
+// only by bytes written to the
 // response (TouchWriter), so a stream stalled on a dead swarm for ten
 // minutes had its torrent dropped underneath the reader: with the eager
 // span that ended the stream as a silent EOF, with lazySpan it is
 // ErrSpanClosed, which anacrolix retries into a recovered panic
 // (updatePieceCompletion "0 N", 81 a day after 749bb2c). A torrent nobody
 // is reading still expires ttl after its last touch or release.
-func (s *TorrentMap) Hold(h string) (release func()) {
+func (s *TorrentMap) Hold(key string) (release func()) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	e, ok := s.entries[h]
+	e, ok := s.entries[key]
 	if !ok {
 		return func() {}
 	}
@@ -234,11 +236,12 @@ func (s *TorrentMap) Hold(h string) (release func()) {
 	}
 }
 
-// reading reports whether a request is being served from torrent h.
-func (s *TorrentMap) reading(h string) bool {
+// reading reports whether a request is being served from the torrent under
+// key (entryKey).
+func (s *TorrentMap) reading(key string) bool {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	e, ok := s.entries[h]
+	e, ok := s.entries[key]
 	return ok && e.active > 0
 }
 
@@ -289,18 +292,15 @@ func (s *TorrentMap) unload(key string, e *torrentEntry) {
 // and kept the torrent alive, which is exactly what a headless farm hitting
 // a handful of hashes was buying from us.
 //
-// uid's own torrent (h#uid) comes first; without it, the default Client's.
-func (s *TorrentMap) Peek(uid, h string) *torrent.Torrent {
-	t, _ := s.peek(uid, h)
+// It looks in the default Client; an account's torrent is found by statKey.
+func (s *TorrentMap) Peek(h string) *torrent.Torrent {
+	t, _ := s.peek(h)
 	return t
 }
 
 // peek is Peek with the torrent's peer timeline, read under the same lock;
 // the timeline is nil for a torrent the map does not track.
-func (s *TorrentMap) peek(uid, h string) (*torrent.Torrent, *peerTimeline) {
-	if _, t, tl := s.statKey(uid, h); t != nil {
-		return t, tl
-	}
+func (s *TorrentMap) peek(h string) (*torrent.Torrent, *peerTimeline) {
 	if len(h) != 40 {
 		return nil, nil
 	}
@@ -331,7 +331,7 @@ func (s *TorrentMap) peek(uid, h string) (*torrent.Torrent, *peerTimeline) {
 // with the torrent it names: h#uid with uid's own torrent and timeline while
 // that is loaded, so a frame kept under h#uid is always that torrent's;
 // otherwise h and no torrent, h naming the default Client's, which
-// peek("", h) finds when a frame is computed. Two accounts of one private
+// peek(h) finds when a frame is computed. Two accounts of one private
 // torrent each see their own (tracker refusal, peers); everyone else shares
 // h's frames.
 func (s *TorrentMap) statKey(uid, h string) (string, *torrent.Torrent, *peerTimeline) {
