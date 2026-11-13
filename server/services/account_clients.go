@@ -14,7 +14,8 @@ import (
 // torrent.
 var accountIdleTimeout = 2 * time.Minute
 
-// maxAccountClients is a constant until the G4 measurement: no flag, no env var.
+// maxAccountClients is a constant until account Clients are measured in
+// production: no flag, no env var.
 // It is a var only so that a test can lower it.
 var maxAccountClients = 100
 

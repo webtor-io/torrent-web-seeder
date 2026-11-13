@@ -142,7 +142,8 @@ func TestGet_LoadedPairSurvivesStoreOutage(t *testing.T) {
 	}
 }
 
-// Review Focus 1.
+// A slow record lookup holds up only the request waiting for it: a public
+// torrent is served meanwhile.
 func TestGet_SlowRecordLookupDoesNotBlockPublic(t *testing.T) {
 	env := newPrivateEnv(t, true)
 	release := make(chan struct{})
@@ -165,7 +166,8 @@ func TestGet_SlowRecordLookupDoesNotBlockPublic(t *testing.T) {
 	}
 }
 
-// Review Focus 2.
+// A player's first Range requests of one pair, all at once, add the torrent
+// once: one torrent, one account Client, active_torrents_count +1.
 func TestGet_ConcurrentFirstRequestsTrackOnce(t *testing.T) {
 	env := newPrivateEnv(t, true)
 	env.setRecords(testRecord{uidA, keyA})

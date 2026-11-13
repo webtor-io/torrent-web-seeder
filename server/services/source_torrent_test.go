@@ -135,8 +135,8 @@ func TestRenderTorrent_PrivateWithoutTrackers(t *testing.T) {
 		return body, *mi
 	}
 
-	// A private torrent's source.torrent goes to Vault only (decision 28), built from
-	// the stored metainfo: no client joins its swarm for it.
+	// A private torrent's source.torrent goes to Vault only, built from the
+	// stored metainfo: no client joins its swarm for it.
 	if code, body := status(priv, ""); code != http.StatusForbidden || body != "private torrent" {
 		t.Errorf("private source.torrent without X-Role: %d %q, want 403 \"private torrent\"", code, body)
 	}

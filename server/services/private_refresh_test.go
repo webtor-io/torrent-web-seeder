@@ -46,7 +46,9 @@ func TestRefresh_DeletedRecordStopsWithinInterval(t *testing.T) {
 	}
 }
 
-// Review Focus 5.
+// A record whose trackers change while the torrent is read (a new key)
+// unloads it, stopped going with the old key, and the next request adds it
+// with the new trackers only. The same record on every tick touches nothing.
 func TestRefresh_ChangedRecordDropsThenReAdds(t *testing.T) {
 	hook := test.NewGlobal()
 	defer hook.Reset()

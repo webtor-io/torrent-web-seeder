@@ -16,7 +16,7 @@ const (
 )
 
 // RegisterPrivateFlags registers the switch between observing and enforcing
-// access to private torrents. It goes away in phase 4, with the fallback.
+// access to private torrents. It goes away with the fallback.
 func RegisterPrivateFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.BoolFlag{
@@ -79,7 +79,7 @@ func metainfoPrivate(mi *metainfo.MetaInfo) (bool, error) {
 var (
 	promPrivateFallback = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "torrent_web_seeder_private_store_tracker_fallback_total",
-		Help: "Private torrents loaded with the stored trackers in observe mode, by the refusal enforce would have answered.",
+		Help: "Requests for a private torrent served with the stored trackers in observe mode, by the refusal enforce would have answered.",
 	}, []string{"reason"})
 	promPrivateEnforce = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "torrent_web_seeder_private_enforce",

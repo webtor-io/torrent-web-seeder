@@ -150,7 +150,7 @@ func TestPrivateRecords_RefreshUnchangedLeaksNoGoroutine(t *testing.T) {
 	})
 }
 
-// Р4: a store that never answers gives unavailable at recordLookupTimeout.
+// A store that never answers gives unavailable at recordLookupTimeout.
 func TestPrivateRecords_LookupTimeout(t *testing.T) {
 	old := recordLookupTimeout
 	recordLookupTimeout = 50 * time.Millisecond

@@ -72,7 +72,8 @@ func TestAccounts_IdleClientClosesAfterLastTorrent(t *testing.T) {
 	}
 }
 
-// Review Focus 3.
+// An idle close racing a request of the same account never hands that
+// request a torrent of the closed Client.
 func TestAccounts_IdleCloseRacesGet(t *testing.T) {
 	setVar(t, &accountIdleTimeout, time.Millisecond)
 	env := newPrivateEnv(t, true)
@@ -237,7 +238,7 @@ func TestCloseAccounts_LeavesNoIdleTimer(t *testing.T) {
 	}
 }
 
-// Review Focus 4.
+// A pod with no account Client, the common case, stops without waiting.
 func TestCloseAccounts_NoAccountsReturnsAtOnce(t *testing.T) {
 	env := newPrivateEnv(t, true)
 	start := time.Now()

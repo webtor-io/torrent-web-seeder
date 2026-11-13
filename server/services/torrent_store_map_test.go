@@ -3,8 +3,8 @@ package services
 import "testing"
 
 // The seeder's Pull cache is shared by every viewer of a hash and thp has
-// decided access to it already, so the seeder asks as an internal caller
-// (decision 34); a store under PRIVATE_ACCESS_ENFORCE refuses one that says nothing.
+// decided access to it already, so the seeder asks as an internal caller; a
+// store under PRIVATE_ACCESS_ENFORCE refuses one that says nothing.
 func TestTorrentStoreMap_PullsAsInternal(t *testing.T) {
 	_, mi := privatePayload(t, "http://tracker.invalid/announce?passkey="+keyStored)
 	h := mi.HashInfoBytes().HexString()
