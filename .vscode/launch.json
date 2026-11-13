@@ -10,7 +10,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceFolder}/server",
-            "env": {},
+            "env": {"GOLANG_PROTOBUF_REGISTRATION_CONFLICT": "warn"},
             "envFile": "${env:HOME}/.env",
             "args": ["--input", "${env:HOME}", "--stat-port", "50052"]
         }
