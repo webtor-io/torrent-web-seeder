@@ -51,6 +51,7 @@ func (s *StatWeb) Serve(w http.ResponseWriter, r *http.Request, h string, p stri
 
 	ctx := metadata.NewIncomingContext(r.Context(), metadata.MD{
 		"info-hash": []string{h},
+		"user-id":   []string{r.Header.Get("X-Uid")},
 	})
 	// Local cancelable context so we can stop the Ping goroutine the same
 	// way StatStream's producer is stopped (sync.WaitGroup wait before the

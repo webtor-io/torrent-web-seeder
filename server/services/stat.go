@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -367,16 +366,11 @@ func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File, tl *peerTimeli
 	return rep, nil
 }
 
-func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
-	md, _ := metadata.FromIncomingContext(ctx)
-	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
-		return nil, errors.Errorf("No info-hash provided")
-	}
-	h := md.Get("info-hash")[0]
+func (s *Stat) statUncached(h, uid string, in *pb.StatRequest) (*pb.StatReply, error) {
 	// Look, do not touch: a torrent nobody is streaming stays unloaded and
 	// its numbers come from disk (coldStat). Peek never joins the swarm or
 	// extends the TTL — that is for serveFile and warm-up to do.
-	t, tl := s.tm.peek(h)
+	t, tl := s.tm.peek(uid, h)
 	if t == nil {
 		return s.coldStat(h, in.GetPath())
 	}
@@ -403,9 +397,19 @@ func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, err
 		return nil, errors.Errorf("No info-hash provided")
 	}
 	h := md.Get("info-hash")[0]
-	key := fmt.Sprintf("%s/%s", h, in.GetPath())
-	return s.cache.Get(key, func() (*pb.StatReply, error) {
-		return s.statUncached(ctx, in)
+	var uid string
+	if v := md.Get("user-id"); len(v) > 0 {
+		uid = v[0]
+	}
+	// A private torrent is loaded per account (h#uid), so is its frame.
+	key := s.tm.statKey(uid, h)
+	if key == h {
+		// What is cached under h is the default Client's, whoever asks: an
+		// account's torrent loaded since statKey stays out of it.
+		uid = ""
+	}
+	return s.cache.Get(key+"/"+in.GetPath(), func() (*pb.StatReply, error) {
+		return s.statUncached(h, uid, in)
 	})
 }
 

@@ -288,14 +288,16 @@ func (s *TorrentMap) unload(key string, e *torrentEntry) {
 // went through Get, so a page view joined the swarm on the viewer's behalf
 // and kept the torrent alive, which is exactly what a headless farm hitting
 // a handful of hashes was buying from us.
-func (s *TorrentMap) Peek(h string) *torrent.Torrent {
-	t, _ := s.peek(h)
+//
+// uid's own torrent (h#uid) comes first; without it, the default Client's.
+func (s *TorrentMap) Peek(uid, h string) *torrent.Torrent {
+	t, _ := s.peek(uid, h)
 	return t
 }
 
 // peek is Peek with the torrent's peer timeline, read under the same lock;
 // the timeline is nil for a torrent the map does not track.
-func (s *TorrentMap) peek(h string) (*torrent.Torrent, *peerTimeline) {
+func (s *TorrentMap) peek(uid, h string) (*torrent.Torrent, *peerTimeline) {
 	if len(h) != 40 {
 		return nil, nil
 	}
@@ -305,6 +307,11 @@ func (s *TorrentMap) peek(h string) (*torrent.Torrent, *peerTimeline) {
 	}
 	s.mux.Lock()
 	defer s.mux.Unlock()
+	if uid != "" {
+		if e, ok := s.entries[entryKey(h, uid)]; ok {
+			return e.t, e.peers
+		}
+	}
 	cl, err := s.tc.Get()
 	if err != nil {
 		return nil, nil
@@ -320,6 +327,19 @@ func (s *TorrentMap) peek(h string) (*torrent.Torrent, *peerTimeline) {
 		tl = e.peers
 	}
 	return t, tl
+}
+
+// statKey is the stat cache's key for uid looking at h: h#uid while uid's own
+// torrent is loaded, h otherwise. Two accounts of one private torrent each
+// see their own (tracker refusal, peers); everyone else shares h's frames.
+func (s *TorrentMap) statKey(uid, h string) string {
+	key := entryKey(h, uid)
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if _, ok := s.entries[key]; ok {
+		return key
+	}
+	return h
 }
 
 // MetaInfo returns the torrent's metainfo from the file store or the
