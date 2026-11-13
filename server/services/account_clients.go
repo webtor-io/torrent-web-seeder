@@ -2,6 +2,7 @@ package services
 
 import (
 	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/anacrolix/torrent"
@@ -121,5 +122,51 @@ func (s *TorrentMap) CloseAccounts(wait time.Duration) {
 	for _, a := range accounts {
 		a.cl.Close()
 		s.tc.swarm.retire(a.cl)
+	}
+}
+
+// recordRefreshInterval is how often an account's loaded torrent re-reads its
+// record. A var only so that a test can shorten it.
+var recordRefreshInterval = 60 * time.Second
+
+// refreshLoop re-reads (h, uid) past the cache every interval until t closes.
+// A record gone (missing) or with other trackers unloads the torrent, even
+// while it is being read: Drop sends stopped with the old key, and the next
+// request adds it again from the record the tick left in the cache. An
+// unavailable, disabled or bad answer leaves the torrent and its trackers as
+// they are. The loop ends when key no longer holds t.
+//
+// Get passes recordRefreshInterval: read there rather than in the loop's own
+// goroutine, it does not race with a test that restores the var.
+func (s *TorrentMap) refreshLoop(key, h, uid string, t *torrent.Torrent, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.Closed():
+			return
+		case <-ticker.C:
+		}
+		rec, outcome := s.records.Refresh(h, uid)
+		s.mux.Lock()
+		e := s.entries[key]
+		if e == nil || e.t != t {
+			s.mux.Unlock()
+			return
+		}
+		var reason string
+		switch {
+		case outcome == recordMissing:
+			reason = "gone"
+		case outcome == recordOK && !reflect.DeepEqual(rec.Tiers, e.tiers):
+			reason = "changed"
+		default:
+			s.mux.Unlock()
+			continue
+		}
+		s.unload(key, e)
+		s.mux.Unlock()
+		log.WithFields(log.Fields{"infohash": h, "acct": acct(uid), "reason": reason}).Info("private torrent unloaded")
+		return
 	}
 }

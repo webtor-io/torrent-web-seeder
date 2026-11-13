@@ -365,7 +365,9 @@ func addTorrent(cl *torrent.Client, mi *metainfo.MetaInfo) (*torrent.Torrent, er
 // The metainfo and the record are read outside s.mux: a slow store holds up
 // only the request that waits for it, not the pod's other torrents. A pair
 // already loaded is served without asking the store again, so neither its
-// outage nor the end of the record cache cuts a running stream.
+// outage nor the end of the record cache cuts a running stream; its
+// refreshLoop re-reads the record and unloads it when the record is gone or
+// its trackers changed.
 func (s *TorrentMap) Get(ctx context.Context, h, uid string) (t *torrent.Torrent, key string, err error) {
 	mi, err := s.MetaInfo(h)
 	if err != nil || mi == nil {
@@ -427,6 +429,7 @@ func (s *TorrentMap) Get(ctx context.Context, h, uid string) (t *torrent.Torrent
 	})
 	e.uid, e.t, e.tiers = uid, t, rec.Tiers
 	e.peers = s.watch(key, t)
+	go s.refreshLoop(key, h, uid, t, recordRefreshInterval)
 	a.torrents++
 	log.WithFields(log.Fields{"infohash": h, "acct": acct(uid)}).Info("private torrent added")
 	return t, key, nil
