@@ -16,8 +16,8 @@ import (
 )
 
 // No log line and no metric carries a uid or a tracker key, along every private
-// path: load, refusals, a tracker that refuses quoting the key, revocation,
-// shutdown, at every level. The lines of A's refused announce and C's failed
+// path: load, expiry, refusals, a tracker that refuses quoting the key,
+// revocation, shutdown, at every level. The lines of A's refused announce and C's failed
 // lookup are seen, so the check is not vacuous.
 func TestPrivate_NoUidOrKeyInLogsOrMetrics(t *testing.T) {
 	hook := test.NewGlobal()
@@ -28,9 +28,29 @@ func TestPrivate_NoUidOrKeyInLogsOrMetrics(t *testing.T) {
 	setVar(t, &recordRefreshInterval, 100*time.Millisecond)
 	env := newPrivateEnv(t, true)
 	env.trk.Refuse(keyA)
-	env.setRecords(testRecord{uidA, keyA})
+	// D's torrent leaves by its lease running out, the most common way out.
+	const uidD, keyD = "4567890abcdef0123456789abcdef0123456789a", "000000000000000000000000000000dd"
+	env.setRecords(testRecord{uidA, keyA}, testRecord{uidD, keyD})
 	torA, _, _ := env.tm.Get(context.Background(), env.h, uidA)
 	waitFor(t, "A's tracker to refuse", torA.AllAnnouncesFailing)
+	env.tm.mux.Lock()
+	ttl := env.tm.ttl
+	env.tm.ttl = 50 * time.Millisecond
+	env.tm.mux.Unlock()
+	if _, _, err := env.tm.Get(context.Background(), env.h, uidD); err != nil {
+		t.Fatalf("D: %v", err)
+	}
+	waitFor(t, "D's torrent to expire", func() bool {
+		for _, e := range hook.AllEntries() {
+			if e.Data["acct"] == acct(uidD) && strings.HasPrefix(e.Message, "torrent dropped") {
+				return true
+			}
+		}
+		return false
+	})
+	env.tm.mux.Lock()
+	env.tm.ttl = ttl
+	env.tm.mux.Unlock()
 	var ref *seederRefusal
 	if _, _, err := env.tm.Get(context.Background(), env.h, uidB); !errors.As(err, &ref) || ref.reason != reasonNotEntitled {
 		t.Fatalf("B: %v, want not_entitled", err)
@@ -54,7 +74,7 @@ func TestPrivate_NoUidOrKeyInLogsOrMetrics(t *testing.T) {
 	var sawAcct, sawAcctC, sawEcho bool
 	for _, e := range hook.AllEntries() {
 		line, _ := e.String()
-		for _, secret := range []string{uidA, uidB, uidC, keyA, keyStored} {
+		for _, secret := range []string{uidA, uidB, uidC, uidD, keyA, keyD, keyStored} {
 			if strings.Contains(line, secret) {
 				t.Errorf("log line carries %q: %s", secret, line)
 			}
@@ -70,7 +90,7 @@ func TestPrivate_NoUidOrKeyInLogsOrMetrics(t *testing.T) {
 	for _, mf := range mfs {
 		for _, m := range mf.GetMetric() {
 			for _, l := range m.GetLabel() {
-				for _, secret := range []string{uidA, uidB, uidC, keyA, keyStored} {
+				for _, secret := range []string{uidA, uidB, uidC, uidD, keyA, keyD, keyStored} {
 					if strings.Contains(l.GetValue(), secret) {
 						t.Errorf("%s{%s=%q}", mf.GetName(), l.GetName(), l.GetValue())
 					}

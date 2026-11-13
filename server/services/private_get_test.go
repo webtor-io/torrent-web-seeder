@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -34,12 +35,27 @@ func TestGet_PublicGoesToDefaultClient(t *testing.T) {
 func TestGet_PrivateWithRecordAnnouncesOwnKey(t *testing.T) {
 	env := newPrivateEnv(t, false)
 	env.setRecords(testRecord{uidA, keyA})
+	// The stored copy names a web seed (a closed loopback port), and the
+	// Clients take web seeds: the account's torrent must still have none.
+	mi, err := metainfo.Load(bytes.NewReader(env.store.torrents[env.h]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mi.UrlList = []string{"http://127.0.0.1:1/webseed"}
+	env.store.torrents[env.h] = torrentBytes(t, mi)
+	env.tm.tc.testConfig = func(c *torrent.ClientConfig) {
+		trackerTestConfig(c)
+		c.DisableWebseeds = false
+	}
 	tor, key, err := env.tm.Get(context.Background(), env.h, uidA)
 	if err != nil || key != env.h+"#"+uidA {
 		t.Fatalf("(%q, %v), want key %s#%s", key, err, env.h, uidA)
 	}
 	if mi := tor.Metainfo(); !reflect.DeepEqual(mi.UpvertedAnnounceList(), metainfo.AnnounceList{{env.trk.URL(keyA)}}) {
 		t.Fatalf("trackers %v, want only the record's", mi.UpvertedAnnounceList())
+	}
+	if ul := tor.Metainfo().UrlList; len(ul) != 0 {
+		t.Fatalf("web seeds %v, want none", ul)
 	}
 	env.trk.waitEvent(t, keyA, "started")
 	time.Sleep(500 * time.Millisecond)
