@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"net/url"
 	"sync/atomic"
@@ -206,6 +207,33 @@ func TestCloseAccounts_StoppedBeforeClose(t *testing.T) {
 	}
 	if len(env.defaultClient(t).Torrents()) != 1 {
 		t.Fatal("the default Client lost its torrent")
+	}
+}
+
+// CloseAccounts leaves no idle close armed on the Clients it closes: neither
+// the one its unload arms (A) nor one armed before (B, whose last torrent
+// went earlier).
+func TestCloseAccounts_LeavesNoIdleTimer(t *testing.T) {
+	env := newPrivateEnv(t, true)
+	env.setRecords(testRecord{uidA, keyA}, testRecord{uidB, keyB})
+	for _, uid := range []string{uidA, uidB} {
+		if _, _, err := env.tm.Get(context.Background(), env.h, uid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env.tm.mux.Lock()
+	kb := entryKey(env.h, uidB)
+	env.tm.unload(kb, env.tm.entries[kb])
+	accounts := maps.Clone(env.tm.accounts)
+	env.tm.mux.Unlock()
+	if accounts[uidB].idle == nil {
+		t.Fatal("B's idle close is not armed before CloseAccounts")
+	}
+	env.tm.CloseAccounts(0)
+	for uid, a := range accounts {
+		if a.idle != nil && a.idle.Stop() {
+			t.Errorf("acct %s: an idle close is armed on a closed Client", acct(uid))
+		}
 	}
 }
 

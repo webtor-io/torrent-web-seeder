@@ -101,7 +101,12 @@ func (s *TorrentMap) closeIdleAccount(uid string, a *accountClient) {
 
 // CloseAccounts unloads every account's torrents (Drop sends stopped with that
 // account's key), waits wait, then closes the account Clients. Returns at once when
-// there is none (decision Р16). The default Client is not touched.
+// there is none: most pods have no account Client, and shutdown must not wait
+// for nothing. The default Client is not touched.
+//
+// The idle closes of the accounts are stopped, those the unloads arm and any
+// armed before: a timer would keep its closed Client and that Client's
+// torrents reachable for accountIdleTimeout.
 func (s *TorrentMap) CloseAccounts(wait time.Duration) {
 	s.mux.Lock()
 	if len(s.accounts) == 0 {
@@ -115,6 +120,11 @@ func (s *TorrentMap) CloseAccounts(wait time.Duration) {
 	}
 	accounts := s.accounts
 	s.accounts = map[string]*accountClient{}
+	for _, a := range accounts {
+		if a.idle != nil {
+			a.idle.Stop()
+		}
+	}
 	promAccountClients.Sub(float64(len(accounts)))
 	s.mux.Unlock()
 	log.Infof("closing %d account clients in %v", len(accounts), wait)
