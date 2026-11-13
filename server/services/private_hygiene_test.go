@@ -38,8 +38,9 @@ func TestPrivate_NoUidOrKeyInLogsOrMetrics(t *testing.T) {
 	env.store.setRecord(func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
 		return nil, status.Error(codes.Unavailable, "s3 "+keyA)
 	})
-	const uidC = "fedcba9876543210fedcba9876543210fedcba98" // acct bafec2d5; not in the cache: B's missing is
-	// store_unavailable; the error text echoes a key
+	// C, not B: B's missing answer is cached. C's lookup ends in
+	// store_unavailable, and the store's error text echoes a key.
+	const uidC = "fedcba9876543210fedcba9876543210fedcba98" // acct bafec2d5
 	if _, _, err := env.tm.Get(context.Background(), env.h, uidC); !errors.As(err, &ref) || ref.reason != reasonStoreUnavailable {
 		t.Fatalf("C: %v, want store_unavailable", err)
 	}
