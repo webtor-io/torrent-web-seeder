@@ -298,6 +298,9 @@ func (s *TorrentMap) Peek(uid, h string) *torrent.Torrent {
 // peek is Peek with the torrent's peer timeline, read under the same lock;
 // the timeline is nil for a torrent the map does not track.
 func (s *TorrentMap) peek(uid, h string) (*torrent.Torrent, *peerTimeline) {
+	if _, t, tl := s.statKey(uid, h); t != nil {
+		return t, tl
+	}
 	if len(h) != 40 {
 		return nil, nil
 	}
@@ -307,11 +310,6 @@ func (s *TorrentMap) peek(uid, h string) (*torrent.Torrent, *peerTimeline) {
 	}
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if uid != "" {
-		if e, ok := s.entries[entryKey(h, uid)]; ok {
-			return e.t, e.peers
-		}
-	}
 	cl, err := s.tc.Get()
 	if err != nil {
 		return nil, nil
@@ -329,17 +327,24 @@ func (s *TorrentMap) peek(uid, h string) (*torrent.Torrent, *peerTimeline) {
 	return t, tl
 }
 
-// statKey is the stat cache's key for uid looking at h: h#uid while uid's own
-// torrent is loaded, h otherwise. Two accounts of one private torrent each
-// see their own (tracker refusal, peers); everyone else shares h's frames.
-func (s *TorrentMap) statKey(uid, h string) string {
+// statKey is the stats' key for uid looking at h, resolved under one lock
+// with the torrent it names: h#uid with uid's own torrent and timeline while
+// that is loaded, so a frame kept under h#uid is always that torrent's;
+// otherwise h and no torrent, h naming the default Client's, which
+// peek("", h) finds when a frame is computed. Two accounts of one private
+// torrent each see their own (tracker refusal, peers); everyone else shares
+// h's frames.
+func (s *TorrentMap) statKey(uid, h string) (string, *torrent.Torrent, *peerTimeline) {
+	if uid == "" {
+		return h, nil, nil
+	}
 	key := entryKey(h, uid)
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if _, ok := s.entries[key]; ok {
-		return key
+	if e, ok := s.entries[key]; ok {
+		return key, e.t, e.peers
 	}
-	return h
+	return h, nil, nil
 }
 
 // MetaInfo returns the torrent's metainfo from the file store or the

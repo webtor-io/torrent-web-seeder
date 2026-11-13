@@ -109,15 +109,15 @@ func TestRenderTorrent_PrivateWithoutTrackers(t *testing.T) {
 		}
 		return resp.StatusCode, resp.Header, string(body)
 	}
-	status := func(ih metainfo.Hash, role string) int {
+	status := func(ih metainfo.Hash, role string) (int, string) {
 		t.Helper()
-		code, hdr, _ := get(ih, role)
+		code, hdr, body := get(ih, role)
 		// No X-Seeder-Reason: on swarm paths it says what an account lacks;
 		// this 403 is about the role, whatever the account.
 		if r := hdr.Get("X-Seeder-Reason"); r != "" {
 			t.Errorf("source.torrent %v as %q: X-Seeder-Reason %q", ih, role, r)
 		}
-		return code
+		return code, strings.TrimSpace(body)
 	}
 	getAs := func(ih metainfo.Hash, role string) (string, metainfo.MetaInfo) {
 		t.Helper()
@@ -137,8 +137,8 @@ func TestRenderTorrent_PrivateWithoutTrackers(t *testing.T) {
 
 	// A private torrent's source.torrent goes to Vault only (decision 28), built from
 	// the stored metainfo: no client joins its swarm for it.
-	if code := status(priv, ""); code != http.StatusForbidden {
-		t.Errorf("private source.torrent without X-Role: %d, want 403", code)
+	if code, body := status(priv, ""); code != http.StatusForbidden || body != "private torrent" {
+		t.Errorf("private source.torrent without X-Role: %d %q, want 403 \"private torrent\"", code, body)
 	}
 	body, mi := getAs(priv, "vault")
 	if strings.Contains(body, "tracker.invalid") {

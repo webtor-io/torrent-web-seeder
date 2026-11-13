@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -67,5 +68,41 @@ func TestStat_PerUser(t *testing.T) {
 	srv.ServeHTTP(w, req)
 	if !strings.Contains(w.Body.String(), `"tracker_refused":true`) {
 		t.Errorf("?stats with A's X-Uid: %q, want A's refusal", w.Body.String())
+	}
+}
+
+// Each account's frame reads its own torrent's peers (Stat.swarms by the
+// frame's key, not the infohash): B's torrent has a partial peer, A's none,
+// and within one second neither frame borrows the other's, whichever asks
+// first.
+func TestStat_PerUserSwarm(t *testing.T) {
+	data, mi := availabilityTestPayload(t)
+	peerCl := swarmPeer(t, data, mi, 4*addTestPieceLen, 4)
+	_, torB := swarmLeecher(t, mi, peerCl, 4)
+	torA, err := addTorrent(mmapClient(t, t.TempDir(), false), mi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := torA.InfoHash().HexString()
+	tm := &TorrentMap{entries: map[string]*torrentEntry{
+		entryKey(h, uidA): {t: torA, peers: &peerTimeline{}},
+		entryKey(h, uidB): {t: torB, peers: timelineSince(time.Minute)},
+	}}
+	for _, order := range [][]string{{uidA, uidB}, {uidB, uidA}} {
+		st := NewStat(tm, "")
+		for _, uid := range order {
+			r := statForUser(t, st, h, uid, "")
+			got := fmt.Sprintf("peers=%d availability=%v known=%v missing=%v", r.GetPeers(), r.GetAvailability(), r.GetAvailabilityKnown(), rangesOf(r))
+			want := "peers=0 availability=0 known=false missing=[]"
+			if uid == uidB {
+				want = fmt.Sprintf("peers=1 availability=%v known=true missing=[[4 9]]", float32(4.0/9))
+			}
+			if got != want {
+				t.Errorf("order %s: %s's frame %s, want %s", acct(order[0])+","+acct(order[1]), acct(uid), got, want)
+			}
+		}
+		if n := st.swarmReads.Load(); n != 2 {
+			t.Errorf("two accounts' torrents read %d swarms, want 2", n)
+		}
 	}
 }
