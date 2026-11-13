@@ -77,7 +77,9 @@ with the key in the stored copy, which belongs to whoever uploaded it first.
   mid-read; `stopped` goes out with the old key, and the next request loads
   it with the new trackers.
 - The clients of a pod share the data directory: a piece one of them has
-  verified is not downloaded again by another.
+  verified becomes readable by the others without a new download. A client
+  learns of a neighbour's pieces with a delay, so while both download the
+  same region it may fetch some of those pieces itself.
 - A public torrent goes to the pod's default client whatever `X-Uid` says.
 
 File and warm-up requests for a private torrent can be refused:
