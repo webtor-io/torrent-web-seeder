@@ -208,13 +208,12 @@ func (s *TorrentMap) Touch(key string) {
 
 // Hold keeps the torrent under key (entryKey) loaded until the returned
 // release is called, however long that takes. The TTL used to be refreshed
-// only by bytes written to the
-// response (TouchWriter), so a stream stalled on a dead swarm for ten
-// minutes had its torrent dropped underneath the reader: with the eager
-// span that ended the stream as a silent EOF, with lazySpan it is
-// ErrSpanClosed, which anacrolix retries into a recovered panic
-// (updatePieceCompletion "0 N", 81 a day after 749bb2c). A torrent nobody
-// is reading still expires ttl after its last touch or release.
+// only by bytes written to the response (TouchWriter), so a stream stalled
+// on a dead swarm for ten minutes had its torrent dropped underneath the
+// reader: with the eager span that ended the stream as a silent EOF, with
+// lazySpan it is ErrSpanClosed, which anacrolix retries into a recovered
+// panic (updatePieceCompletion "0 N", 81 a day after 749bb2c). A torrent
+// nobody is reading still expires ttl after its last touch or release.
 func (s *TorrentMap) Hold(key string) (release func()) {
 	s.mux.Lock()
 	defer s.mux.Unlock()

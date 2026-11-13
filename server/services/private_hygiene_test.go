@@ -17,8 +17,8 @@ import (
 
 // No log line and no metric carries a uid or a tracker key, along every private
 // path: load, expiry, refusals, a tracker that refuses quoting the key,
-// revocation, shutdown, at every level. The lines of A's refused announce and C's failed
-// lookup are seen, so the check is not vacuous.
+// revocation, shutdown, at every level. The lines of A's refused announce and
+// C's failed lookup are seen, so the check is not vacuous.
 func TestPrivate_NoUidOrKeyInLogsOrMetrics(t *testing.T) {
 	hook := test.NewGlobal()
 	defer hook.Reset()
