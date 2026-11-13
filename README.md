@@ -359,8 +359,12 @@ Ports: `8080` (HTTP), `50051` (gRPC), `8081` (probes), `8082` (pprof), `8083` (P
 ## Development
 
 ```bash
-# Build
-cd server && go build -o server
+# Build. This proto and torrent-store's define the same message names
+# without a package; without the flag the binary panics at start.
+cd server && go build -ldflags '-X google.golang.org/protobuf/reflect/protoregistry.conflictPolicy=ignore' -o server
+
+# Test (the same conflict, allowed at run time)
+GOLANG_PROTOBUF_REGISTRATION_CONFLICT=warn go test ./...
 
 # Regenerate protobuf
 make protoc

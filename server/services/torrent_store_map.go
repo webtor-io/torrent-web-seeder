@@ -38,7 +38,10 @@ func (s *TorrentStoreMap) get(h string) (*metainfo.MetaInfo, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	r, err := c.Pull(ctx, &ts.PullRequest{InfoHash: h})
+	// Internal: this cache is shared by every viewer of the hash and the proxy
+	// has decided each viewer's access already; the store's per-caller check
+	// is for the services that face users.
+	r, err := c.Pull(ctx, &ts.PullRequest{InfoHash: h, Caller: &ts.Caller{Internal: true}})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to pull torrent from the torrent store")
 	}
