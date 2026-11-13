@@ -76,6 +76,9 @@ func run(c *cli.Context) error {
 	// Setting TorrentMap
 	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap).
 		WithPrivate(s.NewPrivateRecords(torrentStore), c.Bool(s.PrivateAccessEnforceFlag))
+	// Deferred here, so it runs after web.Close drains the requests and before
+	// torrentClient.Close: the accounts' stopped announces get 8 s.
+	defer torrentMap.CloseAccounts(8 * time.Second)
 
 	// Setting Stat
 	stat := s.NewStat(torrentMap, c.String(s.DataDirFlag))

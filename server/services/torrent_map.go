@@ -416,6 +416,7 @@ func (s *TorrentMap) Get(ctx context.Context, h, uid string) (t *torrent.Torrent
 	m.UrlList = nil
 	t, err = addTorrent(a.cl, &m)
 	if err != nil {
+		s.idleIfUnused(uid, a)
 		return nil, "", err
 	}
 	promActiveTorrentCount.Inc()

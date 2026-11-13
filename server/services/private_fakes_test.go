@@ -278,3 +278,11 @@ func (e *privateEnv) accountTorrents() int {
 	}
 	return n
 }
+
+// setVar sets *p to v for the test and restores it on cleanup.
+func setVar[T any](t *testing.T, p *T, v T) {
+	t.Helper()
+	old := *p
+	*p = v
+	t.Cleanup(func() { *p = old })
+}
