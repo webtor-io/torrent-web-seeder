@@ -135,9 +135,11 @@ func TestSiblings_ReaderGetsSiblingPiece(t *testing.T) {
 }
 
 // A burst of pieces verified by one Client reaches the other through one
-// worker at a time, and every piece of the burst arrives. A goroutine per
-// piece, each taking the other Client's lock, kept that Client's own requests
-// waiting behind the queue while its sibling downloaded.
+// worker at a time, each drained batch in one call of the library's batch
+// refresh, and every piece of the burst arrives. A goroutine per piece, each
+// taking the other Client's lock, kept that Client's own requests waiting
+// behind the queue while its sibling downloaded; a lock and a new-conns pass
+// per piece of a batch kept it pieces behind.
 func TestSiblings_BurstRefreshesThroughOneWorker(t *testing.T) {
 	_, mi := addTestPayload(t)
 	a, b := podClients(t)
@@ -150,19 +152,27 @@ func TestSiblings_BurstRefreshesThroughOneWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	bs := tb.Piece(0).Storage().PieceImpl.(mmapStoragePiece).t
-	var running, most atomic.Int32
+	var running, most, drains, calls, pieces atomic.Int32
+	burst := make(chan struct{})
 	bs.refreshHook = func() {
+		drains.Add(1)
 		n := running.Add(1)
 		for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
 		}
-		time.Sleep(20 * time.Millisecond) // long enough for the burst to pile up
+		<-burst // the rest of the burst piles up behind the first drain
 		running.Add(-1)
+	}
+	bs.refreshPieces = func(tor *torrent.Torrent, idx []int) int {
+		calls.Add(1)
+		pieces.Add(int32(len(idx)))
+		return tor.RefreshCompletionsFromStorage(idx)
 	}
 	for i := range ta.NumPieces() {
 		if err := ta.Piece(i).Storage().MarkComplete(); err != nil {
 			t.Fatal(err)
 		}
 	}
+	close(burst)
 	waitFor(t, "B to see every piece complete", func() bool {
 		for i := range tb.NumPieces() {
 			if !tb.Piece(i).State().Complete {
@@ -173,6 +183,12 @@ func TestSiblings_BurstRefreshesThroughOneWorker(t *testing.T) {
 	})
 	if m := most.Load(); m != 1 {
 		t.Fatalf("%d re-reads of B at once, want 1", m)
+	}
+	if c, d := calls.Load(), drains.Load(); c != d {
+		t.Fatalf("%d batch refreshes for %d drained batches, want one each", c, d)
+	}
+	if p := pieces.Load(); int(p) != tb.NumPieces() {
+		t.Fatalf("batch refreshes carried %d pieces, want the %d of the burst", p, tb.NumPieces())
 	}
 }
 

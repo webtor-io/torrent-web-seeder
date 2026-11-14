@@ -41,8 +41,6 @@ github.com/anacrolix/envpprof v1.5.0/go.mod h1:OQPV3SNK6uVAlXL4slcZVXv+xLcE0ybWg
 github.com/anacrolix/generics v0.0.0-20230113004304-d6428d516633/go.mod h1:ff2rHB/joTV03aMSSn/AZNnaIpUw0h3njetGsaXcMy8=
 github.com/anacrolix/generics v0.2.0 h1:gPwGOs14irokFN9kUP1i1A0Bn0FPT7/hWWD3hHKSKNw=
 github.com/anacrolix/generics v0.2.0/go.mod h1:NGehhfeXJPBujPx0s6cstSj8B+TERsTY32Xckfx5ftc=
-github.com/anacrolix/go-libutp v1.3.2 h1:WswiaxTIogchbkzNgGHuHRfbrYLpv4o290mlvcx+++M=
-github.com/anacrolix/go-libutp v1.3.2/go.mod h1:fCUiEnXJSe3jsPG554A200Qv+45ZzIIyGEvE56SHmyA=
 github.com/anacrolix/log v0.3.0/go.mod h1:lWvLTqzAnCWPJA08T2HCstZi0L1y2Wyvm3FJgwU9jwU=
 github.com/anacrolix/log v0.6.0/go.mod h1:lWvLTqzAnCWPJA08T2HCstZi0L1y2Wyvm3FJgwU9jwU=
 github.com/anacrolix/log v0.13.1/go.mod h1:D4+CvN8SnruK6zIFS/xPoRJmtvtnxs+CSfDQ+BFxZ68=
@@ -473,10 +471,12 @@ github.com/vmihailenco/tagparser/v2 v2.0.0 h1:y09buUbR+b5aycVFQs/g70pqKVZNBmxwAh
 github.com/vmihailenco/tagparser/v2 v2.0.0/go.mod h1:Wri+At7QHww0WTrCBeu4J6bNtoV6mEfg5OIWRZA9qds=
 github.com/webtor-io/common-services v0.0.0-20261007162356-7960c21dad8f h1:nOpm1uKoCvX+mvUkIiX4j0E1olGfwEI6QTihhHbkwHc=
 github.com/webtor-io/common-services v0.0.0-20261007162356-7960c21dad8f/go.mod h1:r6jdz43RU9T68jBhxLMIAlkEXGMw5BWTkTiWa0PtaZc=
+github.com/webtor-io/go-libutp v1.3.3-0.20261114072420-db298700586a h1:T3jRtBxbARos9fSRYsmIYiq88oT8kOK7xyFQYcnR5Go=
+github.com/webtor-io/go-libutp v1.3.3-0.20261114072420-db298700586a/go.mod h1:fCUiEnXJSe3jsPG554A200Qv+45ZzIIyGEvE56SHmyA=
 github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108 h1:4rJXuBJFmr4ePOQIIBDOkAzQrjFoMpWns8g1zD95ugM=
 github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108/go.mod h1:kioEFK4hk8YfHrhg47tGvMG40xawOJM4gcfRQ4EeX4k=
-github.com/webtor-io/torrent v0.0.0-20261110074116-c1f57e2b045d h1:S25MX7KjyqphX1KJfol4K6PSnK/SmOrnQgoas4BLY/g=
-github.com/webtor-io/torrent v0.0.0-20261110074116-c1f57e2b045d/go.mod h1:+grExvB/R/rMshKJNTTPNxKFLsxqbETsXsyQDHSQfUA=
+github.com/webtor-io/torrent v0.0.0-20261114080710-f16bd9838fb4 h1:7S0QQbgNI/+Ph+iH9sF/V438RFChm0B8OWQ5PPnBASA=
+github.com/webtor-io/torrent v0.0.0-20261114080710-f16bd9838fb4/go.mod h1:+grExvB/R/rMshKJNTTPNxKFLsxqbETsXsyQDHSQfUA=
 github.com/webtor-io/torrent-store v0.0.0-20261113110425-65a5e4f57aa3 h1:EU8qTJufTZ4YSuxj1O4yrvWIQvgEEcXqUstFf73JtrM=
 github.com/webtor-io/torrent-store v0.0.0-20261113110425-65a5e4f57aa3/go.mod h1:t2ziJm137/boTgiwJhdED+6qBOba+BmPTsB6XQ19tVA=
 github.com/webtor-io/utp v0.2.1-0.20260503123918-24e7018d4f71 h1:ZYVgRxIEJzttPQt82Gq9DXpiHcrK0OIQeO53x0Jzg3k=

@@ -187,6 +187,9 @@ type mmapTorrentStorage struct {
 	refreshMu      sync.Mutex
 	refreshPending map[int]struct{}
 	refreshHook    func() // test hook: runs as refreshFromStorage starts
+	// refreshPieces is the library's batch refresh; nil means
+	// Torrent.RefreshCompletionsFromStorage. Tests wrap it to count calls.
+	refreshPieces func(*torrent.Torrent, []int) int
 	// evicted[i] is true while piece i's bytes are a punched hole. Set
 	// before the hole is punched, cleared when the piece is written again.
 	//
@@ -203,7 +206,7 @@ type mmapTorrentStorage struct {
 	// OpenTorrent runs INSIDE Torrent.setInfo, which anacrolix calls with
 	// the client lock held (setInfoBytesLocked). The eviction that
 	// OpenTorrent may trigger for a recovered over-budget torrent would
-	// therefore call RefreshCompletionFromStorage — which takes that same
+	// therefore call RefreshCompletionsFromStorage — which takes that same
 	// lock — and self-deadlock on the first oversized torrent to restart.
 	//
 	// Skipping the notification there is not a compromise: anacrolix runs

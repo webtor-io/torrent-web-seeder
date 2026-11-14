@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -139,11 +140,15 @@ func (ts *mmapTorrentStorage) drainRefresh() {
 }
 
 // refreshFromStorage re-reads the completion of pieces idx in this storage's
-// Client (Piece.RefreshCompletionFromStorage), each under the Client's lock
-// on its own. No attached check: the worker never runs under OpenTorrent.
-// With --torrent-client-debug the library may log "piece request order has {}
-// and pending pieces has {N}" for a piece a reader waits on: it checks needData
-// before it updates its pending set, a transient mismatch.
+// Client in one call (Torrent.RefreshCompletionsFromStorage): one acquisition
+// of the Client's lock and one new-conns pass for the whole batch. Piece by
+// piece, each re-read took the lock and re-scanned the request order, so a
+// Client fell thousands of pieces behind a sibling downloading a torrent of
+// many pieces. No attached check: the worker never runs under OpenTorrent.
+//
+// ponytail: a drained batch is not split. The lock is held for the whole
+// batch, a few milliseconds per 10 000 pieces; chunk it if readers must not
+// wait that long.
 func (ts *mmapTorrentStorage) refreshFromStorage(idx ...int) {
 	if ts.refreshHook != nil {
 		ts.refreshHook()
@@ -155,7 +160,9 @@ func (ts *mmapTorrentStorage) refreshFromStorage(idx ...int) {
 	if !ok {
 		return
 	}
-	for _, i := range idx {
-		t.Piece(i).RefreshCompletionFromStorage()
+	refresh := (*torrent.Torrent).RefreshCompletionsFromStorage
+	if ts.refreshPieces != nil {
+		refresh = ts.refreshPieces
 	}
+	refresh(t, idx)
 }
