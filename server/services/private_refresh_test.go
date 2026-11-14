@@ -96,7 +96,7 @@ func TestRefresh_UnavailableKeepsTrackers(t *testing.T) {
 	env.setRecords(testRecord{uidA, keyA})
 	first, key, _ := env.tm.Get(context.Background(), env.h, uidA)
 	env.trk.waitEvent(t, keyA, "started")
-	env.store.setRecord(func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
+	env.store.setRecord(func(*ts.PullRequest) (*ts.PullReply, error) {
 		return nil, status.Error(codes.Unavailable, "down")
 	})
 	asked := env.store.lookupCount()

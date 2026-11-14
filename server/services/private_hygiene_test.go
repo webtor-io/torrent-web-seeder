@@ -55,7 +55,7 @@ func TestPrivate_NoUidOrKeyInLogsOrMetrics(t *testing.T) {
 	if _, _, err := env.tm.Get(context.Background(), env.h, uidB); !errors.As(err, &ref) || ref.reason != reasonNotEntitled {
 		t.Fatalf("B: %v, want not_entitled", err)
 	}
-	env.store.setRecord(func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
+	env.store.setRecord(func(*ts.PullRequest) (*ts.PullReply, error) {
 		return nil, status.Error(codes.Unavailable, "s3 "+keyA)
 	})
 	// C, not B: B's missing answer is cached. C's lookup ends in

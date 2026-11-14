@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	ts "github.com/webtor-io/torrent-store/proto"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,13 +31,15 @@ const (
 	keyB      = "000000000000000000000000000000bb"
 )
 
-// storeFake is torrent-store's client: Pull answered from torrents (NotFound
-// otherwise), GetPrivateRecord by record (nil: Unimplemented); every request kept.
+// storeFake is torrent-store's client. A Pull with a uid is a record lookup,
+// answered by record; nil answers as a store from before caller trackers: the
+// stored copy, caller_trackers unset. Any other Pull is answered from
+// torrents (NotFound otherwise). Every Pull is kept.
 type storeFake struct {
 	ts.TorrentStoreClient
 	mu       sync.Mutex
 	torrents map[string][]byte
-	record   func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error)
+	record   func(*ts.PullRequest) (*ts.PullReply, error)
 	pulls    []*ts.PullRequest
 	lookups  int
 }
@@ -44,29 +48,22 @@ func (f *storeFake) store() *TorrentStore {
 	return &TorrentStore{cl: f, inited: true}
 }
 
-func (f *storeFake) Pull(_ context.Context, in *ts.PullRequest, _ ...grpc.CallOption) (*ts.PullReply, error) {
+// Pull counts a lookup before answering it, so a test can see one that record
+// holds. Like a gRPC client, it gives up on a lookup when ctx ends.
+func (f *storeFake) Pull(ctx context.Context, in *ts.PullRequest, _ ...grpc.CallOption) (*ts.PullReply, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.pulls = append(f.pulls, in)
-	b, ok := f.torrents[in.GetInfoHash()]
-	if !ok {
-		return nil, status.Error(codes.NotFound, "unable to find torrent")
+	lookup := in.GetCaller().GetUid() != "" && !in.GetCaller().GetInternal()
+	if lookup {
+		f.lookups++
 	}
-	return &ts.PullReply{Torrent: b}, nil
-}
-
-// GetPrivateRecord counts the lookup before answering, so a test can see one
-// that record holds. Like a gRPC client, it gives up when ctx ends.
-func (f *storeFake) GetPrivateRecord(ctx context.Context, in *ts.GetPrivateRecordRequest, _ ...grpc.CallOption) (*ts.GetPrivateRecordReply, error) {
-	f.mu.Lock()
-	f.lookups++
 	record := f.record
 	f.mu.Unlock()
-	if record == nil {
-		return nil, status.Error(codes.Unimplemented, "unknown method GetPrivateRecord")
+	if !lookup || record == nil {
+		return f.stored(in.GetInfoHash())
 	}
 	type answer struct {
-		r   *ts.GetPrivateRecordReply
+		r   *ts.PullReply
 		err error
 	}
 	ch := make(chan answer, 1)
@@ -79,10 +76,57 @@ func (f *storeFake) GetPrivateRecord(ctx context.Context, in *ts.GetPrivateRecor
 	}
 }
 
-func (f *storeFake) setRecord(fn func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error)) {
+func (f *storeFake) stored(h string) (*ts.PullReply, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.torrents[h]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "unable to find torrent")
+	}
+	return &ts.PullReply{Torrent: b}, nil
+}
+
+// callerReply is the store's answer to a uid whose record has tiers: the
+// stored copy of h without its trackers and web seeds, tiers as announce-list,
+// their first URL as announce, caller_trackers set.
+func (f *storeFake) callerReply(h string, tiers ...[]string) (*ts.PullReply, error) {
+	r, err := f.stored(h)
+	if err != nil {
+		return nil, err
+	}
+	mi, err := metainfo.Load(bytes.NewReader(r.GetTorrent()))
+	if err != nil {
+		return nil, err
+	}
+	mi.Announce, mi.AnnounceList, mi.UrlList = "", tiers, nil
+	if len(tiers) > 0 && len(tiers[0]) > 0 {
+		mi.Announce = tiers[0][0]
+	}
+	b, err := bencode.Marshal(mi)
+	if err != nil {
+		return nil, err
+	}
+	return &ts.PullReply{Torrent: b, CallerTrackers: true}, nil
+}
+
+func (f *storeFake) setRecord(fn func(*ts.PullRequest) (*ts.PullReply, error)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record = fn
+}
+
+// setTiers makes every uid's lookup find a record with tiers.
+func (f *storeFake) setTiers(tiers ...[]string) {
+	f.setRecord(func(in *ts.PullRequest) (*ts.PullReply, error) { return f.callerReply(in.GetInfoHash(), tiers...) })
+}
+
+// storeErr is a refusal as torrent-store sends it: code with ErrorInfo{Reason}.
+func storeErr(code codes.Code, reason string) error {
+	st, err := status.New(code, "refused").WithDetails(&errdetails.ErrorInfo{Domain: "torrent-store", Reason: reason})
+	if err != nil {
+		panic(err)
+	}
+	return st.Err()
 }
 
 func (f *storeFake) lookupCount() int {
@@ -248,15 +292,15 @@ func newPrivateEnv(t *testing.T, enforce bool) *privateEnv {
 }
 
 // setRecords makes the store find those uids' records, each with the one tier
-// {{trk.URL(key)}}, and no record (found=false) for the rest.
+// {{trk.URL(key)}}, and refuse the rest with no_record.
 func (e *privateEnv) setRecords(recs ...testRecord) {
-	e.store.setRecord(func(in *ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
+	e.store.setRecord(func(in *ts.PullRequest) (*ts.PullReply, error) {
 		for _, r := range recs {
-			if in.GetUid() == r.uid {
-				return &ts.GetPrivateRecordReply{Found: true, Tiers: []*ts.Tier{{Urls: []string{e.trk.URL(r.key)}}}}, nil
+			if in.GetCaller().GetUid() == r.uid {
+				return e.store.callerReply(in.GetInfoHash(), []string{e.trk.URL(r.key)})
 			}
 		}
-		return &ts.GetPrivateRecordReply{}, nil
+		return nil, storeErr(codes.PermissionDenied, "no_record")
 	})
 }
 

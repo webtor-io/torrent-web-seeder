@@ -23,7 +23,7 @@ require (
 	github.com/urfave/cli v1.22.17
 	github.com/webtor-io/common-services v0.0.0-20261007162356-7960c21dad8f
 	github.com/webtor-io/lazymap v0.0.0-20261021184726-55fd9cba3e7a
-	github.com/webtor-io/torrent-store v0.0.0-20261113110425-65a5e4f57aa3
+	github.com/webtor-io/torrent-store v0.0.0-20261114092215-7cac99f67717
 	golang.org/x/sys v0.48.0
 	golang.org/x/time v0.14.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa

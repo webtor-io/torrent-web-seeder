@@ -67,12 +67,14 @@ with the key in the stored copy, which belongs to whoever uploaded it first.
 - The viewer's account comes in the `X-Uid` header (gRPC: `user-id`
   metadata), 40 lowercase hex characters. The seeder trusts it as is: the
   proxy in front of it must set it and drop any value the client sent.
-- The account's trackers for the torrent come from torrent-store
-  (`GetPrivateRecord`), cached for 60 s and re-read every 60 s while the
-  torrent is loaded. The torrent goes into a BitTorrent client of that
-  account alone: no DHT, no PEX, an ephemeral listen port, at most 100
-  account clients per pod. An account's client closes 2 minutes after its
-  last torrent goes.
+- The account's trackers for the torrent come from torrent-store: a `Pull`
+  as that account answers with its record's trackers alone and sets
+  `caller_trackers`. Only the trackers are kept, cached for 60 s and re-read
+  every 60 s while the torrent is loaded; a reply without `caller_trackers`
+  (an older store) is never taken for the account's. The torrent goes into
+  a BitTorrent client of that account alone: no DHT, no PEX, an ephemeral
+  listen port, at most 100 account clients per pod. An account's client
+  closes 2 minutes after its last torrent goes.
 - A record that is gone or whose trackers changed unloads the torrent, even
   mid-read; `stopped` goes out with the old key, and the next request loads
   it with the new trackers.
@@ -87,9 +89,9 @@ File and warm-up requests for a private torrent can be refused:
 | Status | `X-Seeder-Reason` | When |
 |---|---|---|
 | 403 | `account_required` | no `X-Uid`, or one that is not 40 lowercase hex characters |
-| 403 | `not_entitled` | the account has no record for the torrent |
-| 403 | `bad_record` | the record cannot be read or has no trackers |
-| 403 | `private_disabled` | torrent-store keeps no records (no key or S3, an older store), or no `--torrent-store-host` is set |
+| 403 | `not_entitled` | the account has no record for the torrent, or torrent-store cannot open it |
+| 403 | `bad_record` | torrent-store's answer cannot be read, is of another torrent or has no trackers |
+| 403 | `private_disabled` | torrent-store keeps no records (no key or S3) or is too old to answer with the account's trackers, or no `--torrent-store-host` is set |
 | 503 | `busy` | the pod holds as many account clients as it may; `Retry-After: 5` |
 | 503 | `store_unavailable` | torrent-store failed to answer; `Retry-After: 5` |
 

@@ -1,12 +1,15 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"reflect"
+	"strings"
 	"time"
 
+	"github.com/anacrolix/torrent/metainfo"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"github.com/webtor-io/lazymap"
@@ -16,10 +19,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// PrivateRecord is the trackers torrent-store keeps for one (hash, uid), in
-// plain text: the seeder has no key and decrypts nothing.
+// PrivateRecord is the trackers torrent-store keeps for one (hash, uid), as its
+// Pull with that uid returns them: the seeder has no key and decrypts nothing.
 type PrivateRecord struct {
-	Tiers [][]string // one tier per ts.Tier, URLs in order
+	Tiers [][]string // the reply's announce-list, or its announce as one tier
 }
 
 // recordOutcome is how a record lookup ended.
@@ -40,8 +43,8 @@ var recordLookupTimeout = 10 * time.Second
 var promRecordLookups = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "torrent_web_seeder_private_record_lookups_total",
 	Help: "Private record lookups answered by torrent-store (cache hits not counted), by outcome: " +
-		"ok, missing, unavailable (the store failed), bad (record unreadable or without trackers), " +
-		"disabled (the store keeps no private records).",
+		"ok, missing, unavailable (the store failed), bad (reply unreadable, of another torrent or without trackers), " +
+		"disabled (the store keeps no private records or does not return them by Pull).",
 }, []string{"outcome"})
 
 func init() {
@@ -133,7 +136,7 @@ func (s *PrivateRecords) Refresh(h, uid string) (*PrivateRecord, recordOutcome) 
 // by class only: no uid, URL or error text.
 func (s *PrivateRecords) lookup(h, uid string) (*recordAnswer, error) {
 	r, err := s.ask(h, uid)
-	rec, outcome := recordFromReply(r, err)
+	rec, outcome := recordFromReply(h, r, err)
 	promRecordLookups.WithLabelValues(string(outcome)).Inc()
 	if outcome == recordBad || outcome == recordUnavailable {
 		log.WithFields(log.Fields{
@@ -149,45 +152,50 @@ func (s *PrivateRecords) lookup(h, uid string) (*recordAnswer, error) {
 	return &recordAnswer{rec: rec, outcome: outcome}, nil
 }
 
-func (s *PrivateRecords) ask(h, uid string) (*ts.GetPrivateRecordReply, error) {
+// ask Pulls h as uid; a store that keeps records answers with uid's trackers.
+func (s *PrivateRecords) ask(h, uid string) (*ts.PullReply, error) {
 	cl, err := s.ts.Get()
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), recordLookupTimeout)
 	defer cancel()
-	return cl.GetPrivateRecord(ctx, &ts.GetPrivateRecordRequest{InfoHash: h, Uid: uid})
+	return cl.Pull(ctx, &ts.PullRequest{InfoHash: h, Caller: &ts.Caller{Uid: uid}})
 }
 
-// recordFromReply maps the store's answer to an outcome. disabled and bad come
-// only from the refusals named here; any other error is unavailable (fail
-// closed), never "no record".
-func recordFromReply(r *ts.GetPrivateRecordReply, err error) (*PrivateRecord, recordOutcome) {
+// recordFromReply maps the store's answer to Pull(h, uid) to an outcome; only
+// the trackers are kept, never the metainfo. disabled and missing come only
+// from the answers named here; any other error is unavailable (fail closed),
+// never "no record".
+func recordFromReply(h string, r *ts.PullReply, err error) (*PrivateRecord, recordOutcome) {
 	if err != nil {
 		st := status.Convert(err)
 		switch {
-		case st.Code() == codes.Unimplemented: // a store from before private records
-			return nil, recordDisabled
+		case st.Code() == codes.PermissionDenied && refusalReason(st) == "no_record":
+			return nil, recordMissing
 		case st.Code() == codes.FailedPrecondition && refusalReason(st) == "private_unavailable":
 			return nil, recordDisabled
-		case st.Code() == codes.DataLoss && refusalReason(st) == "record_unreadable":
-			return nil, recordBad
 		}
 		return nil, recordUnavailable
 	}
-	if !r.GetFound() {
-		return nil, recordMissing
+	// A store from before caller trackers answers with its stored copy, whose
+	// trackers are the first uploader's (keep-first), not uid's.
+	if !r.GetCallerTrackers() {
+		return nil, recordDisabled
 	}
-	rec := &PrivateRecord{}
-	urls := 0
-	for _, t := range r.GetTiers() {
-		rec.Tiers = append(rec.Tiers, append([]string(nil), t.GetUrls()...))
-		urls += len(t.GetUrls())
-	}
-	if urls == 0 {
+	mi, err := metainfo.Load(bytes.NewReader(r.GetTorrent()))
+	if err != nil || !strings.EqualFold(mi.HashInfoBytes().HexString(), h) {
 		return nil, recordBad
 	}
-	return rec, recordOK
+	rec := &PrivateRecord{Tiers: mi.UpvertedAnnounceList()}
+	for _, t := range rec.Tiers {
+		for _, u := range t {
+			if u != "" {
+				return rec, recordOK
+			}
+		}
+	}
+	return nil, recordBad
 }
 
 // refusalReason is the Reason of the status's ErrorInfo, "" if none. The

@@ -67,34 +67,95 @@ func TestGet_PrivateWithRecordAnnouncesOwnKey(t *testing.T) {
 	}
 }
 
+// A store from before caller trackers answers a uid's Pull with a torrent
+// whose trackers are not that uid's record's (keep-first's), without
+// caller_trackers. The seeder takes no tracker from such a reply: enforce
+// refuses private_disabled, observe loads the stored copy as today. Here the
+// reply names the record's key, so taking it would announce that key.
+func TestGet_ReplyWithoutCallerTrackersIsNotARecord(t *testing.T) {
+	for _, enforce := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enforce=%v", enforce), func(t *testing.T) {
+			env := newPrivateEnv(t, enforce)
+			env.store.setRecord(func(in *ts.PullRequest) (*ts.PullReply, error) {
+				r, err := env.store.callerReply(in.GetInfoHash(), []string{env.trk.URL(keyA)})
+				if r != nil {
+					r.CallerTrackers = false
+				}
+				return r, err
+			})
+			fb := testutil.ToFloat64(promPrivateFallback.WithLabelValues(reasonPrivateDisabled))
+			tor, key, err := env.tm.Get(context.Background(), env.h, uidA)
+			if env.store.lookupCount() != 1 {
+				t.Fatalf("lookups %d, want 1", env.store.lookupCount())
+			}
+			if enforce {
+				var ref *seederRefusal
+				if !errors.As(err, &ref) || ref.reason != reasonPrivateDisabled {
+					t.Fatalf("err = %v, want private_disabled", err)
+				}
+			} else {
+				if err != nil || key != env.h {
+					t.Fatalf("(%q, %v), want today's path under %s", key, err, env.h)
+				}
+				if d := testutil.ToFloat64(promPrivateFallback.WithLabelValues(reasonPrivateDisabled)) - fb; d != 1 {
+					t.Fatalf("fallback{private_disabled} +%v, want +1", d)
+				}
+				if mi := tor.Metainfo(); !reflect.DeepEqual(mi.UpvertedAnnounceList(), metainfo.AnnounceList{{env.trk.URL(keyStored)}}) {
+					t.Fatalf("trackers %v, want the stored copy's", mi.UpvertedAnnounceList())
+				}
+				env.trk.waitEvent(t, keyStored, "started")
+			}
+			if env.accountTorrents() != 0 {
+				t.Fatal("a torrent was added to an account Client")
+			}
+			if n := len(env.trk.Announces(keyA)); n != 0 {
+				t.Fatalf("the reply's key was announced %d times", n)
+			}
+		})
+	}
+}
+
 func TestGet_PrivateRefusals(t *testing.T) {
-	replies := func(r *ts.GetPrivateRecordReply) func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
-		return func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) { return r, nil }
+	type record func(env *privateEnv) func(*ts.PullRequest) (*ts.PullReply, error)
+	fails := func(err error) record {
+		return func(*privateEnv) func(*ts.PullRequest) (*ts.PullReply, error) {
+			return func(*ts.PullRequest) (*ts.PullReply, error) { return nil, err }
+		}
 	}
-	fails := func(err error) func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
-		return func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) { return nil, err }
+	replies := func(fn func(env *privateEnv, in *ts.PullRequest) (*ts.PullReply, error)) record {
+		return func(env *privateEnv) func(*ts.PullRequest) (*ts.PullReply, error) {
+			return func(in *ts.PullRequest) (*ts.PullReply, error) { return fn(env, in) }
+		}
 	}
+	none := func(*privateEnv) func(*ts.PullRequest) (*ts.PullReply, error) { return nil }
 	cases := []struct {
 		name, uid string
-		record    func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error)
+		record    record
 		status    int
 		reason    string
 		both      bool // refused in observe too
 	}{
-		{"no uid", "", nil, 403, reasonAccountRequired, false},
-		{"malformed uid", strings.ToUpper(uidA), nil, 403, reasonAccountRequired, true},
-		{"no record", uidA, replies(&ts.GetPrivateRecordReply{}), 403, reasonNotEntitled, false},
+		{"no uid", "", none, 403, reasonAccountRequired, false},
+		{"malformed uid", strings.ToUpper(uidA), none, 403, reasonAccountRequired, true},
+		{"no record", uidA, fails(storeErr(codes.PermissionDenied, "no_record")), 403, reasonNotEntitled, false},
 		{"store without S3 or key", uidA, fails(storeErr(codes.FailedPrecondition, "private_unavailable")), 403, reasonPrivateDisabled, false},
-		{"old store", uidA, nil /* storeFake: Unimplemented */, 403, reasonPrivateDisabled, false},
-		{"unreadable record", uidA, fails(storeErr(codes.DataLoss, "record_unreadable")), 403, reasonBadRecord, false},
-		{"record without trackers", uidA, replies(&ts.GetPrivateRecordReply{Found: true}), 403, reasonBadRecord, false},
+		{"old store", uidA, none /* storeFake: the stored copy, no flag */, 403, reasonPrivateDisabled, false},
+		{"unparseable reply", uidA, replies(func(*privateEnv, *ts.PullRequest) (*ts.PullReply, error) {
+			return &ts.PullReply{Torrent: []byte("not bencode"), CallerTrackers: true}, nil
+		}), 403, reasonBadRecord, false},
+		{"reply of another torrent", uidA, replies(func(env *privateEnv, _ *ts.PullRequest) (*ts.PullReply, error) {
+			return env.store.callerReply(env.pub, []string{env.trk.URL(keyA)})
+		}), 403, reasonBadRecord, false},
+		{"record without trackers", uidA, replies(func(env *privateEnv, in *ts.PullRequest) (*ts.PullReply, error) {
+			return env.store.callerReply(in.GetInfoHash())
+		}), 403, reasonBadRecord, false},
 		{"store down", uidA, fails(status.Error(codes.Unavailable, "down")), 503, reasonStoreUnavailable, true},
 	}
 	for _, c := range cases {
 		for _, enforce := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/enforce=%v", c.name, enforce), func(t *testing.T) {
 				env := newPrivateEnv(t, enforce)
-				env.store.setRecord(c.record)
+				env.store.setRecord(c.record(env))
 				if want := map[bool]float64{true: 1}[enforce]; testutil.ToFloat64(promPrivateEnforce) != want {
 					t.Fatalf("private_enforce = %v, want %v", testutil.ToFloat64(promPrivateEnforce), want)
 				}
@@ -131,7 +192,7 @@ func TestGet_LoadedPairSurvivesStoreOutage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env.store.setRecord(func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
+	env.store.setRecord(func(*ts.PullRequest) (*ts.PullReply, error) {
 		return nil, status.Error(codes.Unavailable, "down")
 	})
 	env.tm.records.Drop(entryKey(env.h, uidA))
@@ -148,9 +209,9 @@ func TestGet_SlowRecordLookupDoesNotBlockPublic(t *testing.T) {
 	env := newPrivateEnv(t, true)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	env.store.setRecord(func(*ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
+	env.store.setRecord(func(*ts.PullRequest) (*ts.PullReply, error) {
 		<-release
-		return &ts.GetPrivateRecordReply{}, nil
+		return nil, storeErr(codes.PermissionDenied, "no_record")
 	})
 	go env.tm.Get(context.Background(), env.h, uidA)
 	waitFor(t, "the record lookup to start", func() bool { return env.store.lookupCount() == 1 })
@@ -174,7 +235,7 @@ func TestGet_ConcurrentFirstRequestsTrackOnce(t *testing.T) {
 	// A slow lookup: every request is past the first check when the answer
 	// comes, so all of them race for the second.
 	found := env.store.record
-	env.store.setRecord(func(in *ts.GetPrivateRecordRequest) (*ts.GetPrivateRecordReply, error) {
+	env.store.setRecord(func(in *ts.PullRequest) (*ts.PullReply, error) {
 		time.Sleep(200 * time.Millisecond)
 		return found(in)
 	})
