@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -148,12 +147,15 @@ func readSwarm(t *torrent.Torrent, tl *peerTimeline) *swarmSnapshot {
 
 // fillAvailability sets rep's swarm fields for the scope whose first piece is
 // torrent piece offset; complete, wanted and reading are per scope piece,
-// seeders is the torrent's ConnectedSeeders.
-func (s *Stat) fillAvailability(rep *pb.StatReply, t *torrent.Torrent, tl *peerTimeline, seeders, offset int, complete, wanted, reading []bool) {
+// seeders is the torrent's ConnectedSeeders. key is the frame's (statKey):
+// the snapshot is kept by it, not by t's infohash, which every account's
+// torrent of a private hash shares with the default Client's while each has
+// its own peers.
+func (s *Stat) fillAvailability(rep *pb.StatReply, key string, t *torrent.Torrent, tl *peerTimeline, seeders, offset int, complete, wanted, reading []bool) {
 	rep.TrackerRefused = trackerRefused(t)
 	in := availabilityInput{offset: offset, complete: complete, wanted: wanted, reading: reading, seeders: seeders}
 	if seeders == 0 {
-		sw, _ := s.swarms.Get(t.InfoHash().HexString(), func() (*swarmSnapshot, error) {
+		sw, _ := s.swarms.Get(key, func() (*swarmSnapshot, error) {
 			s.swarmReads.Add(1)
 			return readSwarm(t, tl), nil
 		})
@@ -192,7 +194,7 @@ func fileBytesCompleted(f *torrent.File) int64 {
 	return res
 }
 
-func (s *Stat) torrentStat(t *torrent.Torrent, tl *peerTimeline) (*pb.StatReply, error) {
+func (s *Stat) torrentStat(key string, t *torrent.Torrent, tl *peerTimeline) (*pb.StatReply, error) {
 	completed := t.BytesCompleted()
 	rStatus := pb.StatReply_SEEDING
 	if completed == 0 {
@@ -227,11 +229,11 @@ func (s *Stat) torrentStat(t *torrent.Torrent, tl *peerTimeline) (*pb.StatReply,
 		Pieces:    pieces,
 		Live:      true,
 	}
-	s.fillAvailability(rep, t, tl, seeders, 0, complete, wanted, reading)
+	s.fillAvailability(rep, key, t, tl, seeders, 0, complete, wanted, reading)
 	return rep, nil
 }
 
-func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File, tl *peerTimeline) (*pb.StatReply, error) {
+func (s *Stat) fileStat(key string, t *torrent.Torrent, f *torrent.File, tl *peerTimeline) (*pb.StatReply, error) {
 	completed := fileBytesCompleted(f)
 	rStatus := pb.StatReply_SEEDING
 	if completed == 0 {
@@ -270,7 +272,7 @@ func (s *Stat) fileStat(t *torrent.Torrent, f *torrent.File, tl *peerTimeline) (
 	if pl := t.Info().PieceLength; pl > 0 {
 		first = int(f.Offset() / pl)
 	}
-	s.fillAvailability(rep, t, tl, seeders, first, complete, wanted, reading)
+	s.fillAvailability(rep, key, t, tl, seeders, first, complete, wanted, reading)
 	return rep, nil
 }
 
@@ -316,7 +318,7 @@ func dirPieceRange(pieceLen, offset, length int64) (begin, end int) {
 // torrents a day answered 500 — every single-root-directory torrent whose
 // resource page asked for the root item's stats), and the badge read
 // "status unavailable".
-func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File, tl *peerTimeline) (*pb.StatReply, error) {
+func (s *Stat) dirStat(key string, t *torrent.Torrent, files []*torrent.File, tl *peerTimeline) (*pb.StatReply, error) {
 	var completed, total int64
 	first, last := int64(-1), int64(0)
 	for _, f := range files {
@@ -363,25 +365,25 @@ func (s *Stat) dirStat(t *torrent.Torrent, files []*torrent.File, tl *peerTimeli
 		Pieces:    pieces,
 		Live:      true,
 	}
-	s.fillAvailability(rep, t, tl, seeders, begin, complete, wanted, reading)
+	s.fillAvailability(rep, key, t, tl, seeders, begin, complete, wanted, reading)
 	return rep, nil
 }
 
-func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
-	md, _ := metadata.FromIncomingContext(ctx)
-	if len(md.Get("info-hash")) == 0 || md.Get("info-hash")[0] == "" {
-		return nil, errors.Errorf("No info-hash provided")
-	}
-	h := md.Get("info-hash")[0]
+// statUncached computes the frame of key (statKey): t and tl are the
+// account's torrent it names, or nil for h, the default Client's, looked up
+// here so that a cache hit takes no client lock.
+func (s *Stat) statUncached(key, h string, t *torrent.Torrent, tl *peerTimeline, in *pb.StatRequest) (*pb.StatReply, error) {
 	// Look, do not touch: a torrent nobody is streaming stays unloaded and
 	// its numbers come from disk (coldStat). Peek never joins the swarm or
 	// extends the TTL — that is for serveFile and warm-up to do.
-	t, tl := s.tm.peek(h)
+	if t == nil {
+		t, tl = s.tm.peek(h)
+	}
 	if t == nil {
 		return s.coldStat(h, in.GetPath())
 	}
 	if in.GetPath() == "" {
-		return s.torrentStat(t, tl)
+		return s.torrentStat(key, t, tl)
 	}
 	f := findFile(t, in.GetPath())
 	if f == nil {
@@ -390,11 +392,11 @@ func (s *Stat) statUncached(ctx context.Context, in *pb.StatRequest) (*pb.StatRe
 		// is not this path: it asks for the root "/", the empty path
 		// above, torrentStat. Only a path matching nothing is NotFound.
 		if files := dirFiles(t, in.GetPath()); len(files) > 0 {
-			return s.dirStat(t, files, tl)
+			return s.dirStat(key, t, files, tl)
 		}
 		return nil, status.Errorf(codes.NotFound, "unable to find file for path=%v", in.GetPath())
 	}
-	return s.fileStat(t, f, tl)
+	return s.fileStat(key, t, f, tl)
 }
 
 func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, error) {
@@ -403,9 +405,14 @@ func (s *Stat) Stat(ctx context.Context, in *pb.StatRequest) (*pb.StatReply, err
 		return nil, errors.Errorf("No info-hash provided")
 	}
 	h := md.Get("info-hash")[0]
-	key := fmt.Sprintf("%s/%s", h, in.GetPath())
-	return s.cache.Get(key, func() (*pb.StatReply, error) {
-		return s.statUncached(ctx, in)
+	var uid string
+	if v := md.Get("user-id"); len(v) > 0 {
+		uid = v[0]
+	}
+	// A private torrent is loaded per account (h#uid), so is its frame.
+	key, t, tl := s.tm.statKey(uid, h)
+	return s.cache.Get(key+"/"+in.GetPath(), func() (*pb.StatReply, error) {
+		return s.statUncached(key, h, t, tl, in)
 	})
 }
 
@@ -628,7 +635,11 @@ func (s *Stat) Files(ctx context.Context, _ *pb.FilesRequest) (*pb.FilesReply, e
 		return nil, errors.Errorf("no info-hash provided")
 	}
 	h := md.Get("info-hash")[0]
-	t, err := s.tm.Get(ctx, h)
+	var uid string
+	if v := md.Get("user-id"); len(v) > 0 {
+		uid = v[0]
+	}
+	t, _, err := s.tm.Get(ctx, h, uid)
 	if err != nil {
 		return nil, err
 	}

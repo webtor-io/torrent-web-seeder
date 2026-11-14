@@ -570,14 +570,13 @@ func zPod(tb testing.TB, dataDir string, mi *metainfo.MetaInfo, budget int64, st
 		tb.Fatal(err)
 	}
 	_ = f.Close()
-	tc := &TorrentClient{
+	tc := &TorrentClient{clientSettings: clientSettings{
 		swarm:                 newSwarmStats(),
-		rLimit:                -1,
 		maxUnverifiedBytes:    -1,
 		dataDir:               dataDir,
 		perTorrentCacheBudget: budget,
 		testConfig:            func(cfg *torrent.ClientConfig) { loopbackConfig(cfg) },
-	}
+	}}
 	tb.Cleanup(tc.Close)
 	tm := NewTorrentMap(tc, nil, &FileStoreMap{p: torrentsDir})
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
@@ -585,7 +584,7 @@ func zPod(tb testing.TB, dataDir string, mi *metainfo.MetaInfo, budget int64, st
 	ws = &WebSeeder{tm: tm, fcm: zFCM(dataDir), tom: NewTouchMap(cli.NewContext(nil, fs, nil)), maxReadahead: 1 << 20, stallTimeout: stallTimeout}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	tor, err := tm.Get(ctx, mi.HashInfoBytes().HexString())
+	tor, _, err := tm.Get(ctx, mi.HashInfoBytes().HexString(), "")
 	if err != nil || tor == nil {
 		tb.Fatalf("load torrent: %v", err)
 	}
@@ -709,13 +708,12 @@ func TestStatsOfAFileWithAHoleLeaveTheTorrentUnloaded(t *testing.T) {
 	dataDir := zSeed(t)
 	zExec(t, dataDir, `update piece_completion set complete = 0 where "index" = 1`)
 	torrents := zTorrents(t)
-	tc := &TorrentClient{
+	tc := &TorrentClient{clientSettings: clientSettings{
 		swarm:              newSwarmStats(),
-		rLimit:             -1,
 		maxUnverifiedBytes: -1,
 		dataDir:            dataDir,
 		testConfig:         func(cfg *torrent.ClientConfig) { loopbackConfig(cfg) },
-	}
+	}}
 	t.Cleanup(tc.Close)
 	tm := NewTorrentMap(tc, nil, &FileStoreMap{p: torrents})
 	ws := &WebSeeder{

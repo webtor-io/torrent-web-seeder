@@ -74,14 +74,13 @@ func TestForkAnnounceFailureLogKeepsNoTrackerKey(t *testing.T) {
 		_, _ = io.WriteString(w, trackerRefuses)
 	}))
 	t.Cleanup(srv.Close)
-	tc := &TorrentClient{
+	tc := &TorrentClient{clientSettings: clientSettings{
 		swarm:              newSwarmStats(),
 		testConfig:         trackerTestConfig,
-		rLimit:             -1,
 		maxUnverifiedBytes: -1,
 		dataDir:            t.TempDir(),
 		allowLocalNetworks: true,
-	}
+	}}
 	t.Cleanup(tc.Close)
 	cl, err := tc.Get()
 	if err != nil {

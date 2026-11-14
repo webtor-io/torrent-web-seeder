@@ -16,8 +16,10 @@ ENV GOOS=linux
 
 ENV CGO_LDFLAGS="-static"
 
-# build the binary with debug information removed
-RUN  cd ./server && go build -ldflags '-w -s' -a -installsuffix cgo -o server
+# build the binary with debug information removed; this proto and
+# torrent-store's both define FilesRequest/FilesReply without a package,
+# so the registry must not panic on the duplicate names at start
+RUN  cd ./server && go build -ldflags '-w -s -X google.golang.org/protobuf/reflect/protoregistry.conflictPolicy=ignore' -a -installsuffix cgo -o server
 
 FROM alpine:latest
 

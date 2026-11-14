@@ -84,19 +84,38 @@ func NewWebSeeder(tm *TorrentMap, fcm *FileCacheMap, tfcm *TorrentFileCountMap, 
 	}
 }
 
-func (s *WebSeeder) renderTorrent(ctx context.Context, w http.ResponseWriter, h string) {
+// renderTorrent serves source.torrent. A private torrent's (BEP 27) goes to
+// Vault only (X-Role vault), built from the stored metainfo without its
+// trackers (privateSource): no Client joins the swarm for it. A public one is
+// loaded and served as the client has it.
+func (s *WebSeeder) renderTorrent(w http.ResponseWriter, r *http.Request, h string) {
 	log.Info("serve torrent")
 
-	t, err := s.tm.Get(ctx, h)
-
+	mi, err := s.privateMetaInfo(h)
 	if err != nil {
 		log.Error(err)
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
 		return
 	}
+	var src metainfo.MetaInfo
+	if mi != nil {
+		if r.Header.Get("X-Role") != "vault" {
+			http.Error(w, "private torrent", http.StatusForbidden)
+			return
+		}
+		src = privateSource(mi)
+	} else {
+		t, _, err := s.tm.Get(r.Context(), h, r.Header.Get("X-Uid"))
+		if err != nil {
+			log.Error(err)
+			http.Error(w, "failed to get torrent", http.StatusInternalServerError)
+			return
+		}
+		src = sourceMetainfo(t)
+	}
 	w.Header().Set("Content-Type", "application/x-bittorrent")
 
-	err = bencode.NewEncoder(w).Encode(sourceMetainfo(t))
+	err = bencode.NewEncoder(w).Encode(src)
 	if err != nil {
 		log.WithError(err).Error("failed to encode torrent")
 		http.Error(w, "failed to encode torrent", http.StatusInternalServerError)
@@ -104,15 +123,36 @@ func (s *WebSeeder) renderTorrent(ctx context.Context, w http.ResponseWriter, h 
 	}
 }
 
-// sourceMetainfo is the metainfo source.torrent serves. A private torrent
-// (BEP 27) goes out without announce, announce-list and url-list, to
-// everyone: torrent-store keeps one record per infohash, its trackers carry
-// the passkey of whoever uploaded it first, and anyone who knows the
-// infohash can ask for this file. The uploader has the original. A torrent
-// whose info is unknown is treated as private; Get does not hand one out
-// (AddTorrent refuses a metainfo without info), so that is only the safe
-// default. Announce needs no clearing: Torrent.Metainfo never sets it, the
-// trackers are all in announce-list.
+// privateMetaInfo returns h's stored metainfo if the torrent is private
+// (BEP 27), nil if it is public. Nothing is loaded.
+func (s *WebSeeder) privateMetaInfo(h string) (*metainfo.MetaInfo, error) {
+	mi, err := s.tm.MetaInfo(h)
+	if err != nil || mi == nil {
+		return nil, err
+	}
+	private, err := metainfoPrivate(mi)
+	if err != nil || !private {
+		return nil, err
+	}
+	return mi, nil
+}
+
+// privateSource is the stored metainfo without announce, announce-list,
+// url-list and nodes: torrent-store keeps one copy per infohash, and its
+// trackers carry the passkey of whoever uploaded it first. mi is shared
+// (TorrentStoreMap's cache) and is not changed.
+func privateSource(mi *metainfo.MetaInfo) metainfo.MetaInfo {
+	m := *mi
+	m.Announce, m.AnnounceList, m.UrlList, m.Nodes = "", nil, nil, nil
+	return m
+}
+
+// sourceMetainfo is the metainfo of a loaded torrent's source.torrent. A
+// private torrent's comes from privateSource instead; one whose info is
+// private or unknown still goes out without announce-list and url-list here,
+// the safe default (Get does not hand out a torrent without info: AddTorrent
+// refuses a metainfo without one). Announce needs no clearing:
+// Torrent.Metainfo never sets it, the trackers are all in announce-list.
 func sourceMetainfo(t *torrent.Torrent) metainfo.MetaInfo {
 	mi := t.Metainfo()
 	if info := t.Info(); info == nil || info.Private != nil && *info.Private {
@@ -138,11 +178,13 @@ func (s *WebSeeder) addH(h string, w http.ResponseWriter) {
 	_, _ = fmt.Fprintln(w, fmt.Sprintf("<h1>%s</h1>", h))
 }
 
+// renderTorrentIndex lists h's files. A private torrent's list is built from
+// its stored info: it needs no account (thp decides who sees it) and joins no
+// swarm. A public one is loaded as before.
 func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h string) {
 	log.Info("Serve file index")
 
-	t, err := s.tm.Get(r.Context(), h)
-
+	info, err := s.indexInfo(r, h)
 	if err != nil {
 		log.Error(err)
 		http.Error(w, "failed to get torrent", http.StatusInternalServerError)
@@ -151,9 +193,27 @@ func (s *WebSeeder) renderTorrentIndex(w http.ResponseWriter, r *http.Request, h
 	s.addH(h, w)
 	s.addA("..", w, r)
 	s.addA(SourceTorrentPath, w, r)
-	for _, f := range t.Info().UpvertedFiles() {
-		s.addA(strings.Join(append([]string{t.Info().Name}, f.Path...), "/"), w, r)
+	for _, f := range info.UpvertedFiles() {
+		s.addA(strings.Join(append([]string{info.Name}, f.Path...), "/"), w, r)
 	}
+}
+
+// indexInfo is h's info: a private torrent's from its stored metainfo, a
+// public one's from the torrent, loaded for it.
+func (s *WebSeeder) indexInfo(r *http.Request, h string) (*metainfo.Info, error) {
+	mi, err := s.privateMetaInfo(h)
+	if err != nil {
+		return nil, err
+	}
+	if mi != nil {
+		info, err := mi.UnmarshalInfo()
+		return &info, err
+	}
+	t, _, err := s.tm.Get(r.Context(), h, r.Header.Get("X-Uid"))
+	if err != nil {
+		return nil, err
+	}
+	return t.Info(), nil
 }
 
 func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, p string) {
@@ -277,7 +337,7 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		// cut after stallTimeout without progress: release closes the file
 		// under ServeContent, abortWrite fails a Write the client blocks, and
 		// the response ends short.
-		tw := NewTouchWriter(w, nil, s.tom, h)
+		tw := NewTouchWriter(w, nil, s.tom, h, h)
 		go watchStall(r.Context(), func() { release(); abortWrite(r) }, tw.LastWrite, s.stallTimeout, logWithField)
 		serveWithValidators(tw, r, p, lastMod, etag, file)
 		return
@@ -293,10 +353,10 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 	// and no data for the piece a read waits on (see waitingReader).
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	tw, reader, err := s.getTorrentReader(ctx, w, h, p, !download)
+	tw, reader, err := s.getTorrentReader(ctx, w, h, r.Header.Get("X-Uid"), p, !download)
 	if err == nil && reader != nil {
 		// The torrent stays loaded for as long as this request reads it.
-		defer s.tm.Hold(h)()
+		defer s.tm.Hold(tw.key)()
 		progress := func() time.Time {
 			data, write := reader.lastData(), tw.LastWrite()
 			if data.After(write) {
@@ -307,6 +367,9 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		go watchStall(ctx, func() { cancel(); abortWrite(r) }, progress, s.stallTimeout, logWithField)
 	}
 	if err != nil {
+		if writeRefusal(w, err) {
+			return
+		}
 		if strings.Contains(err.Error(), "PermissionDenied") {
 			logWithField.WithError(err).Warn("permission denied")
 			http.Error(w, "permission denied", http.StatusForbidden)
@@ -599,8 +662,8 @@ func samePath(filePath, requested string) bool {
 // evicted piece the library never requested again. evictPiece now tells the
 // library the piece is gone (refreshCompletion), and a waiting reader gets an
 // evicted piece back (TestEvictedPieceRedownload_ReaderNeverSeesHoles).
-func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h string, p string, responsive bool) (*TouchWriter, *waitingReader, error) {
-	t, err := s.tm.Get(ctx, h)
+func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter, h, uid, p string, responsive bool) (*TouchWriter, *waitingReader, error) {
+	t, key, err := s.tm.Get(ctx, h, uid)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -615,7 +678,7 @@ func (s *WebSeeder) getTorrentReader(ctx context.Context, w http.ResponseWriter,
 			torReader.SetReadaheadFunc(NewReadaheadFunc(s.maxReadahead))
 			// Wrapped so the request's end does not drop the pieces this
 			// reader was after — see linger.go.
-			return NewTouchWriter(w, s.tm, s.tom, h), &waitingReader{
+			return NewTouchWriter(w, s.tm, s.tom, h, key), &waitingReader{
 				ReadSeekCloser: s.linger.Wrap(torReader, t, f),
 				missing:        t.PieceBytesMissing,
 				offset:         f.Offset(),
@@ -744,6 +807,9 @@ func (s *WebSeeder) serveWarmup(w http.ResponseWriter, r *http.Request, h string
 	}
 	err = s.wu.Serve(w, r, h, p)
 	if err != nil {
+		if writeRefusal(w, err) {
+			return
+		}
 		log.Error(err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -794,7 +860,7 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if p == "" {
 			s.renderTorrentIndex(w, r, h)
 		} else if p == SourceTorrentPath {
-			s.renderTorrent(r.Context(), w, h)
+			s.renderTorrent(w, r, h)
 		} else {
 			s.serveFile(w, r, h, p)
 		}

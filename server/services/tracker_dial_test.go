@@ -398,14 +398,13 @@ func TestTorrentClient_TrackerGuard(t *testing.T) {
 			t.Cleanup(hsrv.Close)
 			usrv, udpGot := countingUDPServer(t)
 
-			tc := &TorrentClient{
+			tc := &TorrentClient{clientSettings: clientSettings{
 				swarm:              newSwarmStats(),
 				testConfig:         trackerTestConfig,
-				rLimit:             -1,
 				maxUnverifiedBytes: -1,
 				dataDir:            t.TempDir(),
 				allowLocalNetworks: allow,
-			}
+			}}
 			t.Cleanup(tc.Close)
 			cl, err := tc.Get()
 			if err != nil {
@@ -476,14 +475,13 @@ func TestTorrentClient_TrackerViaLocalProxy(t *testing.T) {
 		_, _ = io.WriteString(w, trackerAnswers)
 	}))
 	t.Cleanup(psrv.Close)
-	tc := &TorrentClient{
+	tc := &TorrentClient{clientSettings: clientSettings{
 		swarm:              newSwarmStats(),
 		testConfig:         trackerTestConfig,
-		rLimit:             -1,
 		maxUnverifiedBytes: -1,
 		dataDir:            t.TempDir(),
 		proxy:              psrv.URL,
-	}
+	}}
 	t.Cleanup(tc.Close)
 	cl, err := tc.Get()
 	if err != nil {

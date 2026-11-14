@@ -118,7 +118,7 @@ func TestTorrentMap_GetKeepsPeerTimeline(t *testing.T) {
 		ttl:     time.Minute,
 	}
 	h := mi.HashInfoBytes().HexString()
-	tor, err := m.Get(context.Background(), h)
+	tor, _, err := m.Get(context.Background(), h, "")
 	if err != nil || tor == nil {
 		t.Fatalf("Get: %v %v", tor, err)
 	}

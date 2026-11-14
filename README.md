@@ -53,11 +53,58 @@ Serves torrent content over HTTP:
 ```
 GET /<info-hash>/                  — file listing
 GET /<info-hash>/<path>            — stream file (supports Range)
-GET /<info-hash>/source.torrent    — download .torrent metadata
+GET /<info-hash>/source.torrent    — download .torrent metadata (a private torrent's: Vault only)
 GET /<info-hash>/<path>?stats      — download progress page
 ```
 
 Torrent metadata is resolved from local files (`--input`) or remote torrent-store (gRPC).
+
+### Private torrents
+
+A private torrent (BEP 27) announces with its viewer's own tracker key, never
+with the key in the stored copy, which belongs to whoever uploaded it first.
+
+- The viewer's account comes in the `X-Uid` header (gRPC: `user-id`
+  metadata), 40 lowercase hex characters. The seeder trusts it as is: the
+  proxy in front of it must set it and drop any value the client sent.
+- The account's trackers for the torrent come from torrent-store: a `Pull`
+  as that account answers with its record's trackers alone and sets
+  `caller_trackers`. Only the trackers are kept, cached for 60 s and re-read
+  every 60 s while the torrent is loaded; a reply without `caller_trackers`
+  (an older store) is never taken for the account's. The torrent goes into
+  a BitTorrent client of that account alone: no DHT, no PEX, an ephemeral
+  listen port, at most 100 account clients per pod. An account's client
+  closes 2 minutes after its last torrent goes.
+- A record that is gone or whose trackers changed unloads the torrent, even
+  mid-read; `stopped` goes out with the old key, and the next request loads
+  it with the new trackers.
+- The clients of a pod share the data directory: a piece one of them has
+  verified becomes readable by the others without a new download. A client
+  learns of a neighbour's pieces with a delay, so while both download the
+  same region it may fetch some of those pieces itself.
+- A public torrent goes to the pod's default client whatever `X-Uid` says.
+
+File and warm-up requests for a private torrent can be refused:
+
+| Status | `X-Seeder-Reason` | When |
+|---|---|---|
+| 403 | `account_required` | no `X-Uid`, or one that is not 40 lowercase hex characters |
+| 403 | `not_entitled` | the account has no record for the torrent, or torrent-store cannot open it |
+| 403 | `bad_record` | torrent-store's answer cannot be read, is of another torrent or has no trackers |
+| 403 | `private_disabled` | torrent-store keeps no records (no key or S3) or is too old to answer with the account's trackers, or no `--torrent-store-host` is set |
+| 503 | `busy` | the pod holds as many account clients as it may; `Retry-After: 5` |
+| 503 | `store_unavailable` | torrent-store failed to answer; `Retry-After: 5` |
+
+A malformed `X-Uid` and the 503s are answered in every mode; the other 403s
+only with `--private-access-enforce`. Without it (the default) such a request
+is served as before, from the default client with the stored trackers, and
+`torrent_web_seeder_private_store_tracker_fallback_total{reason}` counts it.
+
+The file listing (`/<info-hash>/`) of a private torrent is built from the
+stored metainfo, without joining the swarm. Its `source.torrent` answers 403
+to everyone but Vault (`X-Role: vault`), which gets it without announce,
+announce-list, url-list and nodes. `diagnose` of a private `.torrent` file
+drops its trackers and web seeds and says so; it reads no record.
 
 ### Diagnose mode
 
@@ -244,6 +291,7 @@ All configuration via CLI flags and environment variables.
 | `--torrent-store-host` | `TORRENT_STORE_SERVICE_HOST` | — | Remote torrent-store gRPC host |
 | `--torrent-store-port` | `TORRENT_STORE_SERVICE_PORT` | `50051` | Remote torrent-store gRPC port |
 | `--max-readahead` | `MAX_READAHEAD` | `20MB` | Read-ahead buffer size |
+| `--private-access-enforce` | `PRIVATE_ACCESS_ENFORCE` | `false` | Refuse a private torrent to a viewer without a record of their own; off: serve it with the stored trackers and count it (see [Private torrents](#private-torrents)) |
 
 - `--reader-linger` / `READER_LINGER` (default `90s`) — after a file request
   ends, keep the pieces of the reader's window `[pos, pos+max-readahead)`
@@ -359,8 +407,12 @@ Ports: `8080` (HTTP), `50051` (gRPC), `8081` (probes), `8082` (pprof), `8083` (P
 ## Development
 
 ```bash
-# Build
-cd server && go build -o server
+# Build. This proto and torrent-store's define the same message names
+# without a package; without the flag the binary panics at start.
+cd server && go build -ldflags '-X google.golang.org/protobuf/reflect/protoregistry.conflictPolicy=ignore' -o server
+
+# Test (the same conflict, allowed at run time)
+GOLANG_PROTOBUF_REGISTRATION_CONFLICT=warn go test ./...
 
 # Regenerate protobuf
 make protoc
@@ -384,8 +436,15 @@ Prometheus metrics exported on `:8083/metrics`:
 | `torrent_web_seeder_handshake_success_total` | Counter | Successful peer handshakes |
 | `torrent_web_seeder_private_peer_useful_bytes_total` | Counter | Needed piece payload received for private (BEP 27) torrents, by peer source: `tracker`, `dht`, `pex`, `incoming`, `other` |
 | `torrent_web_seeder_private_peer_connections_total` | Counter | Peer connections established for private torrents, by the same peer sources |
-| `torrent_web_seeder_established_connections` | Gauge | Active peer connections |
-| `torrent_web_seeder_half_open_connections` | Gauge | Pending peer connections |
+| `torrent_web_seeder_established_connections` | Gauge | Active peer connections, all clients of the pod |
+| `torrent_web_seeder_half_open_connections` | Gauge | Pending peer connections, all clients of the pod |
+| `torrent_web_seeder_private_record_lookups_total` | Counter | Private record lookups answered by torrent-store (cache hits not counted), by `outcome`: `ok`, `missing`, `unavailable`, `bad`, `disabled` |
+| `torrent_web_seeder_private_store_tracker_fallback_total` | Counter | Requests for a private torrent served with the stored trackers without `--private-access-enforce`, by the `reason` enforce would have refused with |
+| `torrent_web_seeder_private_enforce` | Gauge | 1 with `--private-access-enforce`, 0 without |
+| `torrent_web_seeder_account_clients` | Gauge | Account clients the pod holds |
+| `torrent_web_seeder_account_clients_refused_total` | Counter | Requests of a new account answered `busy`: the pod holds as many account clients as it may |
+| `torrent_web_seeder_shared_torrents` | Gauge | Torrents open in two or more clients of the pod at once |
+| `torrent_web_seeder_shared_chunk_writes_dropped_total` | Counter | Chunk writes dropped because another client of the pod had verified the piece |
 | `torrent_web_seeder_active_torrents_count` | Gauge | Number of active torrents |
 | `torrent_web_seeder_time_to_first_peer_ms` | Histogram | Latency to first peer connection |
 | `torrent_web_seeder_time_to_first_byte_ms` | Histogram | Latency to first downloaded byte |

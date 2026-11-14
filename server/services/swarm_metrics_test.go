@@ -278,13 +278,12 @@ func loopbackConfig(cfg *torrent.ClientConfig) {
 // top.
 func TestTorrentClient_SwarmCountsSurviveIdleClose(t *testing.T) {
 	swarm := newSwarmStats()
-	tc := &TorrentClient{
+	tc := &TorrentClient{clientSettings: clientSettings{
 		swarm:              swarm,
 		testConfig:         loopbackConfig,
-		rLimit:             -1,
 		maxUnverifiedBytes: -1,
 		dataDir:            t.TempDir(),
-	}
+	}}
 	shutDown := false
 	t.Cleanup(func() {
 		if !shutDown {

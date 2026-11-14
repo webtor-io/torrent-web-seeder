@@ -73,7 +73,7 @@ func TestWatchStall(t *testing.T) {
 // TouchWriter records the time of its last write.
 func TestTouchWriter_LastWrite(t *testing.T) {
 	tm := &TorrentMap{entries: map[string]*torrentEntry{}, ttl: time.Second}
-	w := NewTouchWriter(httptest.NewRecorder(), tm, nil, "h")
+	w := NewTouchWriter(httptest.NewRecorder(), tm, nil, "h", "h")
 	if !w.LastWrite().IsZero() {
 		t.Fatal("no write yet must read as zero time")
 	}
@@ -194,7 +194,7 @@ func TestStallGuardOnTheSwarm(t *testing.T) {
 			ws, _ := zPod(t, t.TempDir(), mi, 0, timeout)
 			if tc.rate > 0 {
 				peer := seedingClient(t, data, mi, throttle(tc.rate))
-				tor, err := ws.tm.Get(context.Background(), h)
+				tor, _, err := ws.tm.Get(context.Background(), h, "")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -234,7 +234,7 @@ func TestStallGuardEndsAPoisonedSwarm(t *testing.T) {
 	_, mi := multiChunkPayload(t, pieceLen, 1)
 	h := mi.HashInfoBytes().HexString()
 	ws, _ := zPod(t, t.TempDir(), mi, 0, timeout)
-	tor, err := ws.tm.Get(context.Background(), h)
+	tor, _, err := ws.tm.Get(context.Background(), h, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestStallGuardEndsASilentClientOnASlowSwarm(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws, _ := zPod(t, dataDir, mi, 0, timeout)
-	tor, err := ws.tm.Get(context.Background(), h)
+	tor, _, err := ws.tm.Get(context.Background(), h, "")
 	if err != nil {
 		t.Fatal(err)
 	}

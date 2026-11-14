@@ -7,8 +7,8 @@ require (
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/anacrolix/generics v0.2.0
 	github.com/anacrolix/log v0.17.1-0.20251118025802-918f1157b7bb
-	github.com/anacrolix/missinggo/v2 v2.10.0
-	github.com/anacrolix/torrent v1.60.1-0.20250925080637-414bd5781457
+	github.com/anacrolix/missinggo/v2 v2.11.0
+	github.com/anacrolix/torrent v1.61.1-0.20260911233437-76452a2c8a2f
 	github.com/bakins/logrus-middleware v0.0.0-20180426214643-ce4c6f8deb07
 	github.com/dustin/go-humanize v1.0.1
 	github.com/edsrzf/mmap-go v1.2.0
@@ -22,10 +22,11 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli v1.22.17
 	github.com/webtor-io/common-services v0.0.0-20261007162356-7960c21dad8f
-	github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108
-	github.com/webtor-io/torrent-store v1.0.0
+	github.com/webtor-io/lazymap v0.0.0-20261021184726-55fd9cba3e7a
+	github.com/webtor-io/torrent-store v1.1.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/time v0.14.0
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )
@@ -55,7 +56,7 @@ require (
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/felixge/fgprof v0.9.5 // indirect
 	github.com/go-llsqlite/crawshaw v0.6.0 // indirect
@@ -102,6 +103,7 @@ require (
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v4 v4.1.3 // indirect
 	github.com/pion/webrtc/v4 v4.1.8 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/common v0.67.2 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/protolambda/ctxlock v0.1.0 // indirect
@@ -128,7 +130,6 @@ require (
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mellium.im/sasl v0.3.2 // indirect
 	modernc.org/libc v1.67.1 // indirect
@@ -141,3 +142,16 @@ require (
 replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20261114101238-3a021a7c7023
 
 replace github.com/anacrolix/utp => github.com/webtor-io/utp v0.2.1-0.20260503123918-24e7018d4f71
+
+// torrent-store's module requires newer versions of these two for its own
+// packages; the seeder imports only its proto package, which uses neither.
+// missinggo/v2 past v2.10.0 moves bitmap to roaring/v2, which the fork does
+// not build against; lazymap past this pin changes its API and semantics
+// (New returns a pointer, single-flight loads), a change of its own.
+replace github.com/anacrolix/missinggo/v2 => github.com/anacrolix/missinggo/v2 v2.10.0
+
+replace github.com/webtor-io/lazymap => github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108
+
+// go-libutp v1.3.2 keeps a closed socket in its package-level map, and with
+// it the Client whose callbacks the socket holds; the fork forgets it on close.
+replace github.com/anacrolix/go-libutp => github.com/webtor-io/go-libutp v1.3.3-0.20261114100254-9ac99ce93f21

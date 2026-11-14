@@ -62,7 +62,7 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 		return errors.Errorf("streaming unsupported")
 	}
 
-	t, err := s.tm.Get(r.Context(), h)
+	t, _, err := s.tm.Get(r.Context(), h, r.Header.Get("X-Uid"))
 	if err != nil {
 		return err
 	}

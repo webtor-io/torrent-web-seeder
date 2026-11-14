@@ -136,16 +136,14 @@ func newPeerClient(cfg *torrent.ClientConfig) (*torrent.Client, error) {
 	return cl, nil
 }
 
-type TorrentClient struct {
-	cl                         *torrent.Client
+// clientSettings is everything a Client is built from; TorrentClient embeds it
+// and forUser copies it (a copy of TorrentClient would copy its mutex: vet
+// copylocks).
+type clientSettings struct {
 	swarm                      *swarmStats                 // exports the clients' peer traffic
 	testConfig                 func(*torrent.ClientConfig) // tests point the client at loopback; nil in the service
 	cacheEvents                *CacheEvents                // set before the first Get; nil publishes nothing
-	storageImpl                *mmapClientImpl
-	mux                        sync.Mutex
-	err                        error
-	inited                     bool
-	rLimit                     int64
+	siblings                   *storageSiblings            // the pod's open storages, shared by its Clients; nil: none
 	fileCache                  FileCacheConfig
 	clientIdleTimeout          time.Duration
 	dataDir                    string
@@ -169,11 +167,47 @@ type TorrentClient struct {
 	handshakeTimeout           time.Duration
 	keepAliveTimeout           time.Duration
 	pieceHashersPerTorrent     int
-	dialRateLimit              int
 	perTorrentCacheBudget      int64
 	torrentClientDebug         bool
 	allowLocalNetworks         bool
+	// The limiters are built once in NewTorrentClient and shared by every
+	// Client of the pod, so its ceiling does not grow with the accounts.
+	downloadLimiter *rate.Limiter // nil: unlimited
+	dialLimiter     *rate.Limiter // nil: the library's own, per Client (test literals only)
+	account         bool          // an account's Client (forUser)
 }
+
+type TorrentClient struct {
+	clientSettings
+	cl          *torrent.Client
+	storageImpl *mmapClientImpl
+	mux         sync.Mutex
+	err         error
+	inited      bool
+}
+
+// forUser returns an unbuilt TorrentClient for one account: the pod's settings
+// and limiters, account set, clientIdleTimeout 0 (its owner closes it).
+func (s *TorrentClient) forUser() *TorrentClient {
+	cs := s.clientSettings
+	cs.account = true
+	cs.clientIdleTimeout = 0
+	return &TorrentClient{clientSettings: cs}
+}
+
+// connGauge is one Client's share of the established and half-open gauges:
+// with several Clients a Set would report the last writer, not the sum.
+type connGauge struct{ established, halfOpen int }
+
+// set adds the change since the last set.
+func (g *connGauge) set(established, halfOpen int) {
+	promEstablishedConns.Add(float64(established - g.established))
+	promHalfOpenConns.Add(float64(halfOpen - g.halfOpen))
+	g.established, g.halfOpen = established, halfOpen
+}
+
+// retire takes the share out.
+func (g *connGauge) retire() { g.set(0, 0) }
 
 const (
 	TorrentClientDownloadRateFlag  = "download-rate"
@@ -375,14 +409,21 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 }
 
 func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
-	dr := int64(-1)
+	var download *rate.Limiter
 	if c.String(TorrentClientDownloadRateFlag) != "" {
 		drp, err := bytefmt.ToBytes(c.String(TorrentClientDownloadRateFlag))
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to parse download rate flag")
 
 		}
-		dr = int64(drp)
+		dr := int64(drp)
+		download = rate.NewLimiter(rate.Limit(dr), int(dr))
+	}
+	// Without the flag the library's default, made once here: each
+	// NewDefaultClientConfig makes its own, one per Client.
+	dial := torrent.NewDefaultClientConfig().DialRateLimiter
+	if n := c.Int(DialRateLimitFlag); n != 0 {
+		dial = rate.NewLimiter(rate.Limit(n), n)
 	}
 	ub := int64(-1)
 	if c.String(MaxUnverifiedBytesFlag) != "" {
@@ -400,9 +441,11 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		}
 		cacheBudget = int64(cb)
 	}
-	return &TorrentClient{
+	return &TorrentClient{clientSettings: clientSettings{
 		swarm:                      promSwarm,
-		rLimit:                     dr,
+		siblings:                   newStorageSiblings(),
+		downloadLimiter:            download,
+		dialLimiter:                dial,
 		dataDir:                    c.String(DataDirFlag),
 		proxy:                      c.String(HttpProxyFlag),
 		ua:                         c.String(TorrentClientUserAgentFlag),
@@ -424,7 +467,6 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		handshakeTimeout:           c.Duration(HandshakeTimeoutFlag),
 		keepAliveTimeout:           c.Duration(KeepAliveTimeoutFlag),
 		pieceHashersPerTorrent:     c.Int(PieceHashersPerTorrentFlag),
-		dialRateLimit:              c.Int(DialRateLimitFlag),
 		perTorrentCacheBudget:      cacheBudget,
 		fileCache: FileCacheConfig{
 			MaxOpen:    c.Int("max-open-files-per-torrent"),
@@ -435,7 +477,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		clientIdleTimeout:  c.Duration("client-idle-timeout"),
 		torrentClientDebug: c.Bool(TorrentClientDebugFlag),
 		allowLocalNetworks: c.Bool(AllowLocalNetworksFlag),
-	}, nil
+	}}, nil
 }
 
 func (s *TorrentClient) get() (*torrent.Client, error) {
@@ -455,8 +497,11 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	}
 	s.storageImpl = NewMMap(s.dataDir, s.perTorrentCacheBudget, s.fileCache)
 	s.storageImpl.events = s.cacheEvents
+	s.storageImpl.siblings = s.siblings
 	cfg.DefaultStorage = s.storageImpl
-	if s.ua != "" {
+	// An account's Client keeps the library's user agent: it then agrees
+	// with the library's peer id prefix and handshake version.
+	if s.ua != "" && !s.account {
 		cfg.HTTPUserAgent = s.ua
 	}
 	cfg.NoUpload = s.noUpload
@@ -493,14 +538,14 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	if s.totalHalfOpenConns != 0 {
 		cfg.TotalHalfOpenConns = s.totalHalfOpenConns
 	}
-	if s.rLimit != -1 {
-		cfg.DownloadRateLimiter = rate.NewLimiter(rate.Limit(s.rLimit), int(s.rLimit))
+	if s.downloadLimiter != nil {
+		cfg.DownloadRateLimiter = s.downloadLimiter
 	}
 	if s.maxUnverifiedBytes != -1 {
 		cfg.MaxUnverifiedBytes = s.maxUnverifiedBytes
 	}
-	if s.dialRateLimit != 0 {
-		cfg.DialRateLimiter = rate.NewLimiter(rate.Limit(s.dialRateLimit), s.dialRateLimit)
+	if s.dialLimiter != nil {
+		cfg.DialRateLimiter = s.dialLimiter
 	}
 	if s.nominalDialTimeout != 0 {
 		cfg.NominalDialTimeout = s.nominalDialTimeout
@@ -539,6 +584,15 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	tg := newTrackerGuard(s.allowLocalNetworks, proxyAddr)
 	cfg.TrackerDialContext = tg.dialContext
 	cfg.TrackerListenPacket = tg.listenPacket
+	if s.account {
+		// An account's Client finds peers only through its private
+		// trackers: no DHT, no PEX. It listens on a port of its own, the
+		// one its trackers get, and forwards none.
+		cfg.NoDHT = true
+		cfg.DisablePEX = true
+		cfg.ListenPort = 0
+		cfg.NoDefaultPortForwarding = true
+	}
 	if s.testConfig != nil {
 		s.testConfig(cfg)
 	}
@@ -560,6 +614,8 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	go func() {
 		defer metricsTicker.Stop()
 		defer ticker.Stop()
+		var conns connGauge
+		defer conns.retire()
 		var idleSince time.Time
 		for {
 			select {
@@ -567,8 +623,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 				return
 			case <-metricsTicker.C:
 				stats := cl.Stats()
-				promEstablishedConns.Set(float64(stats.ActivePeers))
-				promHalfOpenConns.Set(float64(stats.ActiveHalfOpenAttempts))
+				conns.set(stats.ActivePeers, stats.ActiveHalfOpenAttempts)
 			case <-ticker.C:
 				if len(cl.Torrents()) != 0 {
 					idleSince = time.Time{}

@@ -30,7 +30,8 @@ const evictShards = 1024
 
 type mmapClientImpl struct {
 	baseDir   string
-	events    *CacheEvents // nil: nothing is published
+	events    *CacheEvents     // nil: nothing is published
+	siblings  *storageSiblings // the pod's open storages; nil: none (tests)
 	budget    int64
 	fileCache FileCacheConfig
 	cl        *torrent.Client // set after torrent.NewClient(), used for eviction VerifyData
@@ -101,6 +102,7 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 		info:     info,
 		closeCh:  make(chan struct{}),
 		cl:       s.cl,
+		siblings: s.siblings,
 		dirLock:  lock,
 	}
 
@@ -133,6 +135,8 @@ func (s *mmapClientImpl) OpenTorrent(_ context.Context, info *metainfo.Info, inf
 			infoHash.HexString(), info.TotalLength(), s.budget)
 	}
 
+	// Last: nothing below can fail, and Close takes it out again.
+	s.siblings.add(t)
 	impl := storage.TorrentImpl{
 		Piece: t.Piece,
 		Close: t.Close,
@@ -175,7 +179,17 @@ type mmapTorrentStorage struct {
 	lru      *PieceLRU
 	info     *metainfo.Info
 	closeCh  chan struct{}
-	cl       *torrent.Client // for completion refresh on eviction
+	cl       *torrent.Client // for completion refresh on eviction and from siblings
+	siblings *storageSiblings
+	// refreshPending is the pieces a sibling changed that this storage's
+	// Client has yet to re-read; non-nil while a worker drains it (see
+	// queueRefresh). Under refreshMu.
+	refreshMu      sync.Mutex
+	refreshPending map[int]struct{}
+	refreshHook    func() // test hook: runs as refreshFromStorage starts
+	// refreshPieces is the library's batch refresh; nil means
+	// Torrent.RefreshCompletionsFromStorage. Tests wrap it to count calls.
+	refreshPieces func(*torrent.Torrent, []int) int
 	// evicted[i] is true while piece i's bytes are a punched hole. Set
 	// before the hole is punched, cleared when the piece is written again.
 	//
@@ -192,7 +206,7 @@ type mmapTorrentStorage struct {
 	// OpenTorrent runs INSIDE Torrent.setInfo, which anacrolix calls with
 	// the client lock held (setInfoBytesLocked). The eviction that
 	// OpenTorrent may trigger for a recovered over-budget torrent would
-	// therefore call RefreshCompletionFromStorage — which takes that same
+	// therefore call RefreshCompletionsFromStorage — which takes that same
 	// lock — and self-deadlock on the first oversized torrent to restart.
 	//
 	// Skipping the notification there is not a compromise: anacrolix runs
@@ -276,6 +290,7 @@ func (ts *mmapTorrentStorage) startEvictionSweep() {
 }
 
 func (ts *mmapTorrentStorage) Close() error {
+	ts.siblings.remove(ts)
 	close(ts.closeCh)
 	ts.stopEvictions()
 	if ts.lru != nil {
@@ -390,6 +405,18 @@ func (me mmapStoragePiece) WriteAt(b []byte, off int64) (n int, err error) {
 			err = fmt.Errorf("mmap WriteAt recovered from panic (storage closing?): %v", r)
 		}
 	}()
+	// Another Client of this pod has verified the piece: its MarkComplete
+	// wrote the db this storage reads too. The chunk is a duplicate download
+	// that raced the refresh, and writing it would put unverified bytes under
+	// that Client's readers. Reported written, not refused: a write error
+	// stops the whole torrent's download (onWriteChunkErr). A rewrite after
+	// an eviction or a failed hash passes, the db says 0 there.
+	if me.t.siblings.shared(me.t.infoHash) {
+		if c, err := me.t.pc.Get(me.pieceKey()); err == nil && c.Complete {
+			promSharedChunkWritesDropped.Inc()
+			return len(b), nil
+		}
+	}
 	// The piece is being written again, so it is no longer a hole and reads
 	// of it must be allowed. This has to clear on the FIRST chunk write
 	// rather than at MarkComplete: anacrolix hashes the piece before marking
@@ -457,6 +484,11 @@ func (sp mmapStoragePiece) MarkComplete() error {
 	if err != nil {
 		return err
 	}
+	// The other Clients of the pod learn of the piece from the db, without
+	// downloading it (see storageSiblings).
+	for _, o := range sp.t.siblings.others(sp.t) {
+		o.queueRefresh(idx)
+	}
 	// The piece has been fully written and verified. Drop the mmap pages —
 	// dirty pages will be written back by the kernel asynchronously, and
 	// clean pages are freed immediately. This prevents downloaded pieces
@@ -476,7 +508,13 @@ func (sp mmapStoragePiece) MarkComplete() error {
 }
 
 func (sp mmapStoragePiece) MarkNotComplete() error {
-	return sp.t.pc.Set(sp.pieceKey(), false)
+	if err := sp.t.pc.Set(sp.pieceKey(), false); err != nil {
+		return err
+	}
+	for _, o := range sp.t.siblings.others(sp.t) {
+		o.queueRefresh(sp.p.Index())
+	}
+	return nil
 }
 
 // madviseSpanRange advises the kernel to drop pages for a byte range in the
@@ -632,15 +670,10 @@ func (ts *mmapTorrentStorage) punchPiece(idx int) (bool, func()) {
 // the completion store, without re-hashing. Must be called with no storage
 // lock held.
 func (ts *mmapTorrentStorage) refreshCompletion(idx int) {
-	if ts.cl == nil || !ts.attached.Load() {
+	if !ts.attached.Load() {
 		return
 	}
-	for _, t := range ts.cl.Torrents() {
-		if t.InfoHash() == ts.infoHash {
-			t.Piece(idx).RefreshCompletionFromStorage()
-			return
-		}
-	}
+	ts.refreshFromStorage(idx)
 }
 
 // uncompleteAffectedFiles finds files that include the given piece index

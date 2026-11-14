@@ -110,27 +110,10 @@ func runDiagnose(c *cli.Context) error {
 		}
 		fmt.Println("[OK]   Magnet added to client")
 	} else {
-		mi, err := metainfo.LoadFromFile(input)
+		mi, err := loadTorrentFile(os.Stdout, input)
 		if err != nil {
-			fmt.Printf("[FAIL] Load .torrent file: %v\n", err)
 			return err
 		}
-		info, err := mi.UnmarshalInfo()
-		if err != nil {
-			fmt.Printf("[FAIL] Parse torrent info: %v\n", err)
-			return err
-		}
-		fmt.Printf("       Type: .torrent file\n")
-		fmt.Printf("       Info Hash: %s\n", mi.HashInfoBytes().HexString())
-		fmt.Printf("       Name: %s\n", info.Name)
-		fmt.Printf("       Size: %s\n", formatBytes(info.TotalLength()))
-
-		var trackers []string
-		for _, tier := range mi.UpvertedAnnounceList() {
-			trackers = append(trackers, tier...)
-		}
-		printTrackers(os.Stdout, trackers)
-
 		t, err = cl.AddTorrent(mi)
 		if err != nil {
 			fmt.Printf("[FAIL] Add torrent: %v\n", err)
@@ -460,6 +443,49 @@ func formatBytes(b int64) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
+}
+
+// loadTorrentFile loads a .torrent file and prints its header and trackers to
+// w; a private one comes back with no trackers (dropPrivateTrackers), so
+// AddTorrent announces to none of them.
+func loadTorrentFile(w io.Writer, path string) (*metainfo.MetaInfo, error) {
+	mi, err := metainfo.LoadFromFile(path)
+	if err != nil {
+		fmt.Fprintf(w, "[FAIL] Load .torrent file: %v\n", err)
+		return nil, err
+	}
+	info, err := mi.UnmarshalInfo()
+	if err != nil {
+		fmt.Fprintf(w, "[FAIL] Parse torrent info: %v\n", err)
+		return nil, err
+	}
+	fmt.Fprintf(w, "       Type: .torrent file\n")
+	fmt.Fprintf(w, "       Info Hash: %s\n", mi.HashInfoBytes().HexString())
+	fmt.Fprintf(w, "       Name: %s\n", info.Name)
+	fmt.Fprintf(w, "       Size: %s\n", formatBytes(info.TotalLength()))
+	if dropPrivateTrackers(mi, &info) {
+		fmt.Fprintln(w, "[WARN] private torrent: its trackers are not announced (a stored .torrent carries another account's key)")
+	}
+	var trackers []string
+	for _, tier := range mi.UpvertedAnnounceList() {
+		trackers = append(trackers, tier...)
+	}
+	printTrackers(w, trackers)
+	return mi, nil
+}
+
+// dropPrivateTrackers clears announce, announce-list and url-list of a private
+// torrent and reports whether it did; diagnose then prints
+// "[WARN] private torrent: its trackers are not announced (a stored .torrent carries another account's key)".
+// diagnose reads no record, so a private .torrent announces nothing: a copy
+// taken from the store carries the key of the account that uploaded it. A
+// magnet's tr= is the operator's own and is left alone.
+func dropPrivateTrackers(mi *metainfo.MetaInfo, info *metainfo.Info) bool {
+	if info.Private == nil || !*info.Private {
+		return false
+	}
+	mi.Announce, mi.AnnounceList, mi.UrlList = "", nil, nil
+	return true
 }
 
 // printTrackers lists trackers by scheme://host[:port] only. A private
