@@ -139,7 +139,7 @@ require (
 	zombiezen.com/go/sqlite v1.4.2 // indirect
 )
 
-replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20261114080710-f16bd9838fb4
+replace github.com/anacrolix/torrent => github.com/webtor-io/torrent v0.0.0-20261114100331-f68b9f212316
 
 replace github.com/anacrolix/utp => github.com/webtor-io/utp v0.2.1-0.20260503123918-24e7018d4f71
 
@@ -154,4 +154,4 @@ replace github.com/webtor-io/lazymap => github.com/webtor-io/lazymap v0.0.0-2025
 
 // go-libutp v1.3.2 keeps a closed socket in its package-level map, and with
 // it the Client whose callbacks the socket holds; the fork forgets it on close.
-replace github.com/anacrolix/go-libutp => github.com/webtor-io/go-libutp v1.3.3-0.20261114072420-db298700586a
+replace github.com/anacrolix/go-libutp => github.com/webtor-io/go-libutp v1.3.3-0.20261114100254-9ac99ce93f21
