@@ -2,11 +2,15 @@ package services
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/anacrolix/torrent/metainfo"
+	"github.com/sirupsen/logrus/hooks/test"
 )
 
 // The values below are made up; "secret" marks each one so a test can tell
@@ -55,6 +59,54 @@ func TestAccessLogKeepsNoCredentials(t *testing.T) {
 	} {
 		if !strings.Contains(line, want) {
 			t.Errorf("%q is not in the access log line %q", want, line)
+		}
+	}
+}
+
+// The torrent library's own line about a failed announce reaches logrus by the
+// service's route (anacrolix_log.go) and carries no part of a private
+// tracker's key. Up to the fork's webtor-io/torrent#8 that line's urlKey field
+// was the whole announce URL.
+func TestForkAnnounceFailureLogKeepsNoTrackerKey(t *testing.T) {
+	hook := test.NewGlobal()
+	defer hook.Reset()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, trackerRefuses)
+	}))
+	t.Cleanup(srv.Close)
+	tc := &TorrentClient{clientSettings: clientSettings{
+		swarm:              newSwarmStats(),
+		testConfig:         trackerTestConfig,
+		maxUnverifiedBytes: -1,
+		dataDir:            t.TempDir(),
+		allowLocalNetworks: true,
+	}}
+	t.Cleanup(tc.Close)
+	cl, err := tc.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, mi := addTestPayload(t)
+	mi.AnnounceList = metainfo.AnnounceList{{srv.URL + "/" + fakePasskey + "/announce?passkey=" + fakePasskey}}
+	if _, err := addTorrent(cl, mi); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, "the library's announce failure in logrus", func() bool {
+		for _, e := range hook.AllEntries() {
+			if e.Message == "announce failed" && e.Data["source"] == "anacrolix" {
+				return true
+			}
+		}
+		return false
+	})
+	for _, e := range hook.AllEntries() {
+		line, err := e.String()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(line, fakePasskey) {
+			t.Errorf("the tracker key in a log line: %q", line)
 		}
 	}
 }
