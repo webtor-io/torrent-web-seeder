@@ -293,7 +293,50 @@ All configuration via CLI flags and environment variables.
 | `--disable-utp` | `DISABLE_UTP` | `false` | Disable uTP protocol |
 | `--disable-webtorrent` | `DISABLE_WEBTORRENT` | `false` | Disable WebTorrent |
 | `--disable-webseeds` | `DISABLE_WEBSEEDS` | `false` | Disable webseeds |
+| `--allow-local-networks` | `ALLOW_LOCAL_NETWORKS` | `false` | Allow trackers on local network addresses (see below) |
 | `--torrent-client-debug` | `TORRENT_CLIENT_DEBUG` | `false` | Verbose torrent client logging |
+
+#### Local network addresses
+
+`--allow-local-networks` (`ALLOW_LOCAL_NETWORKS`, default `false`). Addresses
+that come from a torrent or a magnet are not connected to when they are not
+public:
+
+- loopback (`127.0.0.0/8`, `::1`)
+- private: RFC 1918 and IPv6 ULA `fc00::/7`
+- link-local: `169.254.0.0/16`, with the cloud metadata address
+  `169.254.169.254`, and `fe80::/10`
+- unspecified `0.0.0.0`, `::`
+- multicast
+- CGNAT `100.64.0.0/10`
+- "this network" `0.0.0.0/8`
+- reserved `240.0.0.0/4`, with the broadcast address `255.255.255.255`
+- site-local `fec0::/10`, deprecated
+- NAT64 local-use `64:ff9b:1::/48` (RFC 8215), whatever it carries: none of
+  it is on the internet, and where the IPv4 address sits in it depends on
+  the translator
+- any of the IPv4 ones above inside IPv6: IPv4-mapped `::ffff:0:0/96`,
+  IPv4-compatible `::/96`, NAT64 `64:ff9b::/96` (the last 32 bits), 6to4
+  `2002::/16` (bits 16 to 48)
+
+The check is on the address actually connected or sent to, after DNS, so a
+name that resolves to such an address and a redirect to one are refused too.
+It knows address classes, not your deployment: a node's public address, and
+the ports the node or a host-network pod listen on there, are public and
+pass. Keep those out with an egress NetworkPolicy. A refusal is logged as a
+warning at most once a minute per process, naming the refused `ip:port` and
+this variable; a counter counts every refusal. Set it to `true` when a
+tracker you use is on your own network. torrent-web-seeder and
+magnet2torrent read the same variable.
+
+In torrent-web-seeder it covers the trackers of a `.torrent`: HTTP and
+websocket trackers on connect, UDP trackers on every send. The warning also
+gives the class of the address and nothing of the tracker URL. The counter is
+`torrent_web_seeder_dial_failures_total` with `err="non_public_addr"`. With
+`--http-proxy`, HTTP and websocket announces connect to the proxy, which is
+allowed wherever it is; where the proxy connects is up to the proxy. UDP
+announces do not use the proxy and are checked as usual. Peer and webseed
+connections are not covered.
 
 ### Infrastructure flags
 
@@ -336,9 +379,11 @@ Prometheus metrics exported on `:8083/metrics`:
 | Metric | Type | Description |
 |--------|------|-------------|
 | `torrent_web_seeder_dial_attempts_total` | Counter | Dial attempts by type (peer/http/tracker) |
-| `torrent_web_seeder_dial_failures_total` | Counter | Dial failures by type and error category |
+| `torrent_web_seeder_dial_failures_total` | Counter | Dial failures by type and error category; `err="non_public_addr"` is a tracker refused by the address check (`type="udp_tracker"`: UDP tracker sends, counted only when refused) |
 | `torrent_web_seeder_dial_success_total` | Counter | Successful dials by type |
 | `torrent_web_seeder_handshake_success_total` | Counter | Successful peer handshakes |
+| `torrent_web_seeder_private_peer_useful_bytes_total` | Counter | Needed piece payload received for private (BEP 27) torrents, by peer source: `tracker`, `dht`, `pex`, `incoming`, `other` |
+| `torrent_web_seeder_private_peer_connections_total` | Counter | Peer connections established for private torrents, by the same peer sources |
 | `torrent_web_seeder_established_connections` | Gauge | Active peer connections |
 | `torrent_web_seeder_half_open_connections` | Gauge | Pending peer connections |
 | `torrent_web_seeder_active_torrents_count` | Gauge | Number of active torrents |

@@ -79,6 +79,9 @@ func categorizeError(err error) string {
 	if err == nil {
 		return "none"
 	}
+	if errors.Is(err, errNonPublicAddr) {
+		return "non_public_addr"
+	}
 	if os.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) || (errors.Unwrap(err) != nil && errors.Is(errors.Unwrap(err), context.DeadlineExceeded)) {
 		return "timeout"
 	}
@@ -169,6 +172,7 @@ type TorrentClient struct {
 	dialRateLimit              int
 	perTorrentCacheBudget      int64
 	torrentClientDebug         bool
+	allowLocalNetworks         bool
 }
 
 const (
@@ -196,6 +200,7 @@ const (
 	PieceHashersPerTorrentFlag     = "piece-hashers-per-torrent"
 	DialRateLimitFlag              = "dial-rate-limit"
 	PerTorrentCacheBudgetFlag      = "per-torrent-cache-budget"
+	AllowLocalNetworksFlag         = "allow-local-networks"
 )
 
 func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
@@ -253,6 +258,11 @@ func RegisterTorrentClientFlags(f []cli.Flag) []cli.Flag {
 			Name:   DisableIPv6Flag,
 			Usage:  "disables IPv6: no IPv6 listening, peers or tracker announces (for networks without an IPv6 route)",
 			EnvVar: "DISABLE_IPV6",
+		},
+		cli.BoolFlag{
+			Name:   AllowLocalNetworksFlag,
+			Usage:  "lets trackers be contacted on local network addresses: loopback, private, link-local, CGNAT, multicast, unspecified, reserved and the rest the README lists (for a tracker on the local network); refused by default, as a torrent or a magnet picks the address",
+			EnvVar: "ALLOW_LOCAL_NETWORKS",
 		},
 		cli.IntFlag{
 			Name:   EstablishedConnsPerTorrentFlag,
@@ -424,6 +434,7 @@ func NewTorrentClient(c *cli.Context) (*TorrentClient, error) {
 		},
 		clientIdleTimeout:  c.Duration("client-idle-timeout"),
 		torrentClientDebug: c.Bool(TorrentClientDebugFlag),
+		allowLocalNetworks: c.Bool(AllowLocalNetworksFlag),
 	}, nil
 }
 
@@ -458,12 +469,14 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.DisableIPv6 = s.dIPv6
 	cfg.DisableWebtorrent = s.dWebTorrent
 	cfg.DisableWebseeds = s.dWebseeds
+	var proxyAddr string
 	if s.proxy != "" {
 		u, err := url.Parse(s.proxy)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to parse proxy u=%v", s.proxy)
 		}
 		cfg.HTTPProxy = http.ProxyURL(u)
+		proxyAddr = proxyDialAddr(u)
 	}
 	if s.establishedConnsPerTorrent != 0 {
 		cfg.EstablishedConnsPerTorrent = s.establishedConnsPerTorrent
@@ -507,6 +520,8 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	cfg.Callbacks.CompletedHandshake = func(pc *torrent.PeerConn, ih torrent.InfoHash) {
 		promHandshakeSuccess.Inc()
 	}
+	cfg.Callbacks.PeerConnAdded = append(cfg.Callbacks.PeerConnAdded, countPrivatePeerConn)
+	cfg.Callbacks.ReceivedUsefulData = append(cfg.Callbacks.ReceivedUsefulData, countPrivateUsefulData)
 	cfg.HTTPDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		promDialAttempts.WithLabelValues("http").Inc()
 		d := net.Dialer{}
@@ -518,17 +533,12 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 		}
 		return conn, err
 	}
-	cfg.TrackerDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		promDialAttempts.WithLabelValues("tracker").Inc()
-		d := net.Dialer{}
-		conn, err := d.DialContext(ctx, network, addr)
-		if err != nil {
-			promDialFailures.WithLabelValues("tracker", categorizeError(err)).Inc()
-		} else {
-			promDialSuccess.WithLabelValues("tracker").Inc()
-		}
-		return conn, err
-	}
+	// A tracker URL comes from whoever made the .torrent: without a check on
+	// the address it lets anyone make the pods connect to the cluster's own
+	// services. See trackerGuard.
+	tg := newTrackerGuard(s.allowLocalNetworks, proxyAddr)
+	cfg.TrackerDialContext = tg.dialContext
+	cfg.TrackerListenPacket = tg.listenPacket
 	if s.testConfig != nil {
 		s.testConfig(cfg)
 	}

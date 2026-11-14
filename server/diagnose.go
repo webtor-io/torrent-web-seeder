@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -98,10 +101,7 @@ func runDiagnose(c *cli.Context) error {
 		if m.DisplayName != "" {
 			fmt.Printf("       Display Name: %s\n", m.DisplayName)
 		}
-		fmt.Printf("       Trackers: %d\n", len(m.Trackers))
-		for _, tr := range m.Trackers {
-			fmt.Printf("         - %s\n", tr)
-		}
+		printTrackers(os.Stdout, m.Trackers)
 
 		t, err = cl.AddMagnet(input)
 		if err != nil {
@@ -125,17 +125,11 @@ func runDiagnose(c *cli.Context) error {
 		fmt.Printf("       Name: %s\n", info.Name)
 		fmt.Printf("       Size: %s\n", formatBytes(info.TotalLength()))
 
-		trackers := mi.UpvertedAnnounceList()
-		trackerCount := 0
-		for _, tier := range trackers {
-			trackerCount += len(tier)
+		var trackers []string
+		for _, tier := range mi.UpvertedAnnounceList() {
+			trackers = append(trackers, tier...)
 		}
-		fmt.Printf("       Trackers: %d\n", trackerCount)
-		for _, tier := range trackers {
-			for _, tr := range tier {
-				fmt.Printf("         - %s\n", tr)
-			}
-		}
+		printTrackers(os.Stdout, trackers)
 
 		t, err = cl.AddTorrent(mi)
 		if err != nil {
@@ -466,4 +460,24 @@ func formatBytes(b int64) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
+}
+
+// printTrackers lists trackers by scheme://host[:port] only. A private
+// tracker carries the account's key in the userinfo, path or query of its URL,
+// and diagnose output is read and passed around by people who do not own it.
+func printTrackers(w io.Writer, trackers []string) {
+	fmt.Fprintf(w, "       Trackers: %d\n", len(trackers))
+	for _, tr := range trackers {
+		fmt.Fprintf(w, "         - %s\n", redactTrackerUrl(tr))
+	}
+}
+
+// redactTrackerUrl is shared.RedactUrl of the torrent library, which the
+// pinned version does not have yet.
+func redactTrackerUrl(rawUrl string) string {
+	u, err := url.Parse(rawUrl)
+	if err != nil {
+		return "<unparsable url>"
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
 }
