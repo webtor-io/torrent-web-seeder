@@ -146,9 +146,9 @@ func (ts *mmapTorrentStorage) drainRefresh() {
 // Client fell thousands of pieces behind a sibling downloading a torrent of
 // many pieces. No attached check: the worker never runs under OpenTorrent.
 //
-// ponytail: a drained batch is not split. The lock is held for the whole
-// batch, a few milliseconds per 10 000 pieces; chunk it if readers must not
-// wait that long.
+// ponytail: a drained batch is not split, and the Client's lock is held for
+// all of it: the longer the previous batch took, the bigger the next one.
+// Chunk it if a reader of this Client must not wait that long.
 func (ts *mmapTorrentStorage) refreshFromStorage(idx ...int) {
 	if ts.refreshHook != nil {
 		ts.refreshHook()
