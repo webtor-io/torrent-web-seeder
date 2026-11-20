@@ -55,6 +55,9 @@ func (u *Upload) manifest(ctx context.Context, h string) (*uploadManifest, error
 		return nil, err
 	}
 	defer func() { _ = lk.Close() }()
+	if gone, err := tombstoned(dir); err != nil || gone { // deleted: no manifest, not Vault's either
+		return nil, err
+	}
 	// Under the lock of parts/, as a part's move to files/: a move between
 	// the read of parts/ and the walk of files/ would count its S twice.
 	pd, err := lockParts(dir)

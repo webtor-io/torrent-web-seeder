@@ -37,7 +37,9 @@ func RegisterUploadFlags(f []cli.Flag) []cli.Flag {
 // torrent with that ID would have, next to the torrents' cache.
 //
 // The dir's layout: files/ holds the files, whole by construction; parts/
-// the parts being written; owner the writer's uid. Its .lock is created only
+// the parts being written; owner the writer's uid; deleted the paths that may
+// not be written again, "/" once the whole upload is deleted and sealLine
+// once it is sealed. Its .lock is created only
 // when the upload is, and whoever uses the dir holds .lock shared, which keeps
 // the cleaner (it takes .lock exclusive, without waiting) off it.
 type Upload struct {
@@ -71,11 +73,14 @@ func (u *Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, h, p string) 
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-		if r.Method == http.MethodPut {
+		switch {
+		case r.Method == http.MethodDelete:
+			u.delete(w, r, h, p, t)
+		case p == "":
+			u.seal(w, r, h, t)
+		default:
 			u.put(w, r, h, p, t)
-			return
 		}
-		w.WriteHeader(http.StatusMethodNotAllowed)
 	default:
 		w.Header().Set("Allow", "GET, HEAD, PUT, DELETE, OPTIONS")
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -185,6 +190,16 @@ func (u *Upload) serveFile(w http.ResponseWriter, r *http.Request, h, p string) 
 		tw := NewTouchWriter(w, nil, u.ws.tom, h, h)
 		go watchStall(r.Context(), func() { release(); abortWrite(r) }, tw.LastWrite, u.ws.stallTimeout, logger)
 		serveWithValidators(tw, r, p, time.Unix(0, 0), etag, f)
+		return
+	}
+	// Only on a miss: a deleted upload's files/ is empty. Its copy in Vault
+	// is not served.
+	if gone, err := tombstoned(dir); err != nil {
+		logger.WithError(err).Error("upload read failed")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	} else if gone {
+		http.NotFound(w, r)
 		return
 	}
 	if u.ws.v != nil && r.Header.Get("X-Role") != "vault" {
