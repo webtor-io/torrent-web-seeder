@@ -62,14 +62,22 @@ func (u *Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, h, p string) 
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		u.read(w, r, h, p)
+	case http.MethodOptions:
+		u.options(w)
 	case http.MethodPut, http.MethodDelete:
-		if _, err := u.writeToken(r, h); err != nil {
+		t, err := u.writeToken(r, h)
+		if err != nil {
 			log.WithFields(log.Fields{"hash": h, "reason": err.Error()}).Warn("upload write refused")
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+		if r.Method == http.MethodPut {
+			u.put(w, r, h, p, t)
+			return
+		}
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	default:
+		w.Header().Set("Allow", "GET, HEAD, PUT, DELETE, OPTIONS")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }

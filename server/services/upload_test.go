@@ -75,6 +75,17 @@ func upDir(t *testing.T, dataDir, id string, files map[string]string) string {
 	return dir
 }
 
+// mustWrite writes body to path, making its parent dirs.
+func mustWrite(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // cleanerDrop is the cleaner's drop (torrent-web-seeder-cleaner 0965d3f,
 // services/cleaner.go:146-170) without the eviction gate: .lock opened
 // O_RDONLY|O_CREATE and taken LOCK_EX|LOCK_NB (busy: false), the dir removed,
