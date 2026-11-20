@@ -138,7 +138,7 @@ func (u *Upload) read(w http.ResponseWriter, r *http.Request, h, p string) {
 		w.WriteHeader(http.StatusOK) // an empty stream: nothing to warm
 	case q.Has("done"): // 200: done
 	case p == "":
-		http.NotFound(w, r)
+		u.index(w, r, h)
 	case p == SourceTorrentPath:
 		http.NotFound(w, r)
 	default:
