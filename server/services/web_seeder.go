@@ -22,6 +22,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	"github.com/webtor-io/torrent-web-seeder/server/services/uploads"
 	"golang.org/x/time/rate"
 )
 
@@ -63,6 +64,7 @@ type WebSeeder struct {
 	cl           *http.Client
 	maxReadahead int64
 	linger       *Linger
+	up           *Upload // nil: uploads off, see WithUploads
 	// storePending holds the hashes whose verdict ran out of time with their
 	// Pull still running; see storeVerdict.
 	storePending sync.Map
@@ -216,8 +218,24 @@ func (s *WebSeeder) indexInfo(r *http.Request, h string) (*metainfo.Info, error)
 	return t.Info(), nil
 }
 
+// serveHeaders sets the headers every file response carries, a torrent's and
+// an upload's: an attachment for ?download, CORS for a request with an
+// Origin. It returns whether ?download was asked.
+func serveHeaders(w http.ResponseWriter, r *http.Request, p string) (download bool) {
+	_, download = r.URL.Query()["download"]
+	if download {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(p)+"\"")
+	}
+	if r.Header.Get("Origin") != "" {
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
+	return download
+}
+
 func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, p string) {
-	_, download := r.URL.Query()["download"]
+	download := serveHeaders(w, r, p)
 
 	logWithField := log.WithFields(log.Fields{
 		"hash":       h,
@@ -227,16 +245,6 @@ func (s *WebSeeder) serveFile(w http.ResponseWriter, r *http.Request, h string, 
 		"download":   download,
 		"range":      r.Header.Get("Range"),
 	})
-
-	// Set common headers
-	if download {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(p)+"\"")
-	}
-	if r.Header.Get("Origin") != "" {
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-	}
 
 	etag := fmt.Sprintf("\"%x\"", sha1.Sum([]byte(h+p)))
 	lastMod := time.Unix(0, 0)
@@ -851,6 +859,12 @@ func (s *WebSeeder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p := r.URL.Path[1:]
 		p = strings.TrimPrefix(p, h+"/")
+		// An upload's ID goes to its own branch before the store's verdict,
+		// TorrentMap and Vault: it is no torrent.
+		if s.up != nil && uploads.HomeHosted(h) {
+			s.up.ServeHTTP(w, r, h, p)
+			return
+		}
 		if _, ok := r.URL.Query()["stats"]; ok {
 			s.serveStats(w, r, h, p)
 		} else if _, ok := r.URL.Query()["warmup"]; ok {

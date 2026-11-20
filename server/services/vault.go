@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/pkg/errors"
@@ -59,9 +60,10 @@ func NewVault(c *cli.Context, cl *http.Client) *Vault {
 	}
 }
 
-// FileURL returns the per-file webseed URL.
+// FileURL returns the per-file webseed URL. The path is escaped: a name with
+// '#', '?' or '%' put in as is would ask Vault for another path or none.
 func (s *Vault) FileURL(hash, path string) string {
-	return fmt.Sprintf("http://%s:%d/webseed/%s/%s", s.host, s.port, hash, path)
+	return (&url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", s.host, s.port), Path: "/webseed/" + hash + "/" + path}).String()
 }
 
 func (s *Vault) getWebseedURL(ctx context.Context, hash string) (string, error) {
