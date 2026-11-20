@@ -477,7 +477,7 @@ func claims(up string, lim int64) jwt.MapClaims {
 	return jwt.MapClaims{"hash": upID, "up": up, "lim": lim, "uid": uidA, "exp": time.Now().Add(15 * time.Minute).Unix()}
 }
 
-// Any token S2 refuses gets 403 without a body for PUT and DELETE, and nothing
+// Any token writeToken refuses gets 403 without a body for PUT and DELETE, and nothing
 // on disk.
 func TestUploadWriteToken(t *testing.T) {
 	sign := func(c jwt.MapClaims) string { return upToken(t, upSecret, c) }
@@ -524,7 +524,7 @@ func TestUploadWriteToken(t *testing.T) {
 			}
 		}
 	}
-	ws, _ := upSeeder(t) // the valid token gets past S2
+	ws, _ := upSeeder(t) // the valid token gets past writeToken
 	req := httptest.NewRequest(http.MethodPut, "/"+upID+"/Name/a.mkv?offset=0&size=3", strings.NewReader("abc"))
 	req.Header.Set("X-Token", sign(claims("new", 10<<20)))
 	if rec := serve(ws, req); rec.Code == 403 {
@@ -532,7 +532,7 @@ func TestUploadWriteToken(t *testing.T) {
 	}
 }
 
-// What S2 passes on: lim of a whole paid cap exactly, and the delete (and
+// What writeToken passes on: lim of a whole paid cap exactly, and the delete (and
 // seal) token, which has no uid and is internal; only JSON true makes it so.
 func TestUploadWriteTokenClaims(t *testing.T) {
 	ws, _ := upSeeder(t)
