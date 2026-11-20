@@ -17,9 +17,19 @@ import (
 	"time"
 )
 
-// getIndex sends GET /<upID>/.
+// getIndex sends GET /<upID>/ as the service does: the proxy passes its token
+// without a uid.
 func getIndex(ws *WebSeeder) *httptest.ResponseRecorder {
-	return serve(ws, httptest.NewRequest(http.MethodGet, "/"+upID+"/", nil))
+	return getIndexAs(ws, upID, "", "")
+}
+
+// getIndexAs sends GET /<id>/ with the caller's uid and role as the proxy
+// sets them from the verified token.
+func getIndexAs(ws *WebSeeder, id, uid, role string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/"+id+"/", nil)
+	req.Header.Set("X-Uid", uid)
+	req.Header.Set("X-Role", role)
+	return serve(ws, req)
 }
 
 // wantIndex checks an index answer: 200, application/json and exactly body
@@ -44,6 +54,66 @@ func TestUploadIndex(t *testing.T) {
 	}
 	if fi, _ := os.Stat(dir + ".touch"); !fi.ModTime().Equal(past) {
 		t.Fatal("the index touched the upload: refused views would keep it alive")
+	}
+}
+
+// An owned upload's manifest goes to the service alone: a user's token, the
+// owner's too, gets what a missing manifest gets, with no lock taken and
+// Vault not asked. Kind 1 is not owned: its manifest has no kind and no such
+// rule.
+func TestUploadIndexCallers(t *testing.T) {
+	ws, data := upSeeder(t)
+	dir := upDir(t, data, upID, map[string]string{"Name/a": "abc"})
+	past := ageTouch(t, dir)
+	users := []struct{ name, uid, role string }{
+		{"the owner", uidA, ""},
+		{"another user", uidB, ""},
+		{"Vault with the owner's uid", uidA, "vault"},
+	}
+	pd, err := lockParts(dir) // a manifest waits for it, a refusal does not
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusals := make(chan *httptest.ResponseRecorder, len(users))
+	go func() {
+		for _, c := range users {
+			refusals <- getIndexAs(ws, upID, c.uid, c.role)
+		}
+	}()
+	for _, c := range users {
+		select {
+		case rec := <-refusals:
+			if rec.Code != 404 || strings.Contains(rec.Body.String(), "{") {
+				t.Errorf("%s: %d %q, want 404 and no manifest", c.name, rec.Code, rec.Body)
+			}
+		case <-time.After(5 * time.Second): // only when it fails: the answer comes at once
+			_ = pd.Close()
+			t.Fatalf("%s: no answer while parts/ is held: the manifest was read", c.name)
+		}
+	}
+	_ = pd.Close()
+	want := `{"kind":"upload","name":"Name","uids":["` + uidA + `"],"reserved":3,"files":[{"path":"Name/a","size":3}]}`
+	wantIndex(t, "the service", getIndex(ws), want)
+	wantIndex(t, "Vault without a uid", getIndexAs(ws, upID, "", "vault"), want)
+	if fi, _ := os.Stat(dir + ".touch"); !fi.ModTime().Equal(past) {
+		t.Error("the index touched the upload")
+	}
+
+	upDir(t, data, upID1, map[string]string{"Name/a": "abc"})
+	for _, uid := range []string{"", uidB} {
+		wantIndex(t, "kind 1, uid "+uid, getIndexAs(ws, upID1, uid, ""),
+			`{"name":"Name","uids":["`+uidA+`"],"reserved":3,"files":[{"path":"Name/a","size":3}]}`)
+	}
+
+	ws, _ = upSeeder(t) // evicted: the manifest is Vault's
+	n := upVault(t, ws, http.NotFound)
+	for _, c := range users {
+		if rec := getIndexAs(ws, upID, c.uid, c.role); rec.Code != 404 || n.Load() != 0 {
+			t.Errorf("evicted, %s: %d, Vault asked %d times", c.name, rec.Code, n.Load())
+		}
+	}
+	if rec := getIndex(ws); rec.Code != 404 || n.Load() != 1 {
+		t.Errorf("evicted, the service: %d, Vault asked %d times", rec.Code, n.Load())
 	}
 }
 
@@ -89,6 +159,7 @@ func TestUploadIndexReserved(t *testing.T) {
 func TestUploadIndexWalkError(t *testing.T) {
 	for _, fail := range []int{1, 2} {
 		t.Run(fmt.Sprint("call ", fail), func(t *testing.T) {
+			hook := quietLog(t)
 			ws, data := upSeeder(t)
 			upDir(t, data, upID, map[string]string{"Name/a": "abc", "Name/b": "de"})
 			calls := 0
@@ -111,16 +182,19 @@ func TestUploadIndexWalkError(t *testing.T) {
 			if rec.Code != 500 || strings.HasPrefix(rec.Body.String(), "{") || calls != fail {
 				t.Errorf("%d %q after %d walks, want 500 and no list", rec.Code, rec.Body, calls)
 			}
+			wantFailed(t, "index", hook, "upload index failed", 1)
 		})
 	}
 }
 
 func TestUploadIndexManyRoots(t *testing.T) {
+	hook := quietLog(t)
 	ws, data := upSeeder(t)
 	upDir(t, data, upID, map[string]string{"A/a": "abc", "B/b": "de"})
 	if rec := getIndex(ws); rec.Code != 500 || rec.Body.Len() != 0 {
 		t.Errorf("%d %q, want 500 without a body", rec.Code, rec.Body)
 	}
+	wantFailed(t, "index", hook, "upload index failed", 1)
 }
 
 // reserved and the list are read under the lock of parts/: a part's move to
@@ -156,8 +230,10 @@ func TestUploadIndexUnderPartsLock(t *testing.T) {
 	wantReply(t, "PUT", done, 201, "")
 }
 
-// No dir: the manifest comes from Vault, without reserved.
+// No dir: the manifest comes from Vault, without reserved; an answer of Vault
+// that is no listing is 500, never an empty manifest.
 func TestUploadIndexFromVault(t *testing.T) {
+	hook := quietLog(t)
 	const listing = `{"uids":["` + uidA + `"],"files":[{"path":"/Name/a.mkv","size":3},{"path":"/Name/b.srt","size":2}]}`
 	vault := func(code int, body string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -178,6 +254,8 @@ func TestUploadIndexFromVault(t *testing.T) {
 		{"nulls", `{"uids":null,"files":null}`, 200, 200, `{"kind":"upload","name":"","uids":[],"files":[]}`},
 		{"not in Vault", "", 404, 404, ""},
 		{"Vault error", "", 500, 500, ""},
+		{"not JSON", "<html>", 200, 500, ""},
+		{"JSON cut short", listing[:len(listing)-2], 200, 500, ""},
 	} {
 		ws, _ := upSeeder(t)
 		upVault(t, ws, vault(c.vcode, c.vbody))
@@ -187,7 +265,25 @@ func TestUploadIndexFromVault(t *testing.T) {
 		} else if rec.Code != c.code || strings.HasPrefix(rec.Body.String(), "{") {
 			t.Errorf("%s: %d %q, want %d", c.name, rec.Code, rec.Body, c.code)
 		}
+		failed := 0
+		if c.code == 500 {
+			failed = 1
+		}
+		wantFailed(t, c.name, hook, "upload index failed", failed)
 	}
+	wsCut, _ := upSeeder(t) // Vault drops the connection without an answer
+	upVault(t, wsCut, func(w http.ResponseWriter, r *http.Request) {
+		c, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = c.Close()
+	})
+	if rec := getIndex(wsCut); rec.Code != 500 || rec.Body.Len() != 0 {
+		t.Errorf("Vault hung up: %d %q, want 500 without a body", rec.Code, rec.Body)
+	}
+	wantFailed(t, "Vault hung up", hook, "upload index failed", 1)
 	ws, _ := upSeeder(t)
 	if rec := getIndex(ws); rec.Code != 404 {
 		t.Errorf("Vault not set: %d", rec.Code)

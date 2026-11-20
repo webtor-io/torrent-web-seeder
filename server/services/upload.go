@@ -89,9 +89,10 @@ func (u *Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, h, p string) 
 
 // writeClaims is what a verified write token allows.
 type writeClaims struct {
-	up  string // "new" or "add"
-	uid string // checked (40 hex) only for up=new
-	lim int64  // bytes the ID may hold, > 0
+	up       string // "new" or "add"
+	uid      string // checked (40 hex) only for up=new
+	lim      int64  // bytes the ID may hold, > 0
+	internal bool   // the service's own token: no browser holds one
 }
 
 // writeToken checks r's write token (X-Token, set by the proxy from ?token=)
@@ -128,7 +129,8 @@ func (u *Upload) writeToken(r *http.Request, h string) (*writeClaims, error) {
 	if up == "new" && !validUID(uid) {
 		return nil, errors.New("bad uid")
 	}
-	return &writeClaims{up: up, uid: uid, lim: int64(lim)}, nil
+	internal, _ := c["internal"].(bool)
+	return &writeClaims{up: up, uid: uid, lim: int64(lim), internal: internal}, nil
 }
 
 // read answers the torrent queries the way a torrent fully cached here does

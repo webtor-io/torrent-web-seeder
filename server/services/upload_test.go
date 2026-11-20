@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -150,6 +151,38 @@ func ageTouch(t *testing.T, dir string) time.Time {
 		t.Fatal(err)
 	}
 	return past
+}
+
+// quietLog keeps the log out of the test's output until the test ends and
+// returns what is logged meanwhile.
+func quietLog(t *testing.T) *test.Hook {
+	t.Helper()
+	std := log.StandardLogger()
+	out := std.Out
+	std.SetOutput(io.Discard)
+	t.Cleanup(func() { std.SetOutput(out) })
+	return test.NewGlobal()
+}
+
+// wantFailed checks that hook holds exactly n errors, each msg with upID as
+// hash, the error and no other field: no token, key or uid. It then empties
+// hook.
+func wantFailed(t *testing.T, name string, hook *test.Hook, msg string, n int) {
+	t.Helper()
+	got := 0
+	for _, e := range hook.AllEntries() {
+		if e.Level != log.ErrorLevel {
+			continue
+		}
+		got++
+		if e.Message != msg || len(e.Data) != 2 || e.Data["hash"] != upID || e.Data[log.ErrorKey] == nil {
+			t.Errorf("%s: logged %q %v, want %q with hash and error only", name, e.Message, e.Data, msg)
+		}
+	}
+	if got != n {
+		t.Errorf("%s: %d errors logged, want %d", name, got, n)
+	}
+	hook.Reset()
 }
 
 func TestWithUploads(t *testing.T) {
@@ -442,7 +475,7 @@ func TestUploadWriteToken(t *testing.T) {
 }
 
 // What S2 passes on: lim of a whole paid cap exactly, and the delete (and
-// seal) token, which has no uid.
+// seal) token, which has no uid and is internal; only JSON true makes it so.
 func TestUploadWriteTokenClaims(t *testing.T) {
 	ws, _ := upSeeder(t)
 	for _, c := range []struct {
@@ -451,7 +484,8 @@ func TestUploadWriteTokenClaims(t *testing.T) {
 		want   writeClaims
 	}{
 		{"new, 50 GiB", claims("new", 53687091200), writeClaims{up: "new", uid: uidA, lim: 53687091200}},
-		{"delete", jwt.MapClaims{"hash": upID, "internal": true, "up": "add", "lim": 1, "exp": time.Now().Add(time.Hour).Unix()}, writeClaims{up: "add", lim: 1}},
+		{"delete", jwt.MapClaims{"hash": upID, "internal": true, "up": "add", "lim": 1, "exp": time.Now().Add(time.Hour).Unix()}, writeClaims{up: "add", lim: 1, internal: true}},
+		{"internal a string", jwt.MapClaims{"hash": upID, "internal": "true", "up": "add", "lim": 1, "exp": time.Now().Add(time.Hour).Unix()}, writeClaims{up: "add", lim: 1}},
 	} {
 		req := httptest.NewRequest(http.MethodDelete, "/"+upID+"/", nil)
 		req.Header.Set("X-Token", upToken(t, upSecret, c.claims))

@@ -26,7 +26,17 @@ type uploadManifest struct {
 // index serves upload h's manifest: from its dir while the dir lives, else
 // from Vault. It does not touch the dir: the manifest is read before a view is
 // allowed, and refused views would keep the upload alive.
+//
+// An owned upload's manifest is the service's only: it names the owner and
+// every file, and a link to one file must not list the rest. The proxy sets
+// X-Uid from the verified token and passes an owned ID without a uid for a
+// service token alone, so a uid here is a user's token. It gets what a
+// missing manifest gets, before any lock and without Vault.
 func (u *Upload) index(w http.ResponseWriter, r *http.Request, h string) {
+	if uploads.Owned(h) && r.Header.Get("X-Uid") != "" {
+		http.NotFound(w, r)
+		return
+	}
 	m, err := u.manifest(r.Context(), h)
 	switch {
 	case err != nil: // never a part of the list

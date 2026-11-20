@@ -68,8 +68,9 @@ func (e *upReply) Error() string { return fmt.Sprintf("%d %s", e.code, e.body) }
 
 func reply(code int, body string) error { return &upReply{code: code, body: body} }
 
-// writeReply answers err: *upReply as it is; errUploadGone 410; anything else
-// is logged with h and answered 500 without a body.
+// writeReply answers err: *upReply as it is; errUploadGone 410; a full disk
+// 507, wherever the write met it; anything else is logged with h and answered
+// 500 without a body.
 func writeReply(w http.ResponseWriter, h string, err error) {
 	var r *upReply
 	switch {
@@ -81,6 +82,8 @@ func writeReply(w http.ResponseWriter, h string, err error) {
 		_, _ = io.WriteString(w, r.body)
 	case errors.Is(err, errUploadGone):
 		w.WriteHeader(http.StatusGone)
+	case errors.Is(err, syscall.ENOSPC):
+		w.WriteHeader(http.StatusInsufficientStorage)
 	default:
 		log.WithError(err).WithField("hash", h).Error("upload write failed")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -206,8 +209,11 @@ func (u *Upload) writePart(r *http.Request, h, p string, t *writeClaims) error {
 		return err
 	}
 	written, err := copyPart(f, io.LimitReader(r.Body, n))
-	if errors.Is(err, syscall.ENOSPC) {
-		return reply(http.StatusInsufficientStorage, "")
+	if err != nil && r.Context().Err() != nil {
+		// The client went away in the middle of the part: nothing of ours
+		// failed, and the part keeps what was written.
+		log.WithError(err).WithField("hash", h).Warn("upload write aborted")
+		return reply(http.StatusInternalServerError, "")
 	}
 	if err != nil {
 		return err
@@ -618,6 +624,13 @@ func empty(dir string) error {
 	return first
 }
 
+// refused answers a valid token that may not make this call: 403, logged as
+// any refused token.
+func refused(h, reason string) error {
+	log.WithFields(log.Fields{"hash": h, "reason": reason}).Warn("upload write refused")
+	return reply(http.StatusForbidden, "")
+}
+
 // delete removes file or folder p of upload h, or, with p "", the whole
 // upload into a tombstone.
 func (u *Upload) delete(w http.ResponseWriter, r *http.Request, h, p string, t *writeClaims) {
@@ -626,10 +639,17 @@ func (u *Upload) delete(w http.ResponseWriter, r *http.Request, h, p string, t *
 
 // remove is delete's work; its answer is the error, *upReply on success too.
 // The paths go into deleted before anything is wiped: a crash in between
-// must not let the same path take other content.
+// must not let the same path take other content. A file or a folder goes by
+// the owner's up=add token; the whole upload by the service's.
 func (u *Upload) remove(h, p string, t *writeClaims) error {
 	if t.up != "add" {
 		return reply(http.StatusForbidden, "")
+	}
+	// The whole upload goes by the service's token only: the service has the
+	// copy in Vault and the quota to clear first, and a file's DELETE whose
+	// path a redirect collapsed to "" must not take the upload with it.
+	if p == "" && !t.internal {
+		return refused(h, "not the service's token")
 	}
 	rel := strings.TrimSuffix(p, "/") // a folder's trailing "/", allowed here only
 	if p != "" && !validPath(rel) {
@@ -721,8 +741,9 @@ func (u *Upload) remove(h, p string, t *writeClaims) error {
 	return reply(http.StatusNoContent, "")
 }
 
-// seal is PUT <id>/: from its 204 on nothing is added to files/ and nothing
-// is removed from it but by deleting the whole upload.
+// seal is PUT <id>/, by the service's token only: from its 204 on nothing is
+// added to files/ and nothing is removed from it but by deleting the whole
+// upload.
 func (u *Upload) seal(w http.ResponseWriter, r *http.Request, h string, t *writeClaims) {
 	writeReply(w, h, u.freeze(r, h, t))
 }
@@ -736,6 +757,10 @@ func (u *Upload) freeze(r *http.Request, h string, t *writeClaims) error {
 	}
 	if t.up != "add" {
 		return reply(http.StatusForbidden, "")
+	}
+	// The seal is for good, and only the service knows a pledge follows it.
+	if !t.internal {
+		return refused(h, "not the service's token")
 	}
 	dir, err := GetDir(u.ws.tom.p, h)
 	if err != nil {

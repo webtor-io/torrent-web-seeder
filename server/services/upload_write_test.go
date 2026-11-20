@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
+	log "github.com/sirupsen/logrus"
 )
 
 // putPart sends PUT /<id>/<p>?offset=&size= with X-Token tok and body.
@@ -287,7 +289,9 @@ func TestUploadCreateOrder(t *testing.T) {
 		}
 		return nil
 	}
+	hook := quietLog(t)
 	wantReply(t, "new, lock fails", putPart(ws, upID, "Name/a", writeTok(t, "new", 10<<20), 0, 3, []byte("abc")), 500, "")
+	wantFailed(t, "new, lock fails", hook, "upload write failed", 1)
 	if b, _ := os.ReadFile(filepath.Join(dir, "owner")); string(b) != uidA {
 		t.Errorf("owner %q", b)
 	}
@@ -354,6 +358,87 @@ func TestUploadNoSpace(t *testing.T) {
 	if n := fileSize(filepath.Join(dir, "files", "Name", "a")); n != 4096 {
 		t.Errorf("files/Name/a: %d bytes", n)
 	}
+
+	// A full disk is 507 wherever the write meets it, not in the copy alone:
+	// here while the dir is made.
+	hook := quietLog(t)
+	ws, _ = upSeeder(t)
+	setHook(t, &createHook, func(s string) error {
+		if s == "dirs" {
+			return &os.PathError{Op: "mkdir", Path: "files", Err: syscall.ENOSPC}
+		}
+		return nil
+	})
+	wantReply(t, "ENOSPC in create", putPart(ws, upID, "Name/a", writeTok(t, "new", 10<<20), 0, 1, []byte("x")), 507, "")
+	for name, err := range map[string]error{
+		"fsync":         &os.PathError{Op: "sync", Path: "deleted", Err: syscall.ENOSPC},
+		"one of a wipe": errors.Join(errors.New("zero"), fmt.Errorf("deleted: %w", syscall.ENOSPC)),
+	} {
+		rec := httptest.NewRecorder()
+		writeReply(rec, upID, err)
+		wantReply(t, name, rec, 507, "")
+	}
+	wantFailed(t, "ENOSPC", hook, "", 0)
+}
+
+// brokenBody gives its bytes and then fails as a body cut short does; gone,
+// when set, runs first, as the server cancels the request of a lost client.
+type brokenBody struct {
+	io.Reader
+	gone func()
+}
+
+func (b *brokenBody) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	if err == io.EOF {
+		if b.gone != nil {
+			b.gone()
+		}
+		err = io.ErrUnexpectedEOF
+	}
+	return n, err
+}
+
+// A body cut short by a client that went away is no failure of the seeder: a
+// warning, not an error, and the part keeps what came. The same cut with the
+// client still there is a failure.
+func TestUploadClientAbort(t *testing.T) {
+	hook := quietLog(t)
+	ws, data := upSeeder(t)
+	dir := upDir(t, data, upID, nil)
+	tok := writeTok(t, "add", 10<<20)
+	cut := func(p string, gone bool) *httptest.ResponseRecorder {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		body := &brokenBody{Reader: strings.NewReader("abc")}
+		if gone {
+			body.gone = cancel
+		}
+		req := httptest.NewRequestWithContext(ctx, http.MethodPut, "/"+upID+"/"+p+"?offset=0&size=6", body)
+		req.ContentLength = 6
+		req.Header.Set("X-Token", tok)
+		return serve(ws, req)
+	}
+
+	wantReply(t, "client gone", cut("Name/a", true), 500, "")
+	var warned []*log.Entry
+	for _, e := range hook.AllEntries() {
+		if e.Level == log.WarnLevel {
+			warned = append(warned, e)
+		}
+	}
+	if len(warned) != 1 || warned[0].Message != "upload write aborted" || len(warned[0].Data) != 2 ||
+		warned[0].Data["hash"] != upID || warned[0].Data[log.ErrorKey] != io.ErrUnexpectedEOF {
+		t.Errorf("client gone: warned %v", warned)
+	}
+	wantFailed(t, "client gone", hook, "", 0)
+	if n := fileSize(filepath.Join(dir, "parts", partName("Name/a", 6))); n != 3 {
+		t.Errorf("client gone: the part holds %d bytes, want 3", n)
+	}
+	wantReply(t, "the rest", putPart(ws, upID, "Name/a", tok, 3, 6, []byte("def")), 201, "")
+
+	wantReply(t, "client there", cut("Name/b", false), 500, "")
+	wantFailed(t, "client there", hook, "upload write failed", 1)
 }
 
 // A new file is checked against the token's lim, whatever the dir already
@@ -675,6 +760,25 @@ func TestUploadDeleteWhole(t *testing.T) {
 
 	wantReply(t, "2 a", putPart(ws, upID, "Name/a", newTok, 0, 3, []byte("abc")), 201, "")
 	wantReply(t, "2 b", putPart(ws, upID, "Name/b", newTok, 0, 6, []byte("abc")), 204, "")
+
+	// The whole upload goes by the service's token only: the owner's own
+	// tokens, the browser's, delete files and folders.
+	hook := quietLog(t)
+	internalNew := delClaims()
+	internalNew["up"] = "new"
+	internalNew["uid"] = uidA
+	for name, tok := range map[string]string{"up=add of the owner": addTok, "up=new of the owner": newTok, "up=new of the service": upToken(t, upSecret, internalNew)} {
+		wantReply(t, "2a "+name, send(ws, http.MethodDelete, "", tok), 403, "")
+		if len(dlines(t, dir)) != 0 || content(filepath.Join(files, "Name", "a")) != "abc" || entries(t, parts) != 1 {
+			t.Errorf("2a %s: deleted %q, Name/a %q, parts/ %d entries", name, dlines(t, dir),
+				content(filepath.Join(files, "Name", "a")), entries(t, parts))
+		}
+	}
+	if e := hook.AllEntries(); len(e) != 1 || e[0].Level != log.WarnLevel || e[0].Message != "upload write refused" ||
+		len(e[0].Data) != 2 || e[0].Data["hash"] != upID || e[0].Data["reason"] != "not the service's token" {
+		t.Errorf("2a: logged %v, want the refusal of up=add of the owner", e)
+	}
+
 	wantReply(t, "3", del(""), 204, "")
 	if !emptyDir(t, files) || !emptyDir(t, parts) {
 		t.Errorf("4: files/ %d, parts/ %d entries", entries(t, files), entries(t, parts))
@@ -836,7 +940,9 @@ func TestUploadDeleteFolderWalkError(t *testing.T) {
 			return nil
 		})
 	})
+	hook := quietLog(t)
 	wantReply(t, "DELETE", send(ws, http.MethodDelete, "Name/dir/", upToken(t, upSecret, delClaims())), 500, "")
+	wantFailed(t, "DELETE", hook, "upload write failed", 1)
 	if len(dlines(t, dir)) != n0 {
 		t.Errorf("deleted %q", dlines(t, dir))
 	}
@@ -928,8 +1034,15 @@ func TestUploadSeal(t *testing.T) {
 	wantReply(t, "2 a", putPart(ws, upID, "Name/a", newTok, 0, 3, []byte("abc")), 201, "")
 	wantReply(t, "2 z1", putPart(ws, upID, "Name/dir/z1", newTok, 0, 1, []byte("z")), 201, "")
 	wantReply(t, "2 b", putPart(ws, upID, "Name/b", newTok, 0, 6, []byte("abc")), 204, "")
-	wantReply(t, "3", seal(newTok), 403, "")
-	open("3")
+	// By the service's token only, and by its up=add: the owner's own tokens,
+	// the browser's, seal nothing.
+	internalNew := delClaims()
+	internalNew["up"] = "new"
+	internalNew["uid"] = uidA
+	for name, tok := range map[string]string{"up=new of the owner": newTok, "up=add of the owner": addTok, "up=new of the service": upToken(t, upSecret, internalNew)} {
+		wantReply(t, "3 "+name, seal(tok), 403, "")
+		open("3 " + name)
+	}
 	for _, c := range []struct{ name, query, body string }{
 		{"a file's PUT", "?offset=0&size=3", "abc"},
 		{"offset", "?offset=0", ""},
@@ -1211,7 +1324,9 @@ func TestUploadDeleteKeepsContentAtPath(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(d, 0o755) })
 	delTok := upToken(t, upSecret, delClaims())
+	hook := quietLog(t)
 	wantReply(t, "2", send(ws, http.MethodDelete, "Name/dir/z1", delTok), 500, "")
+	wantFailed(t, "2", hook, "upload write failed", 1)
 	if content(z1) != "abc" || !slices.Contains(dlines(t, dir), "Name/dir/z1") {
 		t.Errorf("3: z1 %q, deleted %q", content(z1), dlines(t, dir))
 	}
@@ -1222,6 +1337,7 @@ func TestUploadDeleteKeepsContentAtPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantReply(t, "4", send(ws, http.MethodDelete, "Name/dir/z1", delTok), 204, "")
+	wantFailed(t, "4", hook, "", 0)
 	if onDisk(z1) || countLine(t, dir, "Name/dir/z1") != 1 {
 		t.Errorf("4: z1 %v, deleted %q", onDisk(z1), dlines(t, dir))
 	}
@@ -1243,7 +1359,9 @@ func TestUploadDeleteZeroError(t *testing.T) {
 	f1 := openT(t, filepath.Join(dir, "files", "Name", "dir", "z1"))
 	delTok := upToken(t, upSecret, delClaims())
 	setHook(t, &zeroFile, failOn("sub/z2")) // the walk meets it first: sub < z1
+	hook := quietLog(t)
 	wantReply(t, "3", send(ws, http.MethodDelete, "Name/dir/", delTok), 500, "")
+	wantFailed(t, "3", hook, "upload write failed", 1)
 	if l := dlines(t, dir); !slices.Contains(l, "Name/dir/z1") || !slices.Contains(l, "Name/dir/sub/z2") ||
 		onDisk(filepath.Join(dir, "files", "Name", "dir")) || fdSize(t, f1) != 0 {
 		t.Errorf("4: deleted %q, files/Name/dir %v, z1 %d", l, onDisk(filepath.Join(dir, "files", "Name", "dir")), fdSize(t, f1))
@@ -1257,6 +1375,7 @@ func TestUploadDeleteZeroError(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "parts", partName("Name/y", 5)), "")
 	zeroFile = failOn("Name/a")
 	wantReply(t, "7", send(ws, http.MethodDelete, "", delTok), 500, "")
+	wantFailed(t, "7", hook, "upload write failed", 1)
 	if !tomb(t, dir) || !emptyDir(t, filepath.Join(dir, "files")) || !emptyDir(t, filepath.Join(dir, "parts")) {
 		t.Errorf("7: tombstone %v, files/ %d, parts/ %d entries", tomb(t, dir),
 			entries(t, filepath.Join(dir, "files")), entries(t, filepath.Join(dir, "parts")))
