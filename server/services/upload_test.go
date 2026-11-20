@@ -404,6 +404,64 @@ func TestUploadReadMiss(t *testing.T) {
 	}
 }
 
+// Vault is asked only for a path a write could have stored and no delete took
+// back: a clean relative one that is not in deleted. The Vault here has every
+// path, so asking it would be served.
+func TestUploadReadNeverReachesVault(t *testing.T) {
+	const other = "9c5db5752b7c0fedcba9876543210fedcba98765"
+	hasAll := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			http.Redirect(w, r, "http://s3.invalid/copy", http.StatusFound)
+		}
+	}
+	get := func(ws *WebSeeder, p string) *httptest.ResponseRecorder {
+		return serve(ws, httptest.NewRequest(http.MethodGet, "/"+upID+"/"+p, nil)) // no ServeMux: p arrives as sent
+	}
+	for _, state := range []string{"evicted", "live"} {
+		t.Run("unclean path, "+state, func(t *testing.T) {
+			ws, data := upSeeder(t)
+			if state == "live" {
+				upDir(t, data, upID, map[string]string{"Name/a.mkv": "0123456789"})
+			}
+			n := upVault(t, ws, hasAll)
+			for _, p := range []string{
+				"Name/../x",
+				"Name/a/../../" + other + "/x", // .. in the middle
+				"Name/%2e%2e/x",                // decoded before the branch
+				"../" + other + "/Name/a.mkv",  // clean, yet leaves the ID
+				"..",
+				".",
+				"/abs/x", // absolute
+				"Name//x",
+				"Name/./x",
+				"Name/x/",
+				"Name/a%00b", // NUL
+			} {
+				if rec := get(ws, p); rec.Code != 404 || n.Load() != 0 {
+					t.Errorf("GET %s: %d, Vault asked %d times", p, rec.Code, n.Load())
+					n.Store(0)
+				}
+			}
+		})
+	}
+	t.Run("deleted path", func(t *testing.T) {
+		ws, data := upSeeder(t)
+		dir := upDir(t, data, upID, map[string]string{"Name/a.mkv": "0123456789"})
+		mustWrite(t, filepath.Join(dir, "deleted"), "\nName/b.mkv\nName/sub\n")
+		n := upVault(t, ws, hasAll)
+		for _, p := range []string{"Name/b.mkv", "Name/sub/c.mkv"} {
+			if rec := get(ws, p); rec.Code != 404 || n.Load() != 0 {
+				t.Errorf("GET %s: %d, Vault asked %d times", p, rec.Code, n.Load())
+				n.Store(0)
+			}
+		}
+		// The control: a clean path that is neither here nor in deleted.
+		if rec := get(ws, "Name/c.mkv"); rec.Code != http.StatusFound || n.Load() == 0 {
+			t.Errorf("GET Name/c.mkv: %d, Vault asked %d times", rec.Code, n.Load())
+		}
+	})
+}
+
 // upToken signs c with HS256 under secret.
 func upToken(t *testing.T, secret string, c jwt.MapClaims) string {
 	t.Helper()

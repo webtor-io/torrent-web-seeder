@@ -8,7 +8,9 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -156,7 +158,8 @@ func (u *Upload) read(w http.ResponseWriter, r *http.Request, h, p string) {
 // serveFile serves p from the dir, else from Vault, else 404. Local bytes come
 // first, the reverse of a torrent's order: the node's disk is cheaper than
 // S3, and Vault has the files once the dir is evicted. Vault's own reads get
-// the local bytes only.
+// the local bytes only. Vault is asked only for a path a write could have
+// stored (cleanRel) and no delete took back.
 //
 // The dir is touched only once the file is open: touching an evicted or
 // deleted upload would create an orphan <id>.touch.
@@ -195,16 +198,17 @@ func (u *Upload) serveFile(w http.ResponseWriter, r *http.Request, h, p string) 
 		return
 	}
 	// Only on a miss: a deleted upload's files/ is empty. Its copy in Vault
-	// is not served.
-	if gone, err := tombstoned(dir); err != nil {
+	// is not served, nor is a deleted path's: deleted before the seal, it
+	// was never stored there.
+	if lines, err := deletedLines(dir); err != nil {
 		logger.WithError(err).Error("upload read failed")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
-	} else if gone {
+	} else if slices.Contains(lines, "/") || inDeleted(lines, p) {
 		http.NotFound(w, r)
 		return
 	}
-	if u.ws.v != nil && r.Header.Get("X-Role") != "vault" {
+	if u.ws.v != nil && r.Header.Get("X-Role") != "vault" && cleanRel(p) {
 		served, err := u.ws.redirectFromVault(w, r, h, p)
 		if err != nil {
 			logger.WithError(err).Warn("vault redirect failed")
@@ -244,6 +248,14 @@ func lockUpload(dir string) (*os.File, error) {
 		return nil, errUploadGone
 	}
 	return f, nil
+}
+
+// cleanRel answers whether p is a clean relative path: no empty, . or ..
+// segment, no NUL. Every written path is one (validPath); any other would
+// name something else in Vault than it does here.
+func cleanRel(p string) bool {
+	return path.Clean(p) == p && p != "." && !path.IsAbs(p) &&
+		!slices.Contains(strings.Split(p, "/"), "..") && !strings.ContainsRune(p, 0)
 }
 
 // uploadFile is p's path in dir's files/ and whether it stays inside it. A
