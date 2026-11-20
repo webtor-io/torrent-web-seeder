@@ -204,7 +204,7 @@ func TestUploadIndexUnderPartsLock(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir := upDir(t, data, upID, nil)
 	mustWrite(t, filepath.Join(dir, "parts", partName("Name/a", 4<<20)), strings.Repeat("x", 3<<20))
-	tok := writeTok(t, "add", 10<<20)
+	tok := claims("add", 10<<20)
 	entered, hold := make(chan struct{}), make(chan struct{})
 	setHook(t, &walkHook, holdOnce("parts", entered, hold))
 	idx := make(chan *httptest.ResponseRecorder, 1)

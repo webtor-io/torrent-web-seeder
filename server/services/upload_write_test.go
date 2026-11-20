@@ -21,21 +21,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
 	log "github.com/sirupsen/logrus"
 )
 
-// putPart sends PUT /<id>/<p>?offset=&size= with X-Token tok and body.
-func putPart(ws *WebSeeder, id, p, tok string, offset, size int64, body []byte) *httptest.ResponseRecorder {
+// putPart sends PUT /<id>/<p>?offset=&size= with the write claims tok and body.
+func putPart(ws *WebSeeder, id, p string, tok http.Header, offset, size int64, body []byte) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/%s/%s?offset=%d&size=%d", id, p, offset, size), bytes.NewReader(body))
-	req.Header.Set("X-Token", tok)
+	withClaims(req, tok)
 	return serve(ws, req)
-}
-
-// writeTok is a valid write token for upID: up, lim, uid uidA.
-func writeTok(t *testing.T, up string, lim int64) string {
-	t.Helper()
-	return upToken(t, upSecret, claims(up, lim))
 }
 
 // partName is the name in parts/ of the part of p, a file of size bytes.
@@ -98,7 +91,7 @@ func TestUploadWriteCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := filepath.Join(dir, "parts")
-	newTok, addTok := writeTok(t, "new", 10<<20), writeTok(t, "add", 10<<20)
+	newTok, addTok := claims("new", 10<<20), claims("add", 10<<20)
 	put := func(p string, offset, size int64, body string) *httptest.ResponseRecorder {
 		return putPart(ws, upID, p, addTok, offset, size, []byte(body))
 	}
@@ -167,14 +160,14 @@ func TestUploadWriteCodes(t *testing.T) {
 	} {
 		req := httptest.NewRequest(http.MethodPut, c.target, strings.NewReader(c.body))
 		req.ContentLength = c.length
-		req.Header.Set("X-Token", addTok)
+		withClaims(req, addTok)
 		wantReply(t, "16 "+c.name, serve(ws, req), 400, "")
 	}
 	if onDisk(filepath.Join(parts, partName("Name/i", 2))) {
 		t.Error("16: a part of Name/i")
 	}
 
-	wantReply(t, "17", putPart(ws, upID, "Name/k", upToken(t, "other-secret", claims("add", 10<<20)), 0, 1, []byte("x")), 403, "")
+	wantReply(t, "17", putPart(ws, upID, "Name/k", nil, 0, 1, []byte("x")), 403, "")
 
 	if err := os.Remove(filepath.Join(dir, ".lock")); err != nil {
 		t.Fatal(err)
@@ -225,7 +218,7 @@ func TestUploadPathRules(t *testing.T) {
 
 	for _, p := range []string{"Name/a.mkv", "Name/dir/a.mkv", "Name/a%2Fb", "Name/" + seg255, depth(32)} {
 		ws, data := upSeeder(t)
-		wantReply(t, label(p), putPart(ws, upID, p, writeTok(t, "new", 10<<20), 0, 1, []byte("x")), 201, "")
+		wantReply(t, label(p), putPart(ws, upID, p, claims("new", 10<<20), 0, 1, []byte("x")), 201, "")
 		rel, err := url.PathUnescape(p)
 		if err != nil {
 			t.Fatal(err)
@@ -241,7 +234,7 @@ func TestUploadPathRules(t *testing.T) {
 		"Name/" + seg255 + "s", long(1025), depth(33),
 	} {
 		ws, data := upSeeder(t)
-		wantReply(t, label(p), putPart(ws, upID, p, writeTok(t, "new", 10<<20), 0, 1, []byte("x")), 400, "")
+		wantReply(t, label(p), putPart(ws, upID, p, claims("new", 10<<20), 0, 1, []byte("x")), 400, "")
 		if n := entries(t, data); n != 0 {
 			t.Errorf("%s: %d entries in DATA_DIR", label(p), n)
 		}
@@ -269,7 +262,7 @@ func TestUploadCreateOrder(t *testing.T) {
 	setHook(t, &createHook, func(s string) error { steps = append(steps, s); return nil })
 	ws, data := upSeeder(t)
 	dir, _ := GetDir(data, upID)
-	wantReply(t, "new", putPart(ws, upID, "Name/a", writeTok(t, "new", 10<<20), 0, 3, []byte("abc")), 201, "")
+	wantReply(t, "new", putPart(ws, upID, "Name/a", claims("new", 10<<20), 0, 3, []byte("abc")), 201, "")
 	if !slices.Equal(steps, []string{"touch", "dirs", "owner", "lock"}) {
 		t.Errorf("steps %v", steps)
 	}
@@ -290,7 +283,7 @@ func TestUploadCreateOrder(t *testing.T) {
 		return nil
 	}
 	hook := quietLog(t)
-	wantReply(t, "new, lock fails", putPart(ws, upID, "Name/a", writeTok(t, "new", 10<<20), 0, 3, []byte("abc")), 500, "")
+	wantReply(t, "new, lock fails", putPart(ws, upID, "Name/a", claims("new", 10<<20), 0, 3, []byte("abc")), 500, "")
 	wantFailed(t, "new, lock fails", hook, "upload write failed", 1)
 	if b, _ := os.ReadFile(filepath.Join(dir, "owner")); string(b) != uidA {
 		t.Errorf("owner %q", b)
@@ -298,7 +291,7 @@ func TestUploadCreateOrder(t *testing.T) {
 	if onDisk(filepath.Join(dir, ".lock")) {
 		t.Error(".lock after a failed create")
 	}
-	wantReply(t, "add after", putPart(ws, upID, "Name/a", writeTok(t, "add", 10<<20), 0, 3, []byte("abc")), 410, "")
+	wantReply(t, "add after", putPart(ws, upID, "Name/a", claims("add", 10<<20), 0, 3, []byte("abc")), 410, "")
 	if onDisk(filepath.Join(dir, ".lock")) {
 		t.Error(".lock after up=add")
 	}
@@ -311,8 +304,8 @@ func TestUploadOwnerNotOverwritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := claims("new", 10<<20)
-	c["uid"] = uidB
-	wantReply(t, "new as uidB", putPart(ws, upID, "Name/a", upToken(t, upSecret, c), 0, 3, []byte("abc")), 403, "")
+	c.Set("X-Uid", uidB)
+	wantReply(t, "new as uidB", putPart(ws, upID, "Name/a", c, 0, 3, []byte("abc")), 403, "")
 	if b, _ := os.ReadFile(filepath.Join(dir, "owner")); string(b) != uidA {
 		t.Errorf("owner %q", b)
 	}
@@ -326,7 +319,7 @@ func TestUploadGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	past := ageTouch(t, dir)
-	wantReply(t, "no .lock", putPart(ws, upID, "Name/a", writeTok(t, "add", 10<<20), 0, 3, []byte("abc")), 410, "")
+	wantReply(t, "no .lock", putPart(ws, upID, "Name/a", claims("add", 10<<20), 0, 3, []byte("abc")), 410, "")
 	if onDisk(filepath.Join(dir, ".lock")) || entries(t, filepath.Join(dir, "parts")) != 0 {
 		t.Error(".lock or a part after 410")
 	}
@@ -336,7 +329,7 @@ func TestUploadGone(t *testing.T) {
 
 	ws, data = upSeeder(t)
 	dir, _ = GetDir(data, upID)
-	wantReply(t, "no dir", putPart(ws, upID, "Name/a", writeTok(t, "add", 10<<20), 0, 3, []byte("abc")), 410, "")
+	wantReply(t, "no dir", putPart(ws, upID, "Name/a", claims("add", 10<<20), 0, 3, []byte("abc")), 410, "")
 	if onDisk(dir+".touch") || onDisk(dir) {
 		t.Errorf("<id>.touch %v, dir %v", onDisk(dir+".touch"), onDisk(dir))
 	}
@@ -345,7 +338,7 @@ func TestUploadGone(t *testing.T) {
 func TestUploadNoSpace(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir := upDir(t, data, upID, nil)
-	tok := writeTok(t, "add", 10<<20)
+	tok := claims("add", 10<<20)
 	body := bytes.Repeat([]byte("x"), 4096)
 	setHook(t, &copyPart, func(dst io.Writer, src io.Reader) (int64, error) {
 		n, _ := io.CopyN(dst, src, 1000)
@@ -369,7 +362,7 @@ func TestUploadNoSpace(t *testing.T) {
 		}
 		return nil
 	})
-	wantReply(t, "ENOSPC in create", putPart(ws, upID, "Name/a", writeTok(t, "new", 10<<20), 0, 1, []byte("x")), 507, "")
+	wantReply(t, "ENOSPC in create", putPart(ws, upID, "Name/a", claims("new", 10<<20), 0, 1, []byte("x")), 507, "")
 	for name, err := range map[string]error{
 		"fsync":         &os.PathError{Op: "sync", Path: "deleted", Err: syscall.ENOSPC},
 		"one of a wipe": errors.Join(errors.New("zero"), fmt.Errorf("deleted: %w", syscall.ENOSPC)),
@@ -406,7 +399,7 @@ func TestUploadClientAbort(t *testing.T) {
 	hook := quietLog(t)
 	ws, data := upSeeder(t)
 	dir := upDir(t, data, upID, nil)
-	tok := writeTok(t, "add", 10<<20)
+	tok := claims("add", 10<<20)
 	cut := func(p string, gone bool) *httptest.ResponseRecorder {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
@@ -416,7 +409,7 @@ func TestUploadClientAbort(t *testing.T) {
 		}
 		req := httptest.NewRequestWithContext(ctx, http.MethodPut, "/"+upID+"/"+p+"?offset=0&size=6", body)
 		req.ContentLength = 6
-		req.Header.Set("X-Token", tok)
+		withClaims(req, tok)
 		return serve(ws, req)
 	}
 
@@ -458,7 +451,7 @@ func TestUploadLimDowngrade(t *testing.T) {
 		t.Fatalf("reserved %d, %v", sum, err)
 	}
 	mib := bytes.Repeat([]byte("x"), 1<<20)
-	tok20, tok50 := writeTok(t, "add", 20<<20), writeTok(t, "add", 50<<20)
+	tok20, tok50 := claims("add", 20<<20), claims("add", 50<<20)
 	wantReply(t, "new under 20 MiB", putPart(ws, upID, "Name/c", tok20, 0, 1<<20, mib), 413, "size")
 	wantReply(t, "started under 20 MiB", putPart(ws, upID, "Name/b", tok20, 1<<20, 5<<20, mib), 204, "")
 	wantReply(t, "new under 50 MiB", putPart(ws, upID, "Name/c", tok50, 0, 1<<20, mib), 201, "")
@@ -502,7 +495,7 @@ func answers(res chan *httptest.ResponseRecorder, n int, wait time.Duration, hol
 func TestUploadFirstPartsSerialized(t *testing.T) {
 	ws, data := upSeeder(t)
 	upDir(t, data, upID, nil)
-	tok := writeTok(t, "add", 10<<20)
+	tok := claims("add", 10<<20)
 	entered, hold := make(chan struct{}), make(chan struct{})
 	setHook(t, &walkHook, holdOnce("done", entered, hold))
 	body := bytes.Repeat([]byte("x"), 6<<20)
@@ -522,7 +515,7 @@ func TestUploadRenameUnderLock(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir := upDir(t, data, upID, nil)
 	mustWrite(t, filepath.Join(dir, "parts", partName("Name/a", 4<<20)), strings.Repeat("x", 3<<20))
-	tok := writeTok(t, "add", 10<<20)
+	tok := claims("add", 10<<20)
 	entered, hold := make(chan struct{}), make(chan struct{})
 	setHook(t, &walkHook, holdOnce("parts", entered, hold))
 	res := make(chan *httptest.ResponseRecorder, 2)
@@ -543,7 +536,7 @@ func TestUploadParallelFirstFiles(t *testing.T) {
 	entered, hold := make(chan struct{}), make(chan struct{})
 	lockStep := holdOnce("lock", entered, hold)
 	setHook(t, &createHook, func(s string) error { lockStep(s); return nil })
-	newTok := writeTok(t, "new", 10<<20)
+	newTok := claims("new", 10<<20)
 	resA := make(chan *httptest.ResponseRecorder, 1)
 	go func() { resA <- putPart(ws, upID, "Name/a", newTok, 0, 3, []byte("abc")) }()
 	<-entered
@@ -553,14 +546,14 @@ func TestUploadParallelFirstFiles(t *testing.T) {
 	}
 	close(hold)
 	wantReply(t, "A", <-resA, 201, "")
-	wantReply(t, "B, add", putPart(ws, upID, "Name/b", writeTok(t, "add", 10<<20), 0, 3, []byte("abc")), 201, "")
+	wantReply(t, "B, add", putPart(ws, upID, "Name/b", claims("add", 10<<20), 0, 3, []byte("abc")), 201, "")
 }
 
 // A file of 0 bytes is whole at once.
 func TestUploadZeroByteFile(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir, _ := GetDir(data, upID)
-	tok := writeTok(t, "new", 10<<20)
+	tok := claims("new", 10<<20)
 	for _, name := range []string{"first", "again"} {
 		wantReply(t, name, putPart(ws, upID, "Name/empty", tok, 0, 0, nil), 201, "")
 		if n := fileSize(filepath.Join(dir, "files", "Name", "empty")); n != 0 {
@@ -578,7 +571,7 @@ func TestUploadFilesLimitCountsDirs(t *testing.T) {
 	setHook(t, &maxUploadFiles, 4)
 	ws, data := upSeeder(t)
 	dir, _ := GetDir(data, upID)
-	newTok, addTok := writeTok(t, "new", 10<<20), writeTok(t, "add", 10<<20)
+	newTok, addTok := claims("new", 10<<20), claims("add", 10<<20)
 	parts := filepath.Join(dir, "parts")
 	wantReply(t, "1", putPart(ws, upID, "Name/x/y/a", newTok, 0, 0, nil), 201, "") // a, x, x/y: 3
 	wantReply(t, "2", putPart(ws, upID, "Name/x/z/b", addTok, 0, 0, nil), 413, "files")
@@ -624,15 +617,16 @@ func TestUploadFilesLimitCountsDirs(t *testing.T) {
 	}
 }
 
-// delClaims are the service's delete and seal claims for upID: no uid, lim 1.
-func delClaims() jwt.MapClaims {
-	return jwt.MapClaims{"hash": upID, "internal": true, "up": "add", "lim": 1, "exp": time.Now().Add(time.Hour).Unix()}
+// delClaims are the service's delete and seal claims for upID as the proxy
+// passes them on: no uid, lim 1, internal.
+func delClaims() http.Header {
+	return http.Header{"X-Upload-Up": {"add"}, "X-Upload-Lim": {"1"}, "X-Internal": {"true"}}
 }
 
-// send sends method /<upID>/<p> with X-Token tok and no body.
-func send(ws *WebSeeder, method, p, tok string) *httptest.ResponseRecorder {
+// send sends method /<upID>/<p> with the write claims tok and no body.
+func send(ws *WebSeeder, method, p string, tok http.Header) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, "/"+upID+"/"+p, nil)
-	req.Header.Set("X-Token", tok)
+	withClaims(req, tok)
 	return serve(ws, req)
 }
 
@@ -755,7 +749,7 @@ func TestUploadDeleteWhole(t *testing.T) {
 	dir, _ := GetDir(data, upID)
 	files, parts := filepath.Join(dir, "files"), filepath.Join(dir, "parts")
 	n := upVault(t, ws, http.NotFound)
-	newTok, addTok, delTok := writeTok(t, "new", 10<<20), writeTok(t, "add", 10<<20), upToken(t, upSecret, delClaims())
+	newTok, addTok, delTok := claims("new", 10<<20), claims("add", 10<<20), delClaims()
 	del := func(p string) *httptest.ResponseRecorder { return send(ws, http.MethodDelete, p, delTok) }
 
 	wantReply(t, "2 a", putPart(ws, upID, "Name/a", newTok, 0, 3, []byte("abc")), 201, "")
@@ -765,9 +759,9 @@ func TestUploadDeleteWhole(t *testing.T) {
 	// tokens, the browser's, delete files and folders.
 	hook := quietLog(t)
 	internalNew := delClaims()
-	internalNew["up"] = "new"
-	internalNew["uid"] = uidA
-	for name, tok := range map[string]string{"up=add of the owner": addTok, "up=new of the owner": newTok, "up=new of the service": upToken(t, upSecret, internalNew)} {
+	internalNew.Set("X-Upload-Up", "new")
+	internalNew.Set("X-Uid", uidA)
+	for name, tok := range map[string]http.Header{"up=add of the owner": addTok, "up=new of the owner": newTok, "up=new of the service": internalNew} {
 		wantReply(t, "2a "+name, send(ws, http.MethodDelete, "", tok), 403, "")
 		if len(dlines(t, dir)) != 0 || content(filepath.Join(files, "Name", "a")) != "abc" || entries(t, parts) != 1 {
 			t.Errorf("2a %s: deleted %q, Name/a %q, parts/ %d entries", name, dlines(t, dir),
@@ -795,7 +789,7 @@ func TestUploadDeleteWhole(t *testing.T) {
 		t.Errorf("5 new: files/ %d entries, owner %q", entries(t, files), content(filepath.Join(dir, "owner")))
 	}
 	wantReply(t, "5 add", putPart(ws, upID, "Name/c", addTok, 0, 3, []byte("abc")), 410, "")
-	if rec := send(ws, http.MethodGet, "Name/a", ""); rec.Code != 404 {
+	if rec := send(ws, http.MethodGet, "Name/a", nil); rec.Code != 404 {
 		t.Errorf("5 GET: %d", rec.Code)
 	}
 	if rec := getIndex(ws); rec.Code != 404 {
@@ -810,7 +804,7 @@ func TestUploadDeleteWhole(t *testing.T) {
 	if !emptyDir(t, files) || !emptyDir(t, parts) || countLine(t, dir, "/") != 1 {
 		t.Errorf("5a: files/ %d, parts/ %d entries, deleted %q", entries(t, files), entries(t, parts), dlines(t, dir))
 	}
-	if rec := send(ws, http.MethodGet, "Name/left", ""); rec.Code != 404 {
+	if rec := send(ws, http.MethodGet, "Name/left", nil); rec.Code != 404 {
 		t.Errorf("5a GET: %d", rec.Code)
 	}
 
@@ -836,7 +830,7 @@ func TestUploadDeleteFile(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir, _ := GetDir(data, upID)
 	files := filepath.Join(dir, "files")
-	newTok, addTok, delTok := writeTok(t, "new", 10<<20), writeTok(t, "add", 10<<20), upToken(t, upSecret, delClaims())
+	newTok, addTok, delTok := claims("new", 10<<20), claims("add", 10<<20), delClaims()
 	del := func(p string) *httptest.ResponseRecorder { return send(ws, http.MethodDelete, p, delTok) }
 	has := func(l string) bool { return slices.Contains(dlines(t, dir), l) }
 	for _, p := range []string{"Name/a", "Name/dir/z1", "Name/dir/sub/z2", "Name/dir2/y1"} {
@@ -909,7 +903,7 @@ func TestUploadDeleteFolderWaitsForParts(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir := upDir(t, data, upID, map[string]string{"Name/dir/z1": "z"})
 	z1 := filepath.Join(dir, "files", "Name", "dir", "z1")
-	delTok := upToken(t, upSecret, delClaims())
+	delTok := delClaims()
 	rec := whileParts(t, dir, func() *httptest.ResponseRecorder { return send(ws, http.MethodDelete, "Name/dir/", delTok) }, func() {
 		if !onDisk(z1) || len(dlines(t, dir)) != 0 {
 			t.Errorf("while parts/ is held: z1 %v, deleted %q", onDisk(z1), dlines(t, dir))
@@ -924,7 +918,7 @@ func TestUploadDeleteFolderWaitsForParts(t *testing.T) {
 func TestUploadDeleteFolderWalkError(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir, _ := GetDir(data, upID)
-	tok := writeTok(t, "new", 10<<20)
+	tok := claims("new", 10<<20)
 	for _, p := range []string{"Name/dir/z1", "Name/dir/sub/z2"} {
 		wantReply(t, p, putPart(ws, upID, p, tok, 0, 1, []byte("z")), 201, "")
 	}
@@ -941,7 +935,7 @@ func TestUploadDeleteFolderWalkError(t *testing.T) {
 		})
 	})
 	hook := quietLog(t)
-	wantReply(t, "DELETE", send(ws, http.MethodDelete, "Name/dir/", upToken(t, upSecret, delClaims())), 500, "")
+	wantReply(t, "DELETE", send(ws, http.MethodDelete, "Name/dir/", delClaims()), 500, "")
 	wantFailed(t, "DELETE", hook, "upload write failed", 1)
 	if len(dlines(t, dir)) != n0 {
 		t.Errorf("deleted %q", dlines(t, dir))
@@ -1005,9 +999,9 @@ func TestUploadDeleteWholeDuringPart(t *testing.T) {
 	dir, _ := GetDir(data, upID)
 	writing, hold := holdCopy(t)
 	res := make(chan *httptest.ResponseRecorder, 1)
-	go func() { res <- putPart(ws, upID, "Name/a", writeTok(t, "new", 10<<20), 0, 3, []byte("abc")) }()
+	go func() { res <- putPart(ws, upID, "Name/a", claims("new", 10<<20), 0, 3, []byte("abc")) }()
 	<-writing
-	wantReply(t, "DELETE", send(ws, http.MethodDelete, "", upToken(t, upSecret, delClaims())), 204, "")
+	wantReply(t, "DELETE", send(ws, http.MethodDelete, "", delClaims()), 204, "")
 	close(hold)
 	wantReply(t, "PUT", <-res, 410, "")
 	if !emptyDir(t, filepath.Join(dir, "files")) || !emptyDir(t, filepath.Join(dir, "parts")) {
@@ -1022,8 +1016,8 @@ func TestUploadSeal(t *testing.T) {
 	files, parts := filepath.Join(dir, "files"), filepath.Join(dir, "parts")
 	partB := filepath.Join(parts, partName("Name/b", 6))
 	n := upVault(t, ws, http.NotFound)
-	newTok, addTok, delTok := writeTok(t, "new", 10<<20), writeTok(t, "add", 10<<20), upToken(t, upSecret, delClaims())
-	seal := func(tok string) *httptest.ResponseRecorder { return send(ws, http.MethodPut, "", tok) }
+	newTok, addTok, delTok := claims("new", 10<<20), claims("add", 10<<20), delClaims()
+	seal := func(tok http.Header) *httptest.ResponseRecorder { return send(ws, http.MethodPut, "", tok) }
 	open := func(step string) {
 		t.Helper()
 		if frozen(t, dir) || !onDisk(partB) {
@@ -1037,9 +1031,9 @@ func TestUploadSeal(t *testing.T) {
 	// By the service's token only, and by its up=add: the owner's own tokens,
 	// the browser's, seal nothing.
 	internalNew := delClaims()
-	internalNew["up"] = "new"
-	internalNew["uid"] = uidA
-	for name, tok := range map[string]string{"up=new of the owner": newTok, "up=add of the owner": addTok, "up=new of the service": upToken(t, upSecret, internalNew)} {
+	internalNew.Set("X-Upload-Up", "new")
+	internalNew.Set("X-Uid", uidA)
+	for name, tok := range map[string]http.Header{"up=new of the owner": newTok, "up=add of the owner": addTok, "up=new of the service": internalNew} {
 		wantReply(t, "3 "+name, seal(tok), 403, "")
 		open("3 " + name)
 	}
@@ -1050,7 +1044,7 @@ func TestUploadSeal(t *testing.T) {
 		{"body", "", "abc"},
 	} {
 		req := httptest.NewRequest(http.MethodPut, "/"+upID+"/"+c.query, strings.NewReader(c.body))
-		req.Header.Set("X-Token", addTok)
+		withClaims(req, addTok)
 		wantReply(t, "3a "+c.name, serve(ws, req), 400, "")
 		open("3a " + c.name)
 	}
@@ -1086,7 +1080,7 @@ func TestUploadSeal(t *testing.T) {
 		t.Errorf("5: <id>.touch touched: %v", fi.ModTime())
 	}
 
-	if rec := send(ws, http.MethodGet, "Name/a", ""); rec.Code != 200 || rec.Body.String() != "abc" {
+	if rec := send(ws, http.MethodGet, "Name/a", nil); rec.Code != 200 || rec.Body.String() != "abc" {
 		t.Errorf("6 GET: %d %q", rec.Code, rec.Body)
 	}
 	wantIndex(t, "6 index", getIndex(ws), `{"kind":"upload","name":"Name","uids":["`+uidA+`"],"reserved":4,`+
@@ -1103,7 +1097,7 @@ func TestUploadSeal(t *testing.T) {
 
 	wantReply(t, "8 DELETE", send(ws, http.MethodDelete, "", delTok), 204, "")
 	wantReply(t, "8 seal", seal(delTok), 410, "")
-	if rec := send(ws, http.MethodGet, "Name/a", ""); rec.Code != 404 {
+	if rec := send(ws, http.MethodGet, "Name/a", nil); rec.Code != 404 {
 		t.Errorf("8 GET: %d", rec.Code)
 	}
 	wantReply(t, "8 PUT", putPart(ws, upID, "Name/c", addTok, 0, 3, []byte("abc")), 410, "")
@@ -1132,9 +1126,9 @@ func TestUploadSealDuringPart(t *testing.T) {
 	files := filepath.Join(dir, "files")
 	writing, hold := holdCopy(t)
 	res := make(chan *httptest.ResponseRecorder, 1)
-	go func() { res <- putPart(ws, upID, "Name/b", writeTok(t, "add", 10<<20), 0, 3, []byte("abc")) }()
+	go func() { res <- putPart(ws, upID, "Name/b", claims("add", 10<<20), 0, 3, []byte("abc")) }()
 	<-writing
-	wantReply(t, "seal", send(ws, http.MethodPut, "", upToken(t, upSecret, delClaims())), 204, "")
+	wantReply(t, "seal", send(ws, http.MethodPut, "", delClaims()), 204, "")
 	close(hold)
 	wantReply(t, "PUT", <-res, 409, "frozen")
 	if onDisk(filepath.Join(files, "Name", "b")) || entries(t, filepath.Join(dir, "parts")) != 0 || content(filepath.Join(files, "Name", "a")) != "abc" {
@@ -1146,7 +1140,7 @@ func TestUploadSealDuringPart(t *testing.T) {
 func TestUploadSealWaitsForParts(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir := upDir(t, data, upID, map[string]string{"Name/a": "abc"})
-	delTok := upToken(t, upSecret, delClaims())
+	delTok := delClaims()
 	rec := whileParts(t, dir, func() *httptest.ResponseRecorder { return send(ws, http.MethodPut, "", delTok) }, func() {
 		if frozen(t, dir) {
 			t.Error("sealed while parts/ was held")
@@ -1172,7 +1166,7 @@ func TestUploadDeleteFileWaitsForParts(t *testing.T) {
 		ws, data := upSeeder(t)
 		dir := upDir(t, data, upID, map[string]string{"Name/a": "abc"})
 		a := filepath.Join(dir, "files", "Name", "a")
-		delTok := upToken(t, upSecret, delClaims())
+		delTok := delClaims()
 		rec := whileParts(t, dir, func() *httptest.ResponseRecorder { return send(ws, http.MethodDelete, "Name/a", delTok) }, func() {
 			if !onDisk(a) || len(dlines(t, dir)) != 0 {
 				t.Errorf("%q, while parts/ is held: Name/a %v, deleted %q", c.first, onDisk(a), dlines(t, dir))
@@ -1220,7 +1214,7 @@ func TestUploadDeleteZeroesOpenFiles(t *testing.T) {
 	files := filepath.Join(dir, "files")
 	part := filepath.Join(dir, "parts", partName("Name/b", 6))
 	mustWrite(t, part, "abc")
-	delTok := upToken(t, upSecret, delClaims())
+	delTok := delClaims()
 	del := func(p string) *httptest.ResponseRecorder { return send(ws, http.MethodDelete, p, delTok) }
 	fa, fk := openT(t, filepath.Join(files, "Name", "a")), openT(t, filepath.Join(files, "Name", "keep"))
 	fz1, fz2 := openT(t, filepath.Join(files, "Name", "dir", "z1")), openT(t, filepath.Join(files, "Name", "dir", "sub", "z2"))
@@ -1281,7 +1275,7 @@ func TestUploadDeleteSkipsSymlinks(t *testing.T) {
 		}
 	}
 	del := func(p string) *httptest.ResponseRecorder {
-		return send(ws, http.MethodDelete, p, upToken(t, upSecret, delClaims()))
+		return send(ws, http.MethodDelete, p, delClaims())
 	}
 
 	if err := zeroFile(link); !errors.Is(err, syscall.ELOOP) || !onDisk(link) {
@@ -1323,14 +1317,14 @@ func TestUploadDeleteKeepsContentAtPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(d, 0o755) })
-	delTok := upToken(t, upSecret, delClaims())
+	delTok := delClaims()
 	hook := quietLog(t)
 	wantReply(t, "2", send(ws, http.MethodDelete, "Name/dir/z1", delTok), 500, "")
 	wantFailed(t, "2", hook, "upload write failed", 1)
 	if content(z1) != "abc" || !slices.Contains(dlines(t, dir), "Name/dir/z1") {
 		t.Errorf("3: z1 %q, deleted %q", content(z1), dlines(t, dir))
 	}
-	if rec := send(ws, http.MethodGet, "Name/dir/z1", ""); rec.Code != 200 || rec.Body.String() != "abc" {
+	if rec := send(ws, http.MethodGet, "Name/dir/z1", nil); rec.Code != 200 || rec.Body.String() != "abc" {
 		t.Errorf("3 GET: %d %q", rec.Code, rec.Body)
 	}
 	if err := os.Chmod(d, 0o755); err != nil {
@@ -1357,7 +1351,7 @@ func TestUploadDeleteZeroError(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir := upDir(t, data, upID, map[string]string{"Name/dir/sub/z2": "zz", "Name/dir/z1": "abc"})
 	f1 := openT(t, filepath.Join(dir, "files", "Name", "dir", "z1"))
-	delTok := upToken(t, upSecret, delClaims())
+	delTok := delClaims()
 	setHook(t, &zeroFile, failOn("sub/z2")) // the walk meets it first: sub < z1
 	hook := quietLog(t)
 	wantReply(t, "3", send(ws, http.MethodDelete, "Name/dir/", delTok), 500, "")
@@ -1366,7 +1360,7 @@ func TestUploadDeleteZeroError(t *testing.T) {
 		onDisk(filepath.Join(dir, "files", "Name", "dir")) || fdSize(t, f1) != 0 {
 		t.Errorf("4: deleted %q, files/Name/dir %v, z1 %d", l, onDisk(filepath.Join(dir, "files", "Name", "dir")), fdSize(t, f1))
 	}
-	wantReply(t, "5", putPart(ws, upID, "Name/dir/z1", writeTok(t, "add", 10<<20), 0, 3, []byte("abc")), 409, "deleted")
+	wantReply(t, "5", putPart(ws, upID, "Name/dir/z1", claims("add", 10<<20), 0, 3, []byte("abc")), 409, "deleted")
 	zeroFile = zero
 	wantReply(t, "6", send(ws, http.MethodDelete, "Name/dir/", delTok), 204, "")
 
@@ -1390,7 +1384,7 @@ func TestUploadDeletedLimit(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir := upDir(t, data, upID, map[string]string{"Name/a": "abc", "Name/b": "b", "Name/cc": "c", "Name/dir/z1": "z", "Name/dir/z2": "zz"})
 	files := filepath.Join(dir, "files")
-	delTok := upToken(t, upSecret, delClaims())
+	delTok := delClaims()
 	del := func(p string) *httptest.ResponseRecorder { return send(ws, http.MethodDelete, p, delTok) }
 	dsize := func(step string, want int64) {
 		t.Helper()
@@ -1411,7 +1405,7 @@ func TestUploadDeletedLimit(t *testing.T) {
 	if !onDisk(filepath.Join(files, "Name", "dir", "z1")) || !onDisk(filepath.Join(files, "Name", "dir", "z2")) {
 		t.Error("3: a file of Name/dir deleted")
 	}
-	if rec := send(ws, http.MethodGet, "Name/dir/z1", ""); rec.Code != 200 {
+	if rec := send(ws, http.MethodGet, "Name/dir/z1", nil); rec.Code != 200 {
 		t.Errorf("3 GET: %d", rec.Code)
 	}
 	wantReply(t, "4", del("Name/dir/z1"), 413, "deletions")
@@ -1448,9 +1442,9 @@ func TestUploadDeleteFileKeepsDirsCounted(t *testing.T) {
 	ws, data := upSeeder(t)
 	dir, _ := GetDir(data, upID)
 	files := filepath.Join(dir, "files")
-	addTok, delTok := writeTok(t, "add", 10<<20), upToken(t, upSecret, delClaims())
+	addTok, delTok := claims("add", 10<<20), delClaims()
 	del := func(p string) *httptest.ResponseRecorder { return send(ws, http.MethodDelete, p, delTok) }
-	wantReply(t, "1", putPart(ws, upID, "Name/x/y/a", writeTok(t, "new", 10<<20), 0, 0, nil), 201, "") // a, x, x/y: 3
+	wantReply(t, "1", putPart(ws, upID, "Name/x/y/a", claims("new", 10<<20), 0, 0, nil), 201, "") // a, x, x/y: 3
 	wantReply(t, "2", del("Name/x/y/a"), 204, "")
 	if fi, err := os.Stat(filepath.Join(files, "Name", "x", "y")); err != nil || !fi.IsDir() {
 		t.Errorf("2: files/Name/x/y %v %v", fi, err)

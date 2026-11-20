@@ -5,31 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"math"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 	"github.com/webtor-io/torrent-web-seeder/server/services/uploads"
 )
 
-const APISecretFlag = "api-secret"
+const AcceptUserUploadsFlag = "accept-user-uploads"
 
 func RegisterUploadFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
-		cli.StringFlag{
-			Name:   APISecretFlag,
-			Usage:  "secret the API signs tokens with; uploads are accepted only with it",
-			EnvVar: "API_SECRET",
+		cli.BoolFlag{
+			Name: AcceptUserUploadsFlag,
+			Usage: "accept user uploads, with the write claims taken from the headers X-Upload-Up, X-Upload-Lim, " +
+				"X-Internal and X-Uid; only behind a proxy that sets them from a verified token and drops the client's",
+			EnvVar: "ACCEPT_USER_UPLOADS",
 		},
 	)
 }
@@ -45,18 +45,17 @@ func RegisterUploadFlags(f []cli.Flag) []cli.Flag {
 // when the upload is, and whoever uses the dir holds .lock shared, which keeps
 // the cleaner (it takes .lock exclusive, without waiting) off it.
 type Upload struct {
-	ws     *WebSeeder
-	secret []byte
+	ws *WebSeeder
 }
 
-// WithUploads turns the branch on: without the API secret no write token can
-// be checked, and the class goes the torrent way.
-func (s *WebSeeder) WithUploads(secret string) *WebSeeder {
-	if secret == "" {
-		log.Info("uploads: off, API secret is not set")
+// WithUploads turns the branch on when on is set; off, the class goes the
+// torrent way.
+func (s *WebSeeder) WithUploads(on bool) *WebSeeder {
+	if !on {
+		log.Info("uploads: off, ACCEPT_USER_UPLOADS is not set")
 		return s
 	}
-	s.up = &Upload{ws: s, secret: []byte(secret)}
+	s.up = &Upload{ws: s}
 	log.Info("uploads: on")
 	return s
 }
@@ -69,7 +68,7 @@ func (u *Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, h, p string) 
 	case http.MethodOptions:
 		u.options(w)
 	case http.MethodPut, http.MethodDelete:
-		t, err := u.writeToken(r, h)
+		t, err := claimsOf(r, h)
 		if err != nil {
 			log.WithFields(log.Fields{"hash": h, "reason": err.Error()}).Warn("upload write refused")
 			w.WriteHeader(http.StatusForbidden)
@@ -89,7 +88,7 @@ func (u *Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, h, p string) 
 	}
 }
 
-// writeClaims is what a verified write token allows.
+// writeClaims is what the proxy's verified write token allows.
 type writeClaims struct {
 	up       string // "new" or "add"
 	uid      string // checked (40 hex) only for up=new
@@ -97,42 +96,39 @@ type writeClaims struct {
 	internal bool   // the service's own token: no browser holds one
 }
 
-// writeToken checks r's write token (X-Token, set by the proxy from ?token=)
-// for upload h, in the order of the contract: kind 0, HS256 under the API
-// secret, exp required, hash == h, up, lim a whole number > 0, uid for up=new.
-// The error names the failed check and never carries the token.
-func (u *Upload) writeToken(r *http.Request, h string) (*writeClaims, error) {
+// claimsOf reads the write claims of r for upload h from the headers the
+// proxy sets from a token whose signature, expiry and hash it has checked,
+// dropping the client's own: X-Upload-Up (new or add), X-Upload-Lim (a
+// decimal whole number > 0), X-Internal ("true") and X-Uid (40 hex, for
+// up=new). A proxy that checks no tokens sets none of them, and every write
+// is refused. The error names the failed check.
+func claimsOf(r *http.Request, h string) (*writeClaims, error) {
 	if !uploads.Owned(h) {
 		return nil, errors.New("not a kind-0 upload")
 	}
-	tok, err := jwt.Parse(r.Header.Get("X-Token"), func(*jwt.Token) (any, error) { return u.secret, nil },
-		jwt.WithValidMethods([]string{"HS256"}))
-	if err != nil || !tok.Valid { // v4 sets Valid exactly when err is nil
-		return nil, fmt.Errorf("bad token: %v", err)
-	}
-	c := tok.Claims.(jwt.MapClaims)
-	// golang-jwt checks exp only when it is there: a token without one
-	// would never expire.
-	if !c.VerifyExpiresAt(time.Now().Unix(), true) {
-		return nil, errors.New("no exp")
-	}
-	if hash, _ := c["hash"].(string); hash != h {
-		return nil, errors.New("hash mismatch")
-	}
-	up, _ := c["up"].(string)
+	up := header(r, "X-Upload-Up")
 	if up != "new" && up != "add" {
 		return nil, errors.New("bad up")
 	}
-	lim, ok := c["lim"].(float64) // JSON numbers come as float64: exact up to 2^53
-	if !ok || lim <= 0 || lim != math.Trunc(lim) || lim > 1<<53 {
+	s := header(r, "X-Upload-Lim")
+	lim, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || lim <= 0 || strconv.FormatInt(lim, 10) != s {
 		return nil, errors.New("bad lim")
 	}
-	uid, _ := c["uid"].(string)
+	uid := header(r, "X-Uid")
 	if up == "new" && !validUID(uid) {
 		return nil, errors.New("bad uid")
 	}
-	internal, _ := c["internal"].(bool)
-	return &writeClaims{up: up, uid: uid, lim: int64(lim), internal: internal}, nil
+	return &writeClaims{up: up, uid: uid, lim: lim, internal: header(r, "X-Internal") == "true"}, nil
+}
+
+// header is the value of r's header k, "" unless it has exactly one: a second
+// one is a client's value that got past the proxy.
+func header(r *http.Request, k string) string {
+	if v := r.Header.Values(k); len(v) == 1 {
+		return v[0]
+	}
+	return ""
 }
 
 // read answers the torrent queries the way a torrent fully cached here does
