@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v4"
 	log "github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/urfave/cli"
@@ -357,4 +358,121 @@ func TestUploadReadMiss(t *testing.T) {
 			t.Errorf("logged: %v %v", e.Message, e.Data)
 		}
 	}
+}
+
+// upToken signs c with HS256 under secret.
+func upToken(t *testing.T, secret string, c jwt.MapClaims) string {
+	t.Helper()
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// claims are web-ui's write claims for upID: hash, up, lim, uid uidA, exp in 15 min.
+func claims(up string, lim int64) jwt.MapClaims {
+	return jwt.MapClaims{"hash": upID, "up": up, "lim": lim, "uid": uidA, "exp": time.Now().Add(15 * time.Minute).Unix()}
+}
+
+// Any token S2 refuses gets 403 without a body for PUT and DELETE, and nothing
+// on disk.
+func TestUploadWriteToken(t *testing.T) {
+	sign := func(c jwt.MapClaims) string { return upToken(t, upSecret, c) }
+	with := func(k string, v any) jwt.MapClaims {
+		c := claims("new", 10<<20)
+		if v == nil {
+			delete(c, k)
+		} else {
+			c[k] = v
+		}
+		return c
+	}
+	none, _ := jwt.NewWithClaims(jwt.SigningMethodNone, claims("new", 10<<20)).SignedString(jwt.UnsafeAllowNoneSignatureType)
+	hs512, _ := jwt.NewWithClaims(jwt.SigningMethodHS512, claims("new", 10<<20)).SignedString([]byte(upSecret))
+	for _, c := range []struct{ name, id, tok string }{
+		{"no token", upID, ""},
+		{"other hash", upID, sign(with("hash", upID1))},
+		{"alg none", upID, none},
+		{"HS512, same secret", upID, hs512},
+		{"other secret", upID, upToken(t, "other-secret", claims("new", 10<<20))},
+		{"expired", upID, sign(with("exp", time.Now().Add(-time.Second).Unix()))},
+		{"no exp", upID, sign(with("exp", nil))},
+		{"no up", upID, sign(with("up", nil))},
+		{"up rw", upID, sign(with("up", "rw"))},
+		{"no lim", upID, sign(with("lim", nil))},
+		{"lim 0", upID, sign(with("lim", 0))},
+		{"lim 1.5", upID, sign(with("lim", 1.5))},
+		{"lim over 2^53", upID, sign(with("lim", 1<<54))}, // past exact float64 integers
+		{"new without uid", upID, sign(with("uid", nil))},
+		{"new uid of 39 hex", upID, sign(with("uid", uidA[:39]))},
+		{"new uid upper case", upID, sign(with("uid", strings.ToUpper(uidA)))},
+		{"kind 1", upID1, sign(with("hash", upID1))},
+		{"kind f", upIDf, sign(with("hash", upIDf))},
+	} {
+		for _, m := range []string{http.MethodPut, http.MethodDelete} {
+			ws, data := upSeeder(t)
+			req := httptest.NewRequest(m, "/"+c.id+"/Name/a.mkv?offset=0&size=3", strings.NewReader("abc"))
+			req.Header.Set("X-Token", c.tok)
+			if rec := serve(ws, req); rec.Code != 403 || rec.Body.Len() != 0 {
+				t.Errorf("%s %s: %d %q, want 403 without a body", m, c.name, rec.Code, rec.Body)
+			}
+			if ents, _ := os.ReadDir(data); len(ents) != 0 {
+				t.Errorf("%s %s: %d entries on disk after a refusal", m, c.name, len(ents))
+			}
+		}
+	}
+	ws, _ := upSeeder(t) // the valid token gets past S2
+	req := httptest.NewRequest(http.MethodPut, "/"+upID+"/Name/a.mkv?offset=0&size=3", strings.NewReader("abc"))
+	req.Header.Set("X-Token", sign(claims("new", 10<<20)))
+	if rec := serve(ws, req); rec.Code == 403 {
+		t.Fatal("a valid up=new token refused")
+	}
+}
+
+// What S2 passes on: lim of a whole paid cap exactly, and the delete (and
+// seal) token, which has no uid.
+func TestUploadWriteTokenClaims(t *testing.T) {
+	ws, _ := upSeeder(t)
+	for _, c := range []struct {
+		name   string
+		claims jwt.MapClaims
+		want   writeClaims
+	}{
+		{"new, 50 GiB", claims("new", 53687091200), writeClaims{up: "new", uid: uidA, lim: 53687091200}},
+		{"delete", jwt.MapClaims{"hash": upID, "internal": true, "up": "add", "lim": 1, "exp": time.Now().Add(time.Hour).Unix()}, writeClaims{up: "add", lim: 1}},
+	} {
+		req := httptest.NewRequest(http.MethodDelete, "/"+upID+"/", nil)
+		req.Header.Set("X-Token", upToken(t, upSecret, c.claims))
+		got, err := ws.up.writeToken(req, upID)
+		if err != nil || *got != c.want {
+			t.Errorf("%s: %+v, %v; want %+v", c.name, got, err, c.want)
+		}
+	}
+}
+
+// A forged X-Info-Hash with the class's prefix and a token for it is no
+// upload: it goes the torrent way and writes nothing.
+func TestUploadForgedHashNotBranch(t *testing.T) {
+	const forged = "9c5db5752b7c/../x"
+	ws, data := upSeeder(t)
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	flags.String(DataDirFlag, data, "")
+	ws.tm, ws.fcm = storeMap(notStored), NewFileCacheMap(cli.NewContext(nil, flags, nil))
+	c := claims("new", 10<<20)
+	c["hash"] = forged
+	req := httptest.NewRequest(http.MethodPut, "/x?offset=0&size=3", strings.NewReader("abc"))
+	req.Header.Set("X-Info-Hash", forged)
+	req.Header.Set("X-Token", upToken(t, upSecret, c))
+	if rec := serve(ws, req); rec.Code != 404 {
+		t.Errorf("PUT: %d %q, want the torrent path's 404", rec.Code, rec.Body)
+	}
+	_ = filepath.WalkDir(data, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			t.Error(err)
+		} else if n := d.Name(); n == "x" || n == "files" || n == "owner" {
+			t.Errorf("%s on disk", p)
+		}
+		return nil
+	})
 }

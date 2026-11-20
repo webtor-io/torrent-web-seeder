@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,8 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/golang-jwt/jwt/v4"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	"github.com/webtor-io/torrent-web-seeder/server/services/uploads"
 )
 
 const APISecretFlag = "api-secret"
@@ -59,9 +62,60 @@ func (u *Upload) ServeHTTP(w http.ResponseWriter, r *http.Request, h, p string) 
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		u.read(w, r, h, p)
+	case http.MethodPut, http.MethodDelete:
+		if _, err := u.writeToken(r, h); err != nil {
+			log.WithFields(log.Fields{"hash": h, "reason": err.Error()}).Warn("upload write refused")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// writeClaims is what a verified write token allows.
+type writeClaims struct {
+	up  string // "new" or "add"
+	uid string // checked (40 hex) only for up=new
+	lim int64  // bytes the ID may hold, > 0
+}
+
+// writeToken checks r's write token (X-Token, set by the proxy from ?token=)
+// for upload h, in the order of the contract: kind 0, HS256 under the API
+// secret, exp required, hash == h, up, lim a whole number > 0, uid for up=new.
+// The error names the failed check and never carries the token.
+func (u *Upload) writeToken(r *http.Request, h string) (*writeClaims, error) {
+	if !uploads.Owned(h) {
+		return nil, errors.New("not a kind-0 upload")
+	}
+	tok, err := jwt.Parse(r.Header.Get("X-Token"), func(*jwt.Token) (any, error) { return u.secret, nil },
+		jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil || !tok.Valid { // v4 sets Valid exactly when err is nil
+		return nil, fmt.Errorf("bad token: %v", err)
+	}
+	c := tok.Claims.(jwt.MapClaims)
+	// golang-jwt checks exp only when it is there: a token without one
+	// would never expire.
+	if !c.VerifyExpiresAt(time.Now().Unix(), true) {
+		return nil, errors.New("no exp")
+	}
+	if hash, _ := c["hash"].(string); hash != h {
+		return nil, errors.New("hash mismatch")
+	}
+	up, _ := c["up"].(string)
+	if up != "new" && up != "add" {
+		return nil, errors.New("bad up")
+	}
+	lim, ok := c["lim"].(float64) // JSON numbers come as float64: exact up to 2^53
+	if !ok || lim <= 0 || lim != math.Trunc(lim) || lim > 1<<53 {
+		return nil, errors.New("bad lim")
+	}
+	uid, _ := c["uid"].(string)
+	if up == "new" && !validUID(uid) {
+		return nil, errors.New("bad uid")
+	}
+	return &writeClaims{up: up, uid: uid, lim: int64(lim)}, nil
 }
 
 // read answers the torrent queries the way a torrent fully cached here does
