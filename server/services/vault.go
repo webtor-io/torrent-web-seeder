@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/pkg/errors"
@@ -59,9 +61,10 @@ func NewVault(c *cli.Context, cl *http.Client) *Vault {
 	}
 }
 
-// FileURL returns the per-file webseed URL.
+// FileURL returns the per-file webseed URL. The path is escaped: a name with
+// '#', '?' or '%' put in as is would ask Vault for another path or none.
 func (s *Vault) FileURL(hash, path string) string {
-	return fmt.Sprintf("http://%s:%d/webseed/%s/%s", s.host, s.port, hash, path)
+	return (&url.URL{Scheme: "http", Host: fmt.Sprintf("%s:%d", s.host, s.port), Path: "/webseed/" + hash + "/" + path}).String()
 }
 
 func (s *Vault) getWebseedURL(ctx context.Context, hash string) (string, error) {
@@ -122,4 +125,45 @@ func (s *Vault) HasFile(ctx context.Context, hash, path string) (bool, error) {
 	return s.fileCache.Get(hash+"/"+path, func() (bool, error) {
 		return s.hasFile(ctx, hash, path)
 	})
+}
+
+// VaultFile is a stored file of a resource; Path starts with "/".
+type VaultFile struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// VaultListing is what Vault keeps of a resource: its owners and its stored
+// files.
+type VaultListing struct {
+	UIDs  []string    `json:"uids"`
+	Files []VaultFile `json:"files"`
+}
+
+// ListFiles lists resource id as Vault stores it: nil when it is not stored
+// (404). Not cached: the manifest it serves is read uncached too.
+func (s *Vault) ListFiles(ctx context.Context, id string) (*VaultListing, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s:%d/resource/%s/files", s.host, s.port, id), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.cl.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(resp.Body)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var l VaultListing
+		if err := json.NewDecoder(resp.Body).Decode(&l); err != nil {
+			return nil, err
+		}
+		return &l, nil
+	case http.StatusNotFound:
+		return nil, nil
+	default:
+		return nil, errors.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
 }
