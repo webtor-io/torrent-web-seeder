@@ -2,7 +2,6 @@ package services
 
 import (
 	"regexp"
-	"strings"
 
 	"github.com/anacrolix/torrent"
 	"github.com/prometheus/client_golang/prometheus"
@@ -17,28 +16,31 @@ import (
 // four times weighs as much as one it asked once.
 //
 // A class says what the viewer can do:
-//   - unregistered: the tracker does not know the torrent (deleted, replaced,
-//     never there). Nothing, but another torrent.
-//   - key: it does not know the passkey (changed or revoked). A fresh .torrent.
-//   - client: it does not let this client in (a client whitelist). Nothing
+//   - unregistered: the tracker does not know the torrent. Nothing, but another
+//     torrent.
+//   - key: it does not know the passkey or the user (changed, revoked). A fresh
+//     .torrent.
+//   - client: it does not let this client, or this server's IP, in. Nothing
 //     here: their usual client for that tracker.
-//   - account: it knows the user and refuses them (ratio, privileges, ban, IP
-//     limit). Sort it out on the tracker.
+//   - account: it knows the user and refuses them (ratio, limits, ban). Sort it
+//     out on the tracker.
 //   - other: no rule matched. Its share says how far the others can be read.
 //
-// The rules are tried in that order. A text naming the torrent or the key is
-// about that, whatever else it says; one naming the client is about the client
-// even with "banned" or "account" in it, which on their own mean the user.
+// The classes and rules are magnet2torrent's (server/refusal.go), which
+// classifies the refusal of a magnet's key on upload for the API's reason:
+// one tracker text gets one class in both. Change them together. The rules
+// are tried in order: "torrent not found for this passkey" is about the
+// torrent, "banned client" about the client.
 var trackerRefusalClasses = []string{"unregistered", "key", "client", "account", "other"}
 
 var trackerRefusalRules = []struct {
 	class string
 	re    *regexp.Regexp
 }{
-	{"unregistered", regexp.MustCompile(`unregistered|not registered|torrent not found|unknown torrent|torrent does not exist|torrent doesn't exist|deleted|trumped`)},
-	{"key", regexp.MustCompile(`pass ?key|auth ?key|torrent_pass|invalid key|unknown key`)},
-	{"client", regexp.MustCompile(`client|white ?-?list|user ?-?agent|peer ?_?id`)},
-	{"account", regexp.MustCompile(`account|privilege|ratio|leech|disabled|banned|suspend|warned|parked|too many|\bips?\b`)},
+	{"unregistered", regexp.MustCompile(`(?i)unregistered|not registered|torrent not found|unknown torrent|info_?hash not found|torrent does not exist`)},
+	{"key", regexp.MustCompile(`(?i)pass ?key|auth ?key|torrent ?pass|user not found|unknown user|invalid key|invalid user`)},
+	{"client", regexp.MustCompile(`(?i)client|white ?list|black ?list|\bip\b`)},
+	{"account", regexp.MustCompile(`(?i)account|ratio|limit|disabled|suspended|banned|warned|not allowed to download|leech|slots?`)},
 }
 
 var (
@@ -62,7 +64,7 @@ func init() {
 
 // trackerRefusalClass is the class of the refusal err, by its text.
 func trackerRefusalClass(err error) string {
-	s := strings.ToLower(err.Error())
+	s := err.Error()
 	for _, r := range trackerRefusalRules {
 		if r.re.MatchString(s) {
 			return r.class

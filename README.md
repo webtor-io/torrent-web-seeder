@@ -440,7 +440,7 @@ Prometheus metrics exported on `:8083/metrics`:
 | `torrent_web_seeder_half_open_connections` | Gauge | Pending peer connections, all clients of the pod |
 | `torrent_web_seeder_private_record_lookups_total` | Counter | Private record lookups answered by torrent-store (cache hits not counted), by `outcome`: `ok`, `missing`, `unavailable`, `bad`, `disabled` |
 | `torrent_web_seeder_private_store_tracker_fallback_total` | Counter | Requests for a private torrent served with the stored trackers without `--private-access-enforce`, by the `reason` enforce would have refused with |
-| `torrent_web_seeder_private_tracker_refusals_total` | Counter | Runs of refusals by a private torrent's HTTP tracker (one per run, however many announces it took), by what the failure reason says: `unregistered`, `key`, `client` (client not allowed), `account`, `other` (no rule matched). The text itself is not logged |
+| `torrent_web_seeder_private_tracker_refusals_total` | Counter | Runs of refusals by a private torrent's HTTP tracker (one per run, however many announces it took), by what the failure reason says: `unregistered`, `key`, `client` (this client or IP not let in), `account`, `other` (no rule matched); the classes and rules are magnet2torrent's. The text itself is not logged |
 | `torrent_web_seeder_private_enforce` | Gauge | 1 with `--private-access-enforce`, 0 without |
 | `torrent_web_seeder_account_clients` | Gauge | Account clients the pod holds |
 | `torrent_web_seeder_account_clients_refused_total` | Counter | Requests of a new account answered `busy`: the pod holds as many account clients as it may |

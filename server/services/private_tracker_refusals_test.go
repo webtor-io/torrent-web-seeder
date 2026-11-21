@@ -17,29 +17,28 @@ func refusal(reason string) error {
 
 func TestTrackerRefusalClass(t *testing.T) {
 	for _, c := range []struct{ reason, want string }{
+		// magnet2torrent's TestClassifyRefusal, which these rules must agree with.
 		{"Unregistered torrent", "unregistered"},
 		{"Torrent not registered with this tracker", "unregistered"},
-		{"torrent not found", "unregistered"},
-		{"This torrent has been deleted", "unregistered"},
-		{"Invalid passkey (<redacted>)", "key"},
-		{"Unknown passkey, re-download the .torrent", "key"},
-		{"invalid authkey", "key"},
-		{"Invalid passkey or client", "key"},
+		{"Torrent not found for this passkey", "unregistered"},
+		{"Invalid passkey", "key"},
+		{"passkey not found", "key"},
+		{"User not found", "key"},
+		{"Invalid passkey for this torrent", "key"},
 		{"Your client is not on the whitelist", "client"},
-		{"Client is banned", "client"},
-		{"Unrecognized client", "client"},
-		{"Banned user agent", "client"},
-		{"Your client is not allowed on this account", "client"},
+		{"Banned client", "client"},
+		{"Your IP is not allowed", "client"},
 		{"Your account is disabled", "account"},
-		{"Your downloading privileges have been revoked", "account"},
-		{"Ratio too low", "account"},
-		{"You are banned", "account"},
-		{"Too many IPs", "account"},
-		{"Leeching disabled", "account"},
+		{"Your ratio is too low", "account"},
+		{"You have reached your download limit", "account"},
+		{"You are not allowed to download (warned)", "account"},
 		{"Tracker is down for maintenance", "other"},
-		// Not an IP limit: "ip" only as a word.
-		{"Membership expired, see the shipping page", "other"},
 		{"", "other"},
+		// And as the library reports them here.
+		{"Invalid passkey (<redacted>)", "key"},
+		{"Your client is not allowed on this account", "client"},
+		// "ip" only as a word.
+		{"Membership expired, see the shipping page", "other"},
 	} {
 		if got := trackerRefusalClass(refusal(c.reason)); got != c.want {
 			t.Errorf("%q: class %q, want %q", c.reason, got, c.want)
