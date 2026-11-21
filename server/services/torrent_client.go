@@ -567,6 +567,7 @@ func (s *TorrentClient) get() (*torrent.Client, error) {
 	}
 	cfg.Callbacks.PeerConnAdded = append(cfg.Callbacks.PeerConnAdded, countPrivatePeerConn)
 	cfg.Callbacks.ReceivedUsefulData = append(cfg.Callbacks.ReceivedUsefulData, countPrivateUsefulData)
+	cfg.Callbacks.PrivateTrackerRefused = append(cfg.Callbacks.PrivateTrackerRefused, countPrivateTrackerRefusal)
 	cfg.HTTPDialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		promDialAttempts.WithLabelValues("http").Inc()
 		d := net.Dialer{}
