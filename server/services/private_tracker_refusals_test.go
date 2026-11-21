@@ -36,6 +36,8 @@ func TestTrackerRefusalClass(t *testing.T) {
 		{"", "other"},
 		// And as the library reports them here.
 		{"Invalid passkey (<redacted>)", "key"},
+		// The order: the key before the client, the client before the account.
+		{"Invalid passkey or client", "key"},
 		{"Your client is not allowed on this account", "client"},
 		// "ip" only as a word.
 		{"Membership expired, see the shipping page", "other"},
