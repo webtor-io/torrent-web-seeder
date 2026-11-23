@@ -26,7 +26,7 @@ func TestPrivate_NoUidOrKeyInLogsOrMetrics(t *testing.T) {
 	log.SetLevel(log.TraceLevel)
 	defer log.SetLevel(prevLevel)
 	setVar(t, &recordRefreshInterval, 100*time.Millisecond)
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.trk.Refuse(keyA)
 	// D's torrent leaves by its lease running out, the most common way out.
 	const uidD, keyD = "4567890abcdef0123456789abcdef0123456789a", "000000000000000000000000000000dd"

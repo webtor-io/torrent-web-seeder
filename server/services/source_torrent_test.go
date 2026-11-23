@@ -169,7 +169,7 @@ func TestRenderTorrentIndex_PrivateFromMetaInfo(t *testing.T) {
 	tc := sourceClient(t)
 	torrentsDir := t.TempDir()
 	priv := sourceFixture(t, torrentsDir, "priv", true)
-	tm := NewTorrentMap(tc, nil, &FileStoreMap{p: torrentsDir}).WithPrivate(nil, true)
+	tm := NewTorrentMap(tc, nil, &FileStoreMap{p: torrentsDir}).WithPrivate(nil)
 	srv := httptest.NewServer(&WebSeeder{tm: tm})
 	t.Cleanup(srv.Close)
 

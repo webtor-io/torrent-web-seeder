@@ -236,7 +236,7 @@ type testRecord struct{ uid, key string }
 
 // privateEnv: a private torrent (stored copy announcing keyStored) and a public one in
 // storeFake; a TorrentMap over a loopback TorrentClient with trackers on
-// (trackerTestConfig, allowLocalNetworks, siblings), WithPrivate(records, enforce).
+// (trackerTestConfig, allowLocalNetworks, siblings), WithPrivate(records).
 type privateEnv struct {
 	tm    *TorrentMap
 	store *storeFake
@@ -247,7 +247,7 @@ type privateEnv struct {
 	dir   string
 }
 
-func newPrivateEnv(t *testing.T, enforce bool) *privateEnv {
+func newPrivateEnv(t *testing.T) *privateEnv {
 	t.Helper()
 	trk := newFakeTracker(t)
 	data, mi := privatePayload(t, trk.URL(keyStored))
@@ -272,7 +272,7 @@ func newPrivateEnv(t *testing.T, enforce bool) *privateEnv {
 		allowLocalNetworks: true,
 	}}
 	env.tm = NewTorrentMap(tc, NewTorrentStoreMap(env.store.store()), &FileStoreMap{}).
-		WithPrivate(NewPrivateRecords(env.store.store()), enforce)
+		WithPrivate(NewPrivateRecords(env.store.store()))
 	t.Cleanup(func() {
 		var cls []*torrent.Client
 		env.tm.mux.Lock()

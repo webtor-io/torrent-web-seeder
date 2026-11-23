@@ -31,7 +31,7 @@ func statForUser(t *testing.T, st *Stat, h, uid, path string) *pb.StatReply {
 // Each account sees its own torrent: its tracker's refusal and its own peer_id and
 // port; a viewer without a loaded pair sees cold frames.
 func TestStat_PerUser(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.trk.Refuse(keyA)
 	env.setRecords(testRecord{uidA, keyA}, testRecord{uidB, keyB})
 	torA, _, _ := env.tm.Get(context.Background(), env.h, uidA)
