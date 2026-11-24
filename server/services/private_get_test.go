@@ -234,3 +234,20 @@ func TestGet_ConcurrentFirstRequestsTrackOnce(t *testing.T) {
 		t.Fatalf("active torrents +%v, accounts %d, want +1 and 1", d, len(env.tm.accounts))
 	}
 }
+
+// A seeder without --torrent-store-host has no records (nil): a private
+// torrent is refused private_disabled even for a valid uid that holds a
+// record, and nothing is loaded.
+func TestGet_NoRecordsRefusesPrivateDisabled(t *testing.T) {
+	env := newPrivateEnv(t)
+	env.setRecords(testRecord{uidA, keyA})
+	env.tm.WithPrivate(nil)
+	_, _, err := env.tm.Get(context.Background(), env.h, uidA)
+	var ref *seederRefusal
+	if !errors.As(err, &ref) || ref.status != 403 || ref.reason != reasonPrivateDisabled {
+		t.Fatalf("err = %v, want 403 %s", err, reasonPrivateDisabled)
+	}
+	if n := len(env.defaultClient(t).Torrents()) + env.accountTorrents(); n != 0 {
+		t.Fatalf("%d torrents loaded after a refusal, want 0", n)
+	}
+}
