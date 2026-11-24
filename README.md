@@ -95,10 +95,8 @@ File and warm-up requests for a private torrent can be refused:
 | 503 | `busy` | the pod holds as many account clients as it may; `Retry-After: 5` |
 | 503 | `store_unavailable` | torrent-store failed to answer; `Retry-After: 5` |
 
-A malformed `X-Uid` and the 503s are answered in every mode; the other 403s
-only with `--private-access-enforce`. Without it (the default) such a request
-is served as before, from the default client with the stored trackers, and
-`torrent_web_seeder_private_store_tracker_fallback_total{reason}` counts it.
+Every refusal is answered: a refused private torrent is never served from the
+default client with the stored trackers.
 
 The file listing (`/<info-hash>/`) of a private torrent is built from the
 stored metainfo, without joining the swarm. Its `source.torrent` answers 403
@@ -291,7 +289,6 @@ All configuration via CLI flags and environment variables.
 | `--torrent-store-host` | `TORRENT_STORE_SERVICE_HOST` | — | Remote torrent-store gRPC host |
 | `--torrent-store-port` | `TORRENT_STORE_SERVICE_PORT` | `50051` | Remote torrent-store gRPC port |
 | `--max-readahead` | `MAX_READAHEAD` | `20MB` | Read-ahead buffer size |
-| `--private-access-enforce` | `PRIVATE_ACCESS_ENFORCE` | `false` | Refuse a private torrent to a viewer without a record of their own; off: serve it with the stored trackers and count it (see [Private torrents](#private-torrents)) |
 
 - `--reader-linger` / `READER_LINGER` (default `90s`) — after a file request
   ends, keep the pieces of the reader's window `[pos, pos+max-readahead)`
@@ -439,9 +436,7 @@ Prometheus metrics exported on `:8083/metrics`:
 | `torrent_web_seeder_established_connections` | Gauge | Active peer connections, all clients of the pod |
 | `torrent_web_seeder_half_open_connections` | Gauge | Pending peer connections, all clients of the pod |
 | `torrent_web_seeder_private_record_lookups_total` | Counter | Private record lookups answered by torrent-store (cache hits not counted), by `outcome`: `ok`, `missing`, `unavailable`, `bad`, `disabled` |
-| `torrent_web_seeder_private_store_tracker_fallback_total` | Counter | Requests for a private torrent served with the stored trackers without `--private-access-enforce`, by the `reason` enforce would have refused with |
 | `torrent_web_seeder_private_tracker_refusals_total` | Counter | Runs of refusals by a private torrent's HTTP tracker (one per run, however many announces it took), by what the failure reason says: `unregistered`, `key`, `client` (this client or IP not let in), `account`, `other` (no rule matched); the classes and rules are magnet2torrent's. The text itself is not logged |
-| `torrent_web_seeder_private_enforce` | Gauge | 1 with `--private-access-enforce`, 0 without |
 | `torrent_web_seeder_account_clients` | Gauge | Account clients the pod holds |
 | `torrent_web_seeder_account_clients_refused_total` | Counter | Requests of a new account answered `busy`: the pod holds as many account clients as it may |
 | `torrent_web_seeder_shared_torrents` | Gauge | Torrents open in two or more clients of the pod at once |

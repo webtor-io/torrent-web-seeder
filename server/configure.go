@@ -27,7 +27,6 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterLingerFlags(app.Flags)
 	app.Flags = s.RegisterCacheEventsFlags(app.Flags)
 	app.Flags = s.RegisterDebugStatusFlags(app.Flags)
-	app.Flags = s.RegisterPrivateFlags(app.Flags)
 	// app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
 	configureDiagnose(app)
@@ -75,7 +74,7 @@ func run(c *cli.Context) error {
 
 	// Setting TorrentMap
 	torrentMap := s.NewTorrentMap(torrentClient, torrentStoreMap, fileStoreMap).
-		WithPrivate(privateRecords(c, torrentStore), c.Bool(s.PrivateAccessEnforceFlag))
+		WithPrivate(privateRecords(c, torrentStore))
 	// Deferred here, so it runs after web.Close drains the requests and before
 	// torrentClient.Close: the accounts' stopped announces get 8 s.
 	defer torrentMap.CloseAccounts(8 * time.Second)
@@ -161,8 +160,7 @@ func run(c *cli.Context) error {
 // fails every lookup (store_unavailable).
 func privateRecords(c *cli.Context, store *s.TorrentStore) *s.PrivateRecords {
 	if c.String(s.TorrentStoreHostFlag) == "" {
-		log.Info("no torrent-store host: private torrents have no records, " +
-			"observe loads them with their stored trackers and enforce refuses them (private_disabled)")
+		log.Info("no torrent-store host: private torrents have no records and are refused (private_disabled)")
 		return nil
 	}
 	return s.NewPrivateRecords(store)
