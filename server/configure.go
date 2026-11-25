@@ -91,9 +91,6 @@ func run(c *cli.Context) error {
 	// Setting StatWeb
 	statWeb := s.NewStatWeb(stat)
 
-	// Setting Warmup
-	warmup := s.NewWarmup(torrentMap)
-
 	// Setting FileCacheMap
 	fileCacheMap := s.NewFileCacheMap(c)
 
@@ -106,6 +103,7 @@ func run(c *cli.Context) error {
 		return errors.Wrap(err, "failed to parse max readahead flag")
 	}
 	linger := s.NewLinger(c, int64(maxReadahead))
+	warmup := s.NewWarmup(torrentMap, linger)
 	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, torrentFileCountMap, touchMap, statWeb, warmup, vault, cl, int64(maxReadahead), linger, c.Duration(s.StreamStallTimeoutFlag))
 
 	// Setting Web

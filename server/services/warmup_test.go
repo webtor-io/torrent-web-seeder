@@ -310,7 +310,7 @@ func TestWarmupReportsUnverifiedBytes(t *testing.T) {
 	}
 	_ = tf.Close()
 	tm := NewTorrentMap(tc, nil, &FileStoreMap{p: torrentsDir})
-	wu := NewWarmup(tm)
+	wu := NewWarmup(tm, nil)
 	logger := log.New()
 	logger.SetOutput(io.Discard)
 	srv := httptest.NewServer((&logrusmiddleware.Middleware{Logger: logger}).Handler(

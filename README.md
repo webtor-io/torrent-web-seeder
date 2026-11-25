@@ -290,16 +290,18 @@ All configuration via CLI flags and environment variables.
 | `--torrent-store-port` | `TORRENT_STORE_SERVICE_PORT` | `50051` | Remote torrent-store gRPC port |
 | `--max-readahead` | `MAX_READAHEAD` | `20MB` | Read-ahead buffer size |
 
-- `--reader-linger` / `READER_LINGER` (default `90s`) — after a file request
-  ends, keep the pieces of the reader's window `[pos, pos+max-readahead)`
-  at Normal priority this long, then release the ones still at Normal and
-  still incomplete. anacrolix derives piece priorities from readers that are
-  actively reading (an idle reader wants nothing), so a client disconnect
-  otherwise abandons the piece at once, and a client whose idle timeout is
-  shorter than the swarm's time-to-first-byte (download managers: 30 s)
-  retries the same offset forever. Pieces at a higher explicit priority
-  (warmup's High) are left alone. Bounded to 512 windows per pod; `0`
-  disables.
+- `--reader-linger` / `READER_LINGER` (default `90s`) — when a file request
+  ends, the incomplete pieces of the reader's window
+  `[pos, pos+max-readahead)` are held at Normal priority this long. An open
+  reader wants its window, but closing it drops the window at once, so a
+  client disconnect would abandon the piece, and a client whose idle timeout
+  is shorter than the swarm's time-to-first-byte (download managers: 30 s)
+  would retry the same offset forever. Normal sits below any open reader's
+  priority, so a window left behind by a seek does not compete with the new
+  position. Holds are counted per piece: a piece goes back to None when its
+  last hold ends, complete or not, and warmup's High is never lowered. A
+  window whose pieces are all complete holds nothing. Bounded to 512 windows
+  per pod; `0` disables.
 
 - Warmup (`?warmup=true`, optional `Range`) takes a file or a directory;
   a directory is warmed as its files concatenated in torrent order, which
@@ -445,6 +447,8 @@ Prometheus metrics exported on `:8083/metrics`:
 | `torrent_web_seeder_time_to_first_peer_ms` | Histogram | Latency to first peer connection |
 | `torrent_web_seeder_time_to_first_byte_ms` | Histogram | Latency to first downloaded byte |
 | `torrent_web_seeder_stall_*_seconds_total` | Counter | Stall detection (discovery/idle/download) |
+| `torrent_web_seeder_linger_windows` | Gauge | Reader windows held past their request (`--reader-linger`) |
+| `torrent_web_seeder_linger_rejected_total` | Counter | Windows with incomplete pieces dropped because the pod already held 512 |
 
 ## License
 

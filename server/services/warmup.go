@@ -21,11 +21,12 @@ import (
 const warmupTimeout = 30 * time.Minute
 
 type Warmup struct {
-	tm *TorrentMap
+	tm     *TorrentMap
+	linger *Linger // counts warmup's High so a lingering window never lowers it
 }
 
-func NewWarmup(tm *TorrentMap) *Warmup {
-	return &Warmup{tm: tm}
+func NewWarmup(tm *TorrentMap, l *Linger) *Warmup {
+	return &Warmup{tm: tm, linger: l}
 }
 
 // Serve handles `?warmup` SSE requests. The path names a file or a
@@ -113,9 +114,7 @@ func (s *Warmup) Serve(w http.ResponseWriter, r *http.Request, h string, p strin
 	// max across all sources, so this won't downgrade pieces a concurrent
 	// reader has already raised to PiecePriorityNow.
 	pieces := target.pieces(pieceLen, rangeStart, rangeEnd)
-	for _, i := range pieces {
-		t.Piece(i).SetPriority(torrent.PiecePriorityHigh)
-	}
+	s.warm(t, pieces)
 	// Once: for a v2 or hybrid torrent a piece's length walks the file tree.
 	span := pieceSpan(pieces, func(i int) int64 { return t.Piece(i).Info().Length() })
 
@@ -220,6 +219,15 @@ func (wt *warmTarget) each(start, end int64, fn func(s warmSegment, fileStart, f
 			fileEnd = s.n - 1
 		}
 		fn(s, fileStart, fileEnd)
+	}
+}
+
+// warm raises pieces to High for good. The linger counts them first, so a
+// window it releases later leaves them at High (linger.go).
+func (s *Warmup) warm(t *torrent.Torrent, pieces []int) {
+	s.linger.pin(torrentPieces{t}, pieces)
+	for _, i := range pieces {
+		t.Piece(i).SetPriority(torrent.PiecePriorityHigh)
 	}
 }
 
