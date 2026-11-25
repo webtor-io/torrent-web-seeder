@@ -11,12 +11,15 @@ import (
 
 // chokeRedial is when a stalled torrent reconnects the peers choking it.
 //
-// A peer that does not upload to us is choked by many clients for as long as
-// the connection lives, and a new connection gets data at once. On 2026-09-25
+// Many clients keep choking a connection that uploads nothing to them for as
+// long as it lives, and a new connection gets data at once. On 2026-09-25
 // a torrent with one peer got 7 s of data on a fresh connection and then
 // nothing for 13+ minutes; every range not fetched in those seconds hung,
 // while another pod's fresh connection to the same peer was served
-// instantly. The seeder never uploads, so reconnecting is the only way back.
+// instantly. The seeder does upload (it runs with --seed and without
+// --no-upload), but only pieces a peer lacks; a peer that already has what
+// we have, such as a seed, gets nothing to reciprocate, so for it
+// reconnecting is the only way back.
 type chokeRedial struct {
 	// How often the watcher looks.
 	tick time.Duration
