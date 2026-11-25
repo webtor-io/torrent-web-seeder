@@ -297,10 +297,11 @@ func waitForPeerPieces(t *testing.T, tor *torrent.Torrent, wantPieces int) {
 	}
 }
 
-// blockReaderOn opens a reader blocked on piece, which no peer has: a
-// reader has priorities only while in Read (reader.piecesUncached), and
-// this one cannot finish. stop cancels the read and closes the reader,
-// which puts the piece's priority back (Torrent.deleteReader).
+// blockReaderOn opens a reader blocked on piece, which no peer has: a new
+// or Seek-moved reader wants nothing until it Reads (reader.piecesUncached),
+// and this Read cannot finish. Cancelling the Read alone would keep the
+// window wanted, so stop also closes the reader, which puts the piece's
+// priority back (Torrent.deleteReader).
 func blockReaderOn(t *testing.T, tor *torrent.Torrent, piece int) (stop func()) {
 	t.Helper()
 	r := tor.NewReader()
