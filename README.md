@@ -293,8 +293,8 @@ All configuration via CLI flags and environment variables.
 - `--reader-linger` / `READER_LINGER` (default `90s`) — after a file request
   ends, keep the pieces of the reader's window `[pos, pos+max-readahead)`
   at Normal priority this long, then release the ones still at Normal and
-  still incomplete. anacrolix derives piece priorities from readers that are
-  actively reading (an idle reader wants nothing), so a client disconnect
+  still incomplete. anacrolix derives piece priorities from open readers
+  and a request's reader is closed when it ends, so a client disconnect
   otherwise abandons the piece at once, and a client whose idle timeout is
   shorter than the swarm's time-to-first-byte (download managers: 30 s)
   retries the same offset forever. Pieces at a higher explicit priority

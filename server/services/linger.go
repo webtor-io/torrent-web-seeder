@@ -28,7 +28,8 @@ import (
 // pos+readahead) wanted (the first piece at Now, the rest at Readahead) even
 // between Reads: a Read marks the reader as reading and only a Seek that
 // moves the position clears it, so an open reader whose last Read has
-// returned still downloads its window. The window is lost only on Close,
+// returned still downloads its window. Apart from a moving Seek, which
+// drops the window until the next Read, the window is lost only on Close,
 // and that is where this steps in: the pieces of the window that are not
 // yet complete get an explicit Normal priority (Piece.SetPriority, sticky),
 // and after ReaderLinger the ones still at Normal and still incomplete are
