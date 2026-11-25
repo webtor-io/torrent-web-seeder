@@ -16,7 +16,10 @@ import (
 // a torrent with one peer got 7 s of data on a fresh connection and then
 // nothing for 13+ minutes; every range not fetched in those seconds hung,
 // while another pod's fresh connection to the same peer was served
-// instantly. The seeder never uploads, so reconnecting is the only way back.
+// instantly. Uploading does not win every peer back: run with --seed (and
+// without --no-upload), the seeder uploads to peers that want pieces it
+// has, but a seed wants nothing from us, and neither does a leecher that
+// already has what we hold. From those, reconnecting is the only way back.
 type chokeRedial struct {
 	// How often the watcher looks.
 	tick time.Duration
