@@ -27,6 +27,7 @@ func configure(app *cli.App) {
 	app.Flags = s.RegisterLingerFlags(app.Flags)
 	app.Flags = s.RegisterCacheEventsFlags(app.Flags)
 	app.Flags = s.RegisterDebugStatusFlags(app.Flags)
+	app.Flags = s.RegisterUploadFlags(app.Flags)
 	// app.Flags = s.RegisterTorrentClientPoolFlags(app.Flags)
 	app.Action = run
 	configureDiagnose(app)
@@ -106,7 +107,8 @@ func run(c *cli.Context) error {
 		return errors.Wrap(err, "failed to parse max readahead flag")
 	}
 	linger := s.NewLinger(c, int64(maxReadahead))
-	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, torrentFileCountMap, touchMap, statWeb, warmup, vault, cl, int64(maxReadahead), linger, c.Duration(s.StreamStallTimeoutFlag))
+	webSeeder := s.NewWebSeeder(torrentMap, fileCacheMap, torrentFileCountMap, touchMap, statWeb, warmup, vault, cl, int64(maxReadahead), linger, c.Duration(s.StreamStallTimeoutFlag)).
+		WithUploads(c.Bool(s.AcceptUserUploadsFlag))
 
 	// Setting Web
 	web := s.NewWeb(c, webSeeder)
