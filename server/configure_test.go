@@ -8,6 +8,19 @@ import (
 	s "github.com/webtor-io/torrent-web-seeder/server/services"
 )
 
+// The seeder registers ACCEPT_USER_UPLOADS: c.Bool of an unregistered flag
+// reads false, so without it uploads would stay off whatever the env says.
+func TestConfigureRegistersUploadFlag(t *testing.T) {
+	app := cli.NewApp()
+	configure(app)
+	for _, f := range app.Flags {
+		if f.GetName() == s.AcceptUserUploadsFlag {
+			return
+		}
+	}
+	t.Fatalf("no --%s flag", s.AcceptUserUploadsFlag)
+}
+
 // Without a torrent-store host there are no private records (nil, disabled),
 // rather than a store that fails every lookup; with one, they come from it.
 func TestPrivateRecordsFollowStoreHost(t *testing.T) {
