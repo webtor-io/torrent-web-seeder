@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	ts "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc/codes"
@@ -20,7 +20,7 @@ import (
 )
 
 func TestGet_PublicGoesToDefaultClient(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	for _, uid := range []string{"", uidA} {
 		tor, key, err := env.tm.Get(context.Background(), env.pub, uid)
 		if err != nil || tor == nil || key != env.pub {
@@ -33,7 +33,7 @@ func TestGet_PublicGoesToDefaultClient(t *testing.T) {
 }
 
 func TestGet_PrivateWithRecordAnnouncesOwnKey(t *testing.T) {
-	env := newPrivateEnv(t, false)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	// The stored copy names a web seed (a closed loopback port), and the
 	// Clients take web seeds: the account's torrent must still have none.
@@ -69,52 +69,36 @@ func TestGet_PrivateWithRecordAnnouncesOwnKey(t *testing.T) {
 
 // A store from before caller trackers answers a uid's Pull with a torrent
 // whose trackers are not that uid's record's (keep-first's), without
-// caller_trackers. The seeder takes no tracker from such a reply: enforce
-// refuses private_disabled, observe loads the stored copy as today. Here the
-// reply names the record's key, so taking it would announce that key.
+// caller_trackers. The seeder takes no tracker from such a reply and refuses
+// private_disabled. Here the reply names the record's key, so taking it would
+// announce that key.
 func TestGet_ReplyWithoutCallerTrackersIsNotARecord(t *testing.T) {
-	for _, enforce := range []bool{false, true} {
-		t.Run(fmt.Sprintf("enforce=%v", enforce), func(t *testing.T) {
-			env := newPrivateEnv(t, enforce)
-			env.store.setRecord(func(in *ts.PullRequest) (*ts.PullReply, error) {
-				r, err := env.store.callerReply(in.GetInfoHash(), []string{env.trk.URL(keyA)})
-				if r != nil {
-					r.CallerTrackers = false
-				}
-				return r, err
-			})
-			fb := testutil.ToFloat64(promPrivateFallback.WithLabelValues(reasonPrivateDisabled))
-			tor, key, err := env.tm.Get(context.Background(), env.h, uidA)
-			if env.store.lookupCount() != 1 {
-				t.Fatalf("lookups %d, want 1", env.store.lookupCount())
-			}
-			if enforce {
-				var ref *seederRefusal
-				if !errors.As(err, &ref) || ref.reason != reasonPrivateDisabled {
-					t.Fatalf("err = %v, want private_disabled", err)
-				}
-			} else {
-				if err != nil || key != env.h {
-					t.Fatalf("(%q, %v), want today's path under %s", key, err, env.h)
-				}
-				if d := testutil.ToFloat64(promPrivateFallback.WithLabelValues(reasonPrivateDisabled)) - fb; d != 1 {
-					t.Fatalf("fallback{private_disabled} +%v, want +1", d)
-				}
-				if mi := tor.Metainfo(); !reflect.DeepEqual(mi.UpvertedAnnounceList(), metainfo.AnnounceList{{env.trk.URL(keyStored)}}) {
-					t.Fatalf("trackers %v, want the stored copy's", mi.UpvertedAnnounceList())
-				}
-				env.trk.waitEvent(t, keyStored, "started")
-			}
-			if env.accountTorrents() != 0 {
-				t.Fatal("a torrent was added to an account Client")
-			}
-			if n := len(env.trk.Announces(keyA)); n != 0 {
-				t.Fatalf("the reply's key was announced %d times", n)
-			}
-		})
+	env := newPrivateEnv(t)
+	env.store.setRecord(func(in *ts.PullRequest) (*ts.PullReply, error) {
+		r, err := env.store.callerReply(in.GetInfoHash(), []string{env.trk.URL(keyA)})
+		if r != nil {
+			r.CallerTrackers = false
+		}
+		return r, err
+	})
+	_, _, err := env.tm.Get(context.Background(), env.h, uidA)
+	if env.store.lookupCount() != 1 {
+		t.Fatalf("lookups %d, want 1", env.store.lookupCount())
+	}
+	var ref *seederRefusal
+	if !errors.As(err, &ref) || ref.reason != reasonPrivateDisabled {
+		t.Fatalf("err = %v, want private_disabled", err)
+	}
+	if n := len(env.defaultClient(t).Torrents()) + env.accountTorrents(); n != 0 {
+		t.Fatalf("%d torrents loaded after a refusal, want 0", n)
+	}
+	if n := len(env.trk.Announces(keyA)); n != 0 {
+		t.Fatalf("the reply's key was announced %d times", n)
 	}
 }
 
+// Every refusal is answered, whatever the deployment: no refusal loads the
+// private torrent anywhere, so the stored copy's trackers are never announced.
 func TestGet_PrivateRefusals(t *testing.T) {
 	type record func(env *privateEnv) func(*ts.PullRequest) (*ts.PullReply, error)
 	fails := func(err error) record {
@@ -133,60 +117,54 @@ func TestGet_PrivateRefusals(t *testing.T) {
 		record    record
 		status    int
 		reason    string
-		both      bool // refused in observe too
 	}{
-		{"no uid", "", none, 403, reasonAccountRequired, false},
-		{"malformed uid", strings.ToUpper(uidA), none, 403, reasonAccountRequired, true},
-		{"no record", uidA, fails(storeErr(codes.PermissionDenied, "no_record")), 403, reasonNotEntitled, false},
-		{"store without S3 or key", uidA, fails(storeErr(codes.FailedPrecondition, "private_unavailable")), 403, reasonPrivateDisabled, false},
-		{"old store", uidA, none /* storeFake: the stored copy, no flag */, 403, reasonPrivateDisabled, false},
+		{"no uid", "", none, 403, reasonAccountRequired},
+		{"malformed uid", strings.ToUpper(uidA), none, 403, reasonAccountRequired},
+		{"no record", uidA, fails(storeErr(codes.PermissionDenied, "no_record")), 403, reasonNotEntitled},
+		{"store without S3 or key", uidA, fails(storeErr(codes.FailedPrecondition, "private_unavailable")), 403, reasonPrivateDisabled},
+		{"old store", uidA, none /* storeFake: the stored copy, no flag */, 403, reasonPrivateDisabled},
 		{"unparseable reply", uidA, replies(func(*privateEnv, *ts.PullRequest) (*ts.PullReply, error) {
 			return &ts.PullReply{Torrent: []byte("not bencode"), CallerTrackers: true}, nil
-		}), 403, reasonBadRecord, false},
+		}), 403, reasonBadRecord},
 		{"reply of another torrent", uidA, replies(func(env *privateEnv, _ *ts.PullRequest) (*ts.PullReply, error) {
 			return env.store.callerReply(env.pub, []string{env.trk.URL(keyA)})
-		}), 403, reasonBadRecord, false},
+		}), 403, reasonBadRecord},
 		{"record without trackers", uidA, replies(func(env *privateEnv, in *ts.PullRequest) (*ts.PullReply, error) {
 			return env.store.callerReply(in.GetInfoHash())
-		}), 403, reasonBadRecord, false},
-		{"store down", uidA, fails(status.Error(codes.Unavailable, "down")), 503, reasonStoreUnavailable, true},
+		}), 403, reasonBadRecord},
+		{"store down", uidA, fails(status.Error(codes.Unavailable, "down")), 503, reasonStoreUnavailable},
 	}
 	for _, c := range cases {
-		for _, enforce := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/enforce=%v", c.name, enforce), func(t *testing.T) {
-				env := newPrivateEnv(t, enforce)
-				env.store.setRecord(c.record(env))
-				if want := map[bool]float64{true: 1}[enforce]; testutil.ToFloat64(promPrivateEnforce) != want {
-					t.Fatalf("private_enforce = %v, want %v", testutil.ToFloat64(promPrivateEnforce), want)
-				}
-				if enforce || c.both {
-					_, _, err := env.tm.Get(context.Background(), env.h, c.uid)
-					var ref *seederRefusal
-					if !errors.As(err, &ref) || ref.status != c.status || ref.reason != c.reason {
-						t.Fatalf("err = %v, want %d %s", err, c.status, c.reason)
-					}
-					if n := len(env.defaultClient(t).Torrents()) + env.accountTorrents(); n != 0 {
-						t.Fatalf("%d torrents loaded after a refusal, want 0", n)
-					}
-					return
-				}
-				fb := testutil.ToFloat64(promPrivateFallback.WithLabelValues(c.reason))
-				tor, key, err := env.tm.Get(context.Background(), env.h, c.uid)
-				if err != nil || tor == nil || key != env.h {
-					t.Fatalf("observe: (%v, %q, %v), want today's path under %s", tor, key, err, env.h)
-				}
-				if d := testutil.ToFloat64(promPrivateFallback.WithLabelValues(c.reason)) - fb; d != 1 {
-					t.Fatalf("fallback{%s} +%v, want +1", c.reason, d)
-				}
-			})
-		}
+		t.Run(c.name, func(t *testing.T) {
+			env := newPrivateEnv(t)
+			env.store.setRecord(c.record(env))
+			_, _, err := env.tm.Get(context.Background(), env.h, c.uid)
+			var ref *seederRefusal
+			if !errors.As(err, &ref) || ref.status != c.status || ref.reason != c.reason {
+				t.Fatalf("err = %v, want %d %s", err, c.status, c.reason)
+			}
+			if n := len(env.defaultClient(t).Torrents()) + env.accountTorrents(); n != 0 {
+				t.Fatalf("%d torrents loaded after a refusal, want 0", n)
+			}
+		})
+	}
+}
+
+// Enforce is the only behaviour: neither the switch's gauge nor the observe
+// fallback's counter is exported.
+func TestPrivate_NoModeMetrics(t *testing.T) {
+	n, err := testutil.GatherAndCount(prometheus.DefaultGatherer,
+		"torrent_web_seeder_private_enforce",
+		"torrent_web_seeder_private_store_tracker_fallback_total")
+	if err != nil || n != 0 {
+		t.Fatalf("(%d, %v), want no series", n, err)
 	}
 }
 
 // A pair already loaded is served without asking the store: neither its outage nor
 // the end of the 60 s cache cuts a running stream.
 func TestGet_LoadedPairSurvivesStoreOutage(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	first, _, err := env.tm.Get(context.Background(), env.h, uidA)
 	if err != nil {
@@ -206,7 +184,7 @@ func TestGet_LoadedPairSurvivesStoreOutage(t *testing.T) {
 // A slow record lookup holds up only the request waiting for it: a public
 // torrent is served meanwhile.
 func TestGet_SlowRecordLookupDoesNotBlockPublic(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	env.store.setRecord(func(*ts.PullRequest) (*ts.PullReply, error) {
@@ -230,7 +208,7 @@ func TestGet_SlowRecordLookupDoesNotBlockPublic(t *testing.T) {
 // A player's first Range requests of one pair, all at once, add the torrent
 // once: one torrent, one account Client, active_torrents_count +1.
 func TestGet_ConcurrentFirstRequestsTrackOnce(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	// A slow lookup: every request is past the first check when the answer
 	// comes, so all of them race for the second.
@@ -254,5 +232,22 @@ func TestGet_ConcurrentFirstRequestsTrackOnce(t *testing.T) {
 	}
 	if d := testutil.ToFloat64(promActiveTorrentCount) - active; d != 1 || len(env.tm.accounts) != 1 {
 		t.Fatalf("active torrents +%v, accounts %d, want +1 and 1", d, len(env.tm.accounts))
+	}
+}
+
+// A seeder without --torrent-store-host has no records (nil): a private
+// torrent is refused private_disabled even for a valid uid that holds a
+// record, and nothing is loaded.
+func TestGet_NoRecordsRefusesPrivateDisabled(t *testing.T) {
+	env := newPrivateEnv(t)
+	env.setRecords(testRecord{uidA, keyA})
+	env.tm.WithPrivate(nil)
+	_, _, err := env.tm.Get(context.Background(), env.h, uidA)
+	var ref *seederRefusal
+	if !errors.As(err, &ref) || ref.status != 403 || ref.reason != reasonPrivateDisabled {
+		t.Fatalf("err = %v, want 403 %s", err, reasonPrivateDisabled)
+	}
+	if n := len(env.defaultClient(t).Torrents()) + env.accountTorrents(); n != 0 {
+		t.Fatalf("%d torrents loaded after a refusal, want 0", n)
 	}
 }

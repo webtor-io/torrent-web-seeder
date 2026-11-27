@@ -88,7 +88,6 @@ type TorrentMap struct {
 	tsm      *TorrentStoreMap
 	fsm      *FileStoreMap
 	records  *PrivateRecords // nil: the store keeps no private records (disabled)
-	enforce  bool
 	entries  map[string]*torrentEntry
 	accounts map[string]*accountClient // by uid
 	ttl      time.Duration
@@ -185,15 +184,9 @@ func NewTorrentMap(tc *TorrentClient, tsm *TorrentStoreMap, fsm *FileStoreMap) *
 	}
 }
 
-// WithPrivate sets where private records come from and whether access to a
-// private torrent is enforced or only observed (PRIVATE_ACCESS_ENFORCE).
-func (s *TorrentMap) WithPrivate(pr *PrivateRecords, enforce bool) *TorrentMap {
-	s.records, s.enforce = pr, enforce
-	v := 0.0
-	if enforce {
-		v = 1
-	}
-	promPrivateEnforce.Set(v)
+// WithPrivate sets where private records come from.
+func (s *TorrentMap) WithPrivate(pr *PrivateRecords) *TorrentMap {
+	s.records = pr
 	return s
 }
 
@@ -381,10 +374,8 @@ func addTorrent(cl *torrent.Client, mi *metainfo.MetaInfo) (*torrent.Torrent, er
 // Get loads torrent h and returns it with its entryKey. A public torrent goes
 // to the default Client under h, for any uid. A private one (BEP 27) goes to
 // uid's account Client under h#uid, announcing only the trackers of uid's
-// record in torrent-store; without a valid uid or a record enforce refuses it
-// (seederRefusal) and observe loads it as before, into the default Client
-// with the stored trackers. A malformed uid and a store that fails are
-// refused in both modes.
+// record in torrent-store; without a valid uid or a usable record it is
+// refused (seederRefusal) and never loaded into the default Client.
 //
 // The metainfo and the record are read outside s.mux: a slow store holds up
 // only the request that waits for it, not the pod's other torrents. A pair
@@ -404,9 +395,6 @@ func (s *TorrentMap) Get(ctx context.Context, h, uid string) (t *torrent.Torrent
 	if !private {
 		return s.getDefault(h, mi)
 	}
-	if uid == "" {
-		return s.fallback(h, mi, reasonAccountRequired)
-	}
 	if !validUID(uid) {
 		return nil, "", &seederRefusal{http.StatusForbidden, reasonAccountRequired}
 	}
@@ -417,11 +405,11 @@ func (s *TorrentMap) Get(ctx context.Context, h, uid string) (t *torrent.Torrent
 	rec, outcome := s.records.Get(h, uid)
 	switch outcome {
 	case recordDisabled:
-		return s.fallback(h, mi, reasonPrivateDisabled)
+		return nil, "", &seederRefusal{http.StatusForbidden, reasonPrivateDisabled}
 	case recordBad:
-		return s.fallback(h, mi, reasonBadRecord)
+		return nil, "", &seederRefusal{http.StatusForbidden, reasonBadRecord}
 	case recordMissing:
-		return s.fallback(h, mi, reasonNotEntitled)
+		return nil, "", &seederRefusal{http.StatusForbidden, reasonNotEntitled}
 	case recordUnavailable:
 		return nil, "", &seederRefusal{http.StatusServiceUnavailable, reasonStoreUnavailable}
 	}
@@ -472,8 +460,7 @@ func (s *TorrentMap) loaded(key string) *torrent.Torrent {
 	return e.t
 }
 
-// getDefault loads h into the default Client under h, as Get did before
-// private records.
+// getDefault loads public h into the default Client under h.
 func (s *TorrentMap) getDefault(h string, mi *metainfo.MetaInfo) (*torrent.Torrent, string, error) {
 	s.mux.Lock()
 	defer s.mux.Unlock()

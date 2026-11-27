@@ -30,7 +30,7 @@ func TestRefresh_DeletedRecordStopsWithinInterval(t *testing.T) {
 	hook := test.NewGlobal()
 	defer hook.Reset()
 	setVar(t, &recordRefreshInterval, 100*time.Millisecond)
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	_, key, _ := env.tm.Get(context.Background(), env.h, uidA)
 	release := env.tm.Hold(key) // being read: revocation cuts it all the same
@@ -53,7 +53,7 @@ func TestRefresh_ChangedRecordDropsThenReAdds(t *testing.T) {
 	hook := test.NewGlobal()
 	defer hook.Reset()
 	setVar(t, &recordRefreshInterval, 100*time.Millisecond)
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	first, key, _ := env.tm.Get(context.Background(), env.h, uidA)
 	release := env.tm.Hold(key) // being read: a changed record cuts it all the same
@@ -92,7 +92,7 @@ func TestRefresh_ChangedRecordDropsThenReAdds(t *testing.T) {
 
 func TestRefresh_UnavailableKeepsTrackers(t *testing.T) {
 	setVar(t, &recordRefreshInterval, 100*time.Millisecond)
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	first, key, _ := env.tm.Get(context.Background(), env.h, uidA)
 	env.trk.waitEvent(t, keyA, "started")
@@ -120,7 +120,7 @@ func TestRefresh_UnavailableKeepsTrackers(t *testing.T) {
 // A loop ends, unloading nothing though the record is gone, when key holds
 // another torrent or nothing, and when its torrent closes.
 func TestRefresh_StaleLoopEnds(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	loaded, key, _ := env.tm.Get(context.Background(), env.h, uidA) // its own loop ticks every 60 s
 	other, _, _ := env.tm.Get(context.Background(), env.pub, "")    // not key's

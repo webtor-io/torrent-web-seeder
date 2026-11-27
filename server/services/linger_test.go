@@ -65,7 +65,7 @@ var testWindow = window{fileOffset: 1000, fileLength: 10000, pieceLen: 1024}
 
 // Close must raise the pieces of [pos, pos+readahead) at once and release
 // exactly that range when the linger elapses; the torrent reader itself is
-// closed immediately — an idle reader holds no priorities, the explicit
+// closed immediately — a closed reader holds no priorities, the explicit
 // piece priorities do that job.
 func TestLinger_RaisesWindowOnCloseAndReleasesLater(t *testing.T) {
 	l := newLinger(90*time.Second, 2500)

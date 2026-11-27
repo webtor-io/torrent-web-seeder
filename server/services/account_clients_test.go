@@ -17,7 +17,7 @@ import (
 )
 
 func TestAccounts_LimitAnswersBusy(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	setVar(t, &maxAccountClients, 1) // restores on cleanup
 	env.setRecords(testRecord{uidA, keyA}, testRecord{uidB, keyB})
 	if _, _, err := env.tm.Get(context.Background(), env.h, uidA); err != nil {
@@ -36,7 +36,7 @@ func TestAccounts_LimitAnswersBusy(t *testing.T) {
 
 func TestAccounts_IdleClientClosesAfterLastTorrent(t *testing.T) {
 	setVar(t, &accountIdleTimeout, 200*time.Millisecond) // restores on cleanup
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.tm.ttl = 100 * time.Millisecond
 	env.setRecords(testRecord{uidA, keyA})
 	gauge := testutil.ToFloat64(promAccountClients)
@@ -76,7 +76,7 @@ func TestAccounts_IdleClientClosesAfterLastTorrent(t *testing.T) {
 // request a torrent of the closed Client.
 func TestAccounts_IdleCloseRacesGet(t *testing.T) {
 	setVar(t, &accountIdleTimeout, time.Millisecond)
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	for i := 0; i < 50; i++ {
 		tor, key, err := env.tm.Get(context.Background(), env.h, uidA)
@@ -103,7 +103,7 @@ func TestAccounts_IdleCloseRacesGet(t *testing.T) {
 // A torrent added to an idle account disarms its idle close, so the Client
 // lives accountIdleTimeout past its next last torrent, not past the old one.
 func TestAccounts_GetStopsIdleClose(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	_, key, err := env.tm.Get(context.Background(), env.h, uidA)
 	if err != nil {
@@ -122,7 +122,7 @@ func TestAccounts_GetStopsIdleClose(t *testing.T) {
 }
 
 func TestAccounts_BuildErrorIsNotSticky(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	var fail atomic.Bool
 	fail.Store(true)
@@ -154,7 +154,7 @@ func (refusingStorage) OpenTorrent(context.Context, *metainfo.Info, metainfo.Has
 // closes when idle like one whose last torrent went.
 func TestAccounts_FailedAddClosesIdleClient(t *testing.T) {
 	setVar(t, &accountIdleTimeout, 50*time.Millisecond)
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	cfg := env.tm.tc.testConfig
 	env.tm.tc.testConfig = func(c *torrent.ClientConfig) {
@@ -172,7 +172,7 @@ func TestAccounts_FailedAddClosesIdleClient(t *testing.T) {
 }
 
 func TestCloseAccounts_StoppedBeforeClose(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA})
 	// A real tracker's name is looked up before every announce, stopped
 	// included, and a Client closed meanwhile sends nothing ("client is
@@ -215,7 +215,7 @@ func TestCloseAccounts_StoppedBeforeClose(t *testing.T) {
 // the one its unload arms (A) nor one armed before (B, whose last torrent
 // went earlier).
 func TestCloseAccounts_LeavesNoIdleTimer(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	env.setRecords(testRecord{uidA, keyA}, testRecord{uidB, keyB})
 	for _, uid := range []string{uidA, uidB} {
 		if _, _, err := env.tm.Get(context.Background(), env.h, uid); err != nil {
@@ -240,7 +240,7 @@ func TestCloseAccounts_LeavesNoIdleTimer(t *testing.T) {
 
 // A pod with no account Client, the common case, stops without waiting.
 func TestCloseAccounts_NoAccountsReturnsAtOnce(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	start := time.Now()
 	env.tm.CloseAccounts(8 * time.Second)
 	if d := time.Since(start); d > 100*time.Millisecond {

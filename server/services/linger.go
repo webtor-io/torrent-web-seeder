@@ -24,12 +24,15 @@ import (
 // advances: one course torrent produced 1495 attempts and one completion in
 // three hours (2026-09-03).
 //
-// How: not by holding the reader open — an idle reader wants nothing
-// (reader.piecesUncached: ra = 0 unless a Read is in flight), which is why
-// the first version of this file did nothing observable. Instead, on Close
-// the pieces of the reader's window [pos, pos+readahead) that are not yet
-// complete get an explicit Normal priority (Piece.SetPriority, sticky), and
-// after ReaderLinger the ones still at Normal and still incomplete are
+// How: while the reader is open, anacrolix keeps its window [pos,
+// pos+readahead) wanted (the first piece at Now, the rest at Readahead) even
+// between Reads: a Read marks the reader as reading and only a Seek that
+// moves the position clears it, so an open reader whose last Read has
+// returned still downloads its window. Apart from a moving Seek, which
+// drops the window until the next Read, the window is lost only on Close,
+// and that is where this steps in: the pieces of the window that are not
+// yet complete get an explicit Normal priority (Piece.SetPriority, sticky),
+// and after ReaderLinger the ones still at Normal and still incomplete are
 // released to None. Pieces already at a higher explicit priority (warmup
 // sets High) are left alone both ways.
 //

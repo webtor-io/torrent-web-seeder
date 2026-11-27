@@ -44,7 +44,7 @@ func TestWriteRefusal(t *testing.T) {
 
 // The refusal reaches the client of serveFile and of ?warmup, not a 500.
 func TestServeHTTP_RefusalReachesClient(t *testing.T) {
-	env := newPrivateEnv(t, true)
+	env := newPrivateEnv(t)
 	ws := &WebSeeder{tm: env.tm, tom: testTouchMap(t, env.dir), fcm: zFCM(env.dir), wu: NewWarmup(env.tm),
 		tfcm: NewTorrentFileCountMap(&FileStoreMap{}, env.tm.tsm), maxReadahead: 1 << 20}
 	srv := httptest.NewServer(newServer(ws).Handler) // the service's middleware: Warmup needs its writer
